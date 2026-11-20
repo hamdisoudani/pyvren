@@ -1,0 +1,28 @@
+{
+  "name": "pyvren",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Headless + SSR Autonomous Editorial Platform on Cloudflare Workers with Supabase, OpenRouter ReAct Agent, Category Skills, GEO/SEO Optimization, and Single-Admin Control",
+  "scripts": {
+    "dev": "npm run build:css && wrangler dev",
+    "build:css": "tailwindcss -i ./src/styles/input.css -o ./public/assets/app.css --minify",
+    "watch:css": "tailwindcss -i ./src/styles/input.css -o ./public/assets/app.css --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "deploy": "npm run build:css && wrangler deploy"
+  },
+  "dependencies": {
+    "hono": "^4.10.0",
+    "marked": "^15.0.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261119.1",
+    "@tailwindcss/cli": "^4.1.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.8.2",
+    "vitest": "^3.1.2",
+    "wrangler": "^4.14.0"
+  }
+}

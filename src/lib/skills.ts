@@ -1,0 +1,252 @@
+import type { Archetype, CategorySkill, PostRecord, SiteSettings } from '../types';
+
+export const ARCHETYPES: Archetype[] = [
+  'advisory-teardown',
+  'benchmark-index',
+  'migration-fix-log',
+  'architecture-analysis',
+];
+
+const ARCHETYPE_GUIDANCE: Record<Archetype, string> = {
+  'advisory-teardown':
+    'Write a high-urgency technical advisory teardown: lead with affected systems/versions, blast radius, root-cause mechanism, concrete defensive mitigations, and exact verification steps.',
+  'benchmark-index':
+    'Write a quantitative benchmark and cost/performance index: compare at least two real systems/models in a Markdown table with exact metrics (latency, throughput, pricing, memory, or error rates), methodology notes, and production tradeoffs.',
+  'migration-fix-log':
+    'Write a field-ready engineering migration and fix log: document the breaking change or bottleneck, before/after configuration or code diff, rollback safeguards, and measurable impact.',
+  'architecture-analysis':
+    'Write a deep systems architecture analysis: break down control/data planes, documented platform limits, failure modes, scaling math, concrete configs, and clear guidance on when NOT to use the architecture.',
+};
+
+const PROMPT_BANNED_PHRASES = [
+  'delve',
+  'delving',
+  "in today's fast-paced",
+  'ever-evolving',
+  'testament to',
+  'game-changer',
+  'unlock the power',
+  'unlocking the power',
+  'it is important to note',
+  "it's worth noting",
+  'in conclusion',
+  'without further ado',
+  'tapestry',
+  'realm of',
+  'paradigm shift',
+  'seamless',
+  'seamlessly',
+  'leverage',
+  'leveraging',
+];
+
+const PROMPT_BANNED_HEADINGS = [
+  'Introduction',
+  'Overview',
+  'Conclusion',
+  'Final Thoughts',
+  'Summary',
+  'Wrapping Up',
+  'Key Takeaways',
+  'Executive Summary',
+];
+
+function parsePostTimestamp(post: PostRecord): number {
+  const raw = post.published_at || post.created_at;
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/**
+ * Selects the category skill for an editorial run.
+ * - Honors an explicit requestedSlug (unless omitted or 'auto').
+ * - Otherwise rotates across enabled skills by least-recently-published category
+ *   and descending priority so coverage stays diverse.
+ */
+export function selectSkillForRun(
+  skills: CategorySkill[],
+  requestedSlug?: string,
+  recentPosts: PostRecord[] = [],
+): CategorySkill {
+  if (!skills || skills.length === 0) {
+    throw new Error('No category skills available for editorial run.');
+  }
+
+  const normalizedRequest = (requestedSlug || '').trim().toLowerCase();
+  if (normalizedRequest && normalizedRequest !== 'auto') {
+    const exactMatch = skills.find((s) => s.slug.toLowerCase() === normalizedRequest);
+    if (exactMatch) {
+      return exactMatch;
+    }
+  }
+
+  const enabled = skills.filter((s) => s.enabled);
+  const candidates = enabled.length > 0 ? enabled : skills;
+
+  const latestByCategory = new Map<string, number>();
+  const countByCategory = new Map<string, number>();
+
+  for (const post of recentPosts) {
+    const slug = (post.category_slug || '').toLowerCase();
+    if (!slug) continue;
+    const ts = parsePostTimestamp(post);
+    const prev = latestByCategory.get(slug) ?? 0;
+    if (ts > prev) {
+      latestByCategory.set(slug, ts);
+    }
+    countByCategory.set(slug, (countByCategory.get(slug) ?? 0) + 1);
+  }
+
+  const sorted = [...candidates].sort((a, b) => {
+    const slugA = a.slug.toLowerCase();
+    const slugB = b.slug.toLowerCase();
+    const tsA = latestByCategory.get(slugA) ?? 0;
+    const tsB = latestByCategory.get(slugB) ?? 0;
+
+    // Categories with no recent posts (ts === 0) come first, then oldest published
+    if (tsA !== tsB) {
+      return tsA - tsB;
+    }
+
+    // Tiebreak by fewer recent posts in the window
+    const countA = countByCategory.get(slugA) ?? 0;
+    const countB = countByCategory.get(slugB) ?? 0;
+    if (countA !== countB) {
+      return countA - countB;
+    }
+
+    // Higher numeric priority wins
+    if (a.priority !== b.priority) {
+      return b.priority - a.priority;
+    }
+
+    return slugA.localeCompare(slugB);
+  });
+
+  return sorted[0];
+}
+
+/**
+ * Selects an article archetype, respecting explicit overrides while avoiding
+ * repeating lastArchetype when rotating automatically.
+ */
+export function selectArchetype(
+  skill: CategorySkill,
+  requested?: Archetype | 'auto',
+  lastArchetype?: Archetype,
+): Archetype {
+  if (requested && requested !== 'auto' && ARCHETYPES.includes(requested)) {
+    return requested;
+  }
+
+  const preferred = (skill.preferred_archetypes_json || []).filter((a): a is Archetype =>
+    ARCHETYPES.includes(a),
+  );
+  const pool = preferred.length > 0 ? preferred : ARCHETYPES;
+
+  if (lastArchetype) {
+    const nonRepeating = pool.filter((a) => a !== lastArchetype);
+    if (nonRepeating.length > 0) {
+      return nonRepeating[0];
+    }
+    const fallbackDifferent = ARCHETYPES.find((a) => a !== lastArchetype);
+    if (fallbackDifferent) {
+      return fallbackDifferent;
+    }
+  }
+
+  return pool[0];
+}
+
+/**
+ * Builds the strict editorial system prompt for OpenRouter article drafting.
+ */
+export function buildSkillSystemPrompt(
+  skill: CategorySkill,
+  archetype: Archetype,
+  settings: SiteSettings,
+): string {
+  const requiredSections =
+    skill.required_sections_json && skill.required_sections_json.length > 0
+      ? skill.required_sections_json.map((s, idx) => `  ${idx + 1}. ${s}`).join('\n')
+      : '  1. Technical Context & Core Finding\n  2. Quantitative Breakdown or Architecture\n  3. Implementation / Mitigation Details\n  4. Production Tradeoffs & Verification';
+
+  const customBanned =
+    skill.banned_patterns_json && skill.banned_patterns_json.length > 0
+      ? `\n- Category-specific banned phrases: ${skill.banned_patterns_json.map((p) => `"${p}"`).join(', ')}`
+      : '';
+
+  const rubricNotes =
+    skill.quality_rubric_json && Object.keys(skill.quality_rubric_json).length > 0
+      ? `\nQUALITY RUBRIC TARGETS:\n${JSON.stringify(skill.quality_rubric_json, null, 2)}`
+      : '';
+
+  const isSecurityCategory =
+    skill.slug.toLowerCase().includes('security') ||
+    skill.slug.toLowerCase().includes('jailbreak') ||
+    archetype === 'advisory-teardown';
+
+  const safetySection = isSecurityCategory
+    ? `DEFENSIVE SECURITY & ADSENSE SAFETY (MANDATORY):
+- Frame all security, CVE, prompt injection, and jailbreak analysis strictly from a defensive engineering, detection, and hardening perspective.
+- Cite primary advisories, peer-reviewed papers, OWASP LLM Top 10, NIST AI RMF, or vendor disclosures.
+- NEVER include copy-paste exploit payloads, weaponized bypass strings, or actionable instructions to defeat safety filters or gain unauthorized access.
+- Instead provide defensive detection patterns, isolation architectures, guardrail configs, and patch verification commands.`
+    : `EDITORIAL INTEGRITY & ADSENSE SAFETY (MANDATORY):
+- Write authoritative, original, publisher-grade technical journalism suitable for Google AdSense and senior engineering readers.
+- Never fabricate benchmarks, CVEs, version numbers, or quotes. Only state figures supported by the provided primary sources; if a metric is unavailable, state that explicitly.
+- Zero affiliate spam, zero clickbait hype, zero profanity, and zero harmful or illegal instructions.`;
+
+  return `You are a senior systems engineer and technical editor writing for ${settings.site_name} (byline: ${settings.default_author}).
+
+CATEGORY SKILL: ${skill.name} (${skill.slug})
+TARGET AUDIENCE: ${skill.target_audience}
+CATEGORY EDITORIAL DIRECTIVES:
+${skill.system_instructions}
+
+ARCHETYPE: ${archetype}
+ARCHETYPE BRIEF:
+${ARCHETYPE_GUIDANCE[archetype]}
+
+REQUIRED SECTION FLOW (use concrete, domain-specific H2 headings — never generic labels):
+${requiredSections}${rubricNotes}
+
+${safetySection}
+
+GEO / AEO ANSWER-FIRST & CITATION REQUIREMENTS:
+- Provide a crisp, factual "tldr_summary" (80 to 240 characters) that directly answers the core engineering question upfront so AI answer engines can quote it verbatim.
+- Provide 3 to 6 structured "key_facts" objects ({ "label": "...", "value": "...", "source_url": "https://..." }) containing concrete versions, latencies, costs, limits, or CVE identifiers.
+- Provide 2 to 4 high-intent "faq" objects ({ "question": "...", "answer": "..." }) answering real practitioner follow-up questions concisely.
+- Include at least ONE Markdown comparison/specification pipe table (| Col A | Col B | with | --- | --- | separator) AND/OR at least ONE non-empty fenced code block with a language tag (e.g. \`\`\`bash, \`\`\`typescript, \`\`\`json, \`\`\`yaml, \`\`\`sql). Including both is strongly preferred.
+- Cite at least 3 DISTINCT deep primary https:// URLs inline inside body_markdown using descriptive Markdown links: [Anchor Text](https://domain.com/deep/path).
+- NEVER link bare root domains (such as https://github.com/ or https://cloudflare.com) — every citation URL MUST have a specific deep path (pathname length > 1) and come from the provided primary sources.
+- Also populate the top-level "sources" array with at least 2 (ideally 3-5) verified deep https:// URLs used in the article.
+
+HARD LINT & ANTI-SLOP CONSTRAINTS (ZERO TOLERANCE):
+- "title": strictly 30 to 70 characters, concrete and technical.
+- "description": strictly 100 to 170 characters, summarizing concrete findings for search snippets.
+- NEVER use a level-1 Markdown heading ("# ...") anywhere inside "body_markdown" (the page template renders the H1). Use "## " and "### " headings only.
+- Write at least 650 words of dense technical prose (excluding fenced code blocks).
+- NEVER use these banned AI clichés anywhere in prose: ${PROMPT_BANNED_PHRASES.map((p) => `"${p}"`).join(', ')}.${customBanned}
+- NEVER use these generic headings: ${PROMPT_BANNED_HEADINGS.map((h) => `"${h}"`).join(', ')}.
+- NEVER leave placeholders such as [TBD], [TODO], [Insert ...], [XX], TODO:, example.com, or lorem ipsum.
+
+OUTPUT FORMAT:
+Return ONLY a single valid JSON object (no surrounding markdown prose) matching this exact schema:
+{
+  "title": "string (30-70 chars)",
+  "slug": "kebab-case-url-slug",
+  "description": "string (100-170 chars)",
+  "tldr_summary": "string (80-240 chars direct answer)",
+  "key_facts": [
+    { "label": "string", "value": "string", "source_url": "https://..." }
+  ],
+  "faq": [
+    { "question": "string", "answer": "string" }
+  ],
+  "body_markdown": "string (Markdown starting with an answer-first lead paragraph, then ## sections, table/code block, and >= 3 deep https:// inline citations; NO # H1)",
+  "tags": ["tag-1", "tag-2", "tag-3"],
+  "sources": ["https://...", "https://...", "https://..."],
+  "review_notes": ["Concise verification note for human editor"]
+}`;
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pyvren",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "limits": {
+    "cpu_ms": 30000
+  },
+  "triggers": {
+    "crons": ["0 */4 * * *"]
+  },
+  "workflows": [
+    {
+      "name": "editorial-agent-workflow",
+      "binding": "EDITORIAL_AGENT_WORKFLOW",
+      "class_name": "EditorialAgentWorkflow"
+    }
+  ],
+  "vars": {
+    "SITE_NAME": "Pyvren Research",
+    "DEFAULT_OPENROUTER_MODEL": "google/gemini-2.5-flash",
+    "ENVIRONMENT": "production"
+  }
+}
