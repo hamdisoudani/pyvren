@@ -46,10 +46,12 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
 
     var PRESETS = [
       { label: 'Autonomous Hunt', topic: '', category: '', archetype: 'auto' },
-      { label: 'LLM Release Benchmark', topic: 'Compare recent open-weight vs frontier LLM latency, throughput, and cost per million tokens from official release benchmarks', category: 'ai-llms', archetype: 'benchmark-index' },
-      { label: 'AI Security Advisory', topic: 'Teardown of recent prompt injection or agent tool-use vulnerability advisories with concrete mitigation controls', category: 'ai-security-jailbreaks', archetype: 'advisory-teardown' },
-      { label: 'GPU Inference Infra', topic: 'Production analysis of cloud GPU inference pricing, KV-cache optimization, and serving engine trade-offs', category: 'cloud-gpu-infra', archetype: 'architecture-analysis' },
-      { label: 'Dev Tooling Migration', topic: 'Practical migration and performance benchmark log for modern TypeScript/edge developer build tooling', category: 'dev-tooling-benchmarks', archetype: 'migration-fix-log' }
+      { label: 'CLI Coding Agents & MCP', topic: 'Field benchmark of terminal coding agents, MCP vs CLI token overhead, and SWE-bench Pro / Terminal-Bench 2.0 reliability', category: 'ai-coding-agents-mcp', archetype: 'benchmark-index' },
+      { label: 'AI Security & Prompt Injection Defense', topic: 'Defensive teardown of indirect prompt injection, tool-result smuggling, and unauthenticated MCP exposure using OWASP LLM Top 10 controls', category: 'ai-security-jailbreaks', archetype: 'advisory-teardown' },
+      { label: 'Local SLMs & Context Rot', topic: 'Quantitative comparison of 1B-32B open-weight local SLMs vs frontier LLMs, context rot degradation past 32K tokens, and vLLM/SGLang VRAM math', category: 'ai-llms', archetype: 'benchmark-index' },
+      { label: 'Cloudflare Edge & GPU Economics', topic: 'Production limits and break-even economics of Cloudflare Workers & Workflows, serverless Postgres pooling, and spot H100/B200 inference', category: 'cloud-gpu-infra', archetype: 'architecture-analysis' },
+      { label: 'Live Web Data & GEO', topic: 'Benchmark of AI agent web-grounding pipelines, Firecrawl/Jina/Playwright Markdown extraction fidelity, and llms.txt + JSON-LD GEO citation readiness', category: 'agentic-browser-web-data', archetype: 'benchmark-index' },
+      { label: 'CISA KEV Advisory', topic: 'Rapid technical teardown of newly exploited CISA KEV vulnerabilities and critical GitHub Security Advisories with zero-downtime patch verification', category: 'dev-tooling-benchmarks', archetype: 'advisory-teardown' }
     ];
 
     var state = {
@@ -59,6 +61,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       posts: [],
       skills: [],
       runs: [],
+      freeModels: [],
       postFilter: 'all',
       postSearch: '',
       expandedPostIds: {},
@@ -109,6 +112,55 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
 
     function arrayToLines(arr) {
       return Array.isArray(arr) ? arr.join('\\n') : '';
+    }
+
+    function isFreeModelsOnly() {
+      return state.settings ? state.settings.free_models_only !== false : true;
+    }
+
+    function normalizeFreeModels(res) {
+      var list = Array.isArray(res)
+        ? res
+        : (res && (Array.isArray(res.models) ? res.models : (Array.isArray(res.data) ? res.data : []))) || [];
+      var seen = {};
+      var out = [];
+      list.forEach(function (item) {
+        if (!item) return;
+        var id = typeof item === 'string' ? item.trim() : String(item.id || '').trim();
+        if (!id || seen[id]) return;
+        seen[id] = true;
+        var ctx = typeof item === 'object' ? Number(item.context_length || item.contextLength || 0) : 0;
+        var name = typeof item === 'object' && item.name ? String(item.name).trim() : '';
+        out.push({
+          id: id,
+          name: name,
+          context_length: isFinite(ctx) && ctx > 0 ? ctx : 0
+        });
+      });
+      return out;
+    }
+
+    function formatFreeModelLabel(m) {
+      if (!m || !m.id) return '';
+      if (m.context_length && m.context_length >= 1000) {
+        return m.id + ' (' + Math.round(m.context_length / 1000) + 'k ctx)';
+      }
+      return m.id;
+    }
+
+    function renderFreeModelOptions(selectedId, placeholderText) {
+      var opts = '<option value="">' + esc(placeholderText || 'Select a live :free model...') + '</option>';
+      var hasMatch = false;
+      (state.freeModels || []).forEach(function (m) {
+        var sel = selectedId && m.id === selectedId ? ' selected' : '';
+        if (sel) hasMatch = true;
+        opts += '<option value="' + esc(m.id) + '"' + sel + '>' + esc(formatFreeModelLabel(m)) + '</option>';
+      });
+      if (!hasMatch && state.freeModels.length === 0) {
+        opts += '<option value="google/gemma-4-31b-it:free"' + (selectedId === 'google/gemma-4-31b-it:free' ? ' selected' : '') + '>google/gemma-4-31b-it:free (262k ctx)</option>';
+        opts += '<option value="openrouter/free"' + (selectedId === 'openrouter/free' ? ' selected' : '') + '>openrouter/free</option>';
+      }
+      return opts;
     }
 
     function toast(msg, kind) {
@@ -192,12 +244,14 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
           apiFetch('/api/admin/settings'),
           apiFetch('/api/admin/posts'),
           apiFetch('/api/admin/skills'),
-          apiFetch('/api/admin/agent/runs')
+          apiFetch('/api/admin/agent/runs'),
+          apiFetch('/api/admin/openrouter/free-models').catch(function () { return { models: [] }; })
         ]);
         state.settings = (results[0] && (results[0].settings || results[0])) || null;
         state.posts = Array.isArray(results[1]) ? results[1] : ((results[1] && results[1].posts) || []);
         state.skills = Array.isArray(results[2]) ? results[2] : ((results[2] && results[2].skills) || []);
         state.runs = Array.isArray(results[3]) ? results[3] : ((results[3] && results[3].runs) || []);
+        state.freeModels = normalizeFreeModels(results[4]);
         syncPolling();
       } catch (err) {
         if (err && err.status === 401) {
@@ -209,6 +263,17 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       } finally {
         state.loadingData = false;
         render();
+      }
+    }
+
+    async function refreshFreeModelsOnly() {
+      try {
+        var res = await apiFetch('/api/admin/openrouter/free-models');
+        state.freeModels = normalizeFreeModels(res);
+        toast('Loaded ' + state.freeModels.length + ' live OpenRouter :free models', 'success');
+        render();
+      } catch (err) {
+        toast((err && err.message) || 'Failed refreshing OpenRouter free models', 'error');
       }
     }
 
@@ -381,6 +446,8 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
               renderTabButton('settings', 'Settings & Schedule') +
             '</nav>' +
             '<div class="hidden sm:flex items-center gap-2 font-tabular text-[11px] text-ink-faint py-2">' +
+              '<span>' + (isFreeModelsOnly() ? '$0 Free Guard: ON' : 'Paid Models Allowed') + '</span>' +
+              '<span>&middot;</span>' +
               '<span>Min Score: ' + esc(state.settings ? state.settings.min_publish_score : 80) + '</span>' +
               '<span>&middot;</span>' +
               '<span>Schedule: ' + (state.settings && state.settings.schedule_enabled ? esc(state.settings.runs_per_day) + 'x/day' : 'Paused') + '</span>' +
@@ -405,7 +472,9 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         if (state.postFilter === 'published' && p.status !== 'published') return false;
         if (state.postSearch.trim()) {
           var q = state.postSearch.trim().toLowerCase();
-          var hay = ((p.title || '') + ' ' + (p.slug || '') + ' ' + (p.category_slug || '') + ' ' + (p.description || '')).toLowerCase();
+          var kwStr = Array.isArray(p.keywords_json) ? p.keywords_json.join(' ') : '';
+          var tagStr = Array.isArray(p.tags_json) ? p.tags_json.join(' ') : '';
+          var hay = ((p.title || '') + ' ' + (p.slug || '') + ' ' + (p.category_slug || '') + ' ' + (p.description || '') + ' ' + kwStr + ' ' + tagStr).toLowerCase();
           if (hay.indexOf(q) === -1) return false;
         }
         return true;
@@ -418,7 +487,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         '<div class="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-strong">' +
           '<div>' +
             '<h1 class="font-editorial text-2xl sm:text-3xl font-semibold text-ink">Briefings Ledger</h1>' +
-            '<p class="text-sm text-ink-muted">Review quality scores, inspect 60-second spot-check notes, preview safely, and publish.</p>' +
+            '<p class="text-sm text-ink-muted">Review quality scores, inspect anti-slop stylometry &amp; spot-check notes, preview safely, and publish.</p>' +
           '</div>' +
           '<div class="flex flex-wrap items-center gap-2">' +
             '<button type="button" data-action="refresh-all" class="btn-ghost text-xs font-tabular">Refresh</button>' +
@@ -433,7 +502,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
             renderFilterBtn('published', 'Published (' + pubCount + ')') +
           '</div>' +
           '<div class="w-full sm:w-72">' +
-            '<input id="post-search-input" type="search" value="' + esc(state.postSearch) + '" placeholder="Filter by title, slug, category..." class="admin-input h-9 text-xs">' +
+            '<input id="post-search-input" type="search" value="' + esc(state.postSearch) + '" placeholder="Filter by title, slug, keyword..." class="admin-input h-9 text-xs">' +
           '</div>' +
         '</div>' +
 
@@ -461,6 +530,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       var reviewNotes = Array.isArray(post.review_notes_json) ? post.review_notes_json : [];
       var lintErrors = Array.isArray(post.lint_errors_json) ? post.lint_errors_json : [];
       var bd = post.quality_breakdown_json || {};
+      var isAdminLocked = post.admin_locked === true;
 
       return '<article class="rounded-[6px] border border-hairline bg-surface overflow-hidden">' +
         '<div class="p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">' +
@@ -471,6 +541,8 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
               '<span class="badge-editorial">' + esc(fmtArchetype(post.archetype)) + '</span>' +
               '<span class="badge-editorial ' + scoreClass + '">Score ' + score + '/100</span>' +
               '<span class="badge-editorial ' + (post.lint_passed ? 'badge-success' : 'badge-danger') + '">' + (post.lint_passed ? 'Lint Pass' : 'Lint Fail') + '</span>' +
+              (isAdminLocked ? '<span class="badge-editorial badge-accent" title="Human-edited briefing protected from automated overwrites">Admin Locked</span>' : '') +
+              (isAdminLocked && post.last_edited_by ? '<span class="badge-editorial" title="Last human editor">Edited by ' + esc(post.last_edited_by) + '</span>' : '') +
             '</div>' +
             '<h2 class="font-editorial text-xl font-semibold text-ink leading-snug">' + esc(post.title) + '</h2>' +
             '<p class="text-xs text-ink-muted line-clamp-2">' + esc(post.description) + '</p>' +
@@ -480,6 +552,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
               '<span>' + esc(post.word_count || 0) + ' words (' + esc(post.reading_time_minutes || 1) + ' min)</span>' +
               '<span>&middot;</span>' +
               '<span>' + (Array.isArray(post.sources_json) ? post.sources_json.length : 0) + ' sources</span>' +
+              (Array.isArray(post.keywords_json) && post.keywords_json.length > 0 ? '<span>&middot;</span><span>' + post.keywords_json.length + ' keywords</span>' : '') +
               '<span>&middot;</span>' +
               '<span>Updated ' + esc(fmtDate(post.updated_at || post.created_at)) + '</span>' +
             '</div>' +
@@ -500,14 +573,18 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
 
         (expanded
           ? '<div class="border-t border-hairline bg-subtle/60 px-5 py-4 space-y-4 text-xs">' +
-              '<div class="grid grid-cols-2 sm:grid-cols-6 gap-2 font-tabular">' +
-                renderMiniMetric('SEO', bd.seo_structure) +
-                renderMiniMetric('GEO', bd.geo_citation_readiness) +
-                renderMiniMetric('Info Gain', bd.information_gain) +
-                renderMiniMetric('Sources', bd.source_grounding) +
-                renderMiniMetric('Anti-Slop', bd.anti_slop_cleanliness) +
-                renderMiniMetric('AdSense', bd.adsense_compliance) +
+              '<div class="space-y-2">' +
+                '<p class="font-tabular text-[11px] uppercase tracking-wider text-ink-muted font-semibold">Quality Rubric Dimensions</p>' +
+                '<div class="grid grid-cols-2 sm:grid-cols-6 gap-2 font-tabular">' +
+                  renderMiniMetric('SEO', bd.seo_structure) +
+                  renderMiniMetric('GEO', bd.geo_citation_readiness) +
+                  renderMiniMetric('Info Gain', bd.information_gain) +
+                  renderMiniMetric('Grounding', bd.source_grounding) +
+                  renderMiniMetric('Anti-Slop', bd.anti_slop_cleanliness) +
+                  renderMiniMetric('AdSense', bd.adsense_compliance) +
+                '</div>' +
               '</div>' +
+              (bd.humanity_signals ? renderHumanityScorecard(bd.humanity_signals) : '') +
               '<div class="grid grid-cols-1 md:grid-cols-2 gap-4">' +
                 '<div class="space-y-1.5">' +
                   '<p class="font-tabular text-[11px] uppercase tracking-wider text-ink-muted font-semibold">60-Second Human Spot-Check Notes</p>' +
@@ -536,12 +613,57 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       '</div>';
     }
 
+    function renderStylometryMetric(label, displayVal, tone) {
+      var valClass = tone === 'good'
+        ? 'text-[var(--success)]'
+        : tone === 'warn'
+          ? 'text-[var(--warning)]'
+          : tone === 'bad'
+            ? 'text-[var(--danger)]'
+            : 'text-ink';
+      return '<div class="rounded-[4px] border border-hairline bg-surface px-2.5 py-2">' +
+        '<span class="block text-[10px] uppercase text-ink-faint">' + esc(label) + '</span>' +
+        '<span class="text-sm font-semibold ' + valClass + '">' + esc(displayVal) + '</span>' +
+      '</div>';
+    }
+
+    function renderHumanityScorecard(hs) {
+      if (!hs || typeof hs !== 'object') return '';
+      var likeness = hs.human_likeness_score != null ? Math.round(Number(hs.human_likeness_score)) : null;
+      var burstiness = hs.sentence_length_std_dev != null ? Number(hs.sentence_length_std_dev) : null;
+      var boldBullets = hs.bold_leadin_bullets != null ? Math.round(Number(hs.bold_leadin_bullets)) : null;
+      var emDashes = hs.em_dash_per_100_words != null ? Number(hs.em_dash_per_100_words) : null;
+      var roboticOpeners = hs.robotic_openers_count != null ? Math.round(Number(hs.robotic_openers_count)) : null;
+      var concreteMetrics = hs.concrete_metric_hits != null ? Math.round(Number(hs.concrete_metric_hits)) : null;
+
+      var metaParts = [];
+      if (hs.sentence_count != null) metaParts.push(Math.round(Number(hs.sentence_count)) + ' sentences');
+      if (hs.avg_sentence_words != null) metaParts.push('avg ' + Number(hs.avg_sentence_words).toFixed(1) + 'w');
+
+      return '<div class="space-y-2">' +
+        '<div class="flex flex-wrap items-center justify-between gap-2">' +
+          '<p class="font-tabular text-[11px] uppercase tracking-wider text-ink-muted font-semibold">Anti-AI-Slop Humanity &amp; Stylometry Scorecard</p>' +
+          (metaParts.length > 0 ? '<span class="font-tabular text-[11px] text-ink-faint">' + esc(metaParts.join(' · ')) + '</span>' : '') +
+        '</div>' +
+        '<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 font-tabular">' +
+          renderStylometryMetric('Human-Likeness Score', likeness == null ? '—' : (likeness + '/100'), likeness == null ? '' : (likeness >= 80 ? 'good' : likeness >= 65 ? 'warn' : 'bad')) +
+          renderStylometryMetric('Sentence Burstiness σ', burstiness == null ? '—' : burstiness.toFixed(1), burstiness == null ? '' : (burstiness >= 5.0 ? 'good' : burstiness >= 3.5 ? 'warn' : 'bad')) +
+          renderStylometryMetric('Bold-Bullet Count', boldBullets == null ? '—' : String(boldBullets), boldBullets == null ? '' : (boldBullets <= 2 ? 'good' : boldBullets <= 5 ? 'warn' : 'bad')) +
+          renderStylometryMetric('Em-Dashes / 100w', emDashes == null ? '—' : emDashes.toFixed(2), emDashes == null ? '' : (emDashes <= 0.8 ? 'good' : emDashes <= 1.5 ? 'warn' : 'bad')) +
+          renderStylometryMetric('Robotic Openers', roboticOpeners == null ? '—' : String(roboticOpeners), roboticOpeners == null ? '' : (roboticOpeners === 0 ? 'good' : roboticOpeners <= 1 ? 'warn' : 'bad')) +
+          renderStylometryMetric('Concrete Metrics', concreteMetrics == null ? '—' : String(concreteMetrics), concreteMetrics == null ? '' : (concreteMetrics >= 5 ? 'good' : concreteMetrics >= 2 ? 'warn' : 'bad')) +
+        '</div>' +
+      '</div>';
+    }
+
     /* ------------------------------------------------------------------
        Tab 2: Agent Studio & Live Source Trace Inspector
        ------------------------------------------------------------------ */
 
     function renderAgentTab() {
       var polling = hasActiveRuns(state.runs);
+      var freeOnly = isFreeModelsOnly();
+      var defaultModel = (state.settings && state.settings.openrouter_model) || 'google/gemma-4-31b-it:free';
       var skillOptions = '<option value="">Auto-select highest priority enabled skill</option>' +
         state.skills.map(function (s) {
           return '<option value="' + esc(s.slug) + '">' + esc(s.name) + (s.enabled ? '' : ' (disabled)') + '</option>';
@@ -552,6 +674,8 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
           return '<option value="' + esc(a.value) + '">' + esc(a.label) + '</option>';
         }).join('');
 
+      var runModelOptions = renderFreeModelOptions('', 'Default (' + defaultModel + ')');
+
       return '<section class="space-y-8">' +
         '<div class="editorial-card p-6 space-y-5">' +
           '<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 border-b border-hairline">' +
@@ -559,30 +683,38 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
               '<p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">ReAct Research Workflow</p>' +
               '<h1 class="font-editorial text-2xl sm:text-3xl font-semibold text-ink">Agent Studio</h1>' +
             '</div>' +
-            '<span class="font-tabular text-xs text-ink-faint">Model: ' + esc(state.settings ? state.settings.openrouter_model : 'default') + '</span>' +
+            '<div class="flex flex-wrap items-center gap-2">' +
+              '<span class="badge-editorial ' + (freeOnly ? 'badge-success' : 'badge-warning') + '">' +
+                (freeOnly ? 'Free Models Only: ON' : 'Free Models Only: OFF') + ' &mdash; ' + esc(defaultModel) +
+              '</span>' +
+            '</div>' +
           '</div>' +
 
           '<div class="flex flex-wrap items-center gap-2">' +
-            '<span class="font-tabular text-[11px] uppercase tracking-wider text-ink-faint mr-1">Presets:</span>' +
+            '<span class="font-tabular text-[11px] uppercase tracking-wider text-ink-faint mr-1">2026 Skill Presets:</span>' +
             PRESETS.map(function (p, idx) {
               return '<button type="button" data-action="apply-preset" data-preset="' + idx + '" class="px-2.5 py-1 rounded-[4px] border border-hairline bg-subtle/70 hover:border-strong text-xs text-ink-secondary cursor-pointer transition-colors">' + esc(p.label) + '</button>';
             }).join('') +
           '</div>' +
 
           '<form id="agent-run-form" class="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">' +
-            '<div class="md:col-span-5 space-y-1.5">' +
+            '<div class="md:col-span-6 space-y-1.5">' +
               '<label class="block font-tabular text-xs uppercase tracking-wider text-ink-muted" for="ag-topic">Topic <span class="normal-case text-ink-faint">(leave blank for autonomous topic hunt)</span></label>' +
               '<input id="ag-topic" name="topic" type="text" placeholder="e.g., CVE teardown or leave blank to hunt live feeds" class="admin-input">' +
             '</div>' +
-            '<div class="md:col-span-3 space-y-1.5">' +
+            '<div class="md:col-span-6 space-y-1.5">' +
               '<label class="block font-tabular text-xs uppercase tracking-wider text-ink-muted" for="ag-cat">Category Skill</label>' +
               '<select id="ag-cat" name="category_slug" class="admin-select">' + skillOptions + '</select>' +
             '</div>' +
-            '<div class="md:col-span-2 space-y-1.5">' +
+            '<div class="md:col-span-4 space-y-1.5">' +
               '<label class="block font-tabular text-xs uppercase tracking-wider text-ink-muted" for="ag-arch">Archetype</label>' +
               '<select id="ag-arch" name="archetype" class="admin-select">' + archOptions + '</select>' +
             '</div>' +
-            '<div class="md:col-span-2">' +
+            '<div class="md:col-span-5 space-y-1.5">' +
+              '<label class="block font-tabular text-xs uppercase tracking-wider text-ink-muted" for="ag-model">Run Model Override <span class="normal-case text-ink-faint">(live :free catalog)</span></label>' +
+              '<select id="ag-model" name="model_override" class="admin-select font-tabular">' + runModelOptions + '</select>' +
+            '</div>' +
+            '<div class="md:col-span-3">' +
               '<button type="submit" ' + (state.dispatching ? 'disabled' : '') + ' class="btn-accent w-full py-2.5">' + (state.dispatching ? 'Dispatching...' : 'Run Agent') + '</button>' +
             '</div>' +
           '</form>' +
@@ -773,15 +905,37 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
           '</div>' +
 
           '<div class="editorial-card p-6 space-y-4">' +
-            '<h2 class="font-tabular text-xs uppercase tracking-[0.14em] text-accent font-semibold">OpenRouter Models</h2>' +
-            '<div class="grid grid-cols-1 md:grid-cols-2 gap-4">' +
-              '<div class="space-y-1.5">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-model">Primary Research &amp; Writing Model</label>' +
-                '<input id="st-model" name="openrouter_model" type="text" value="' + esc(s.openrouter_model || '') + '" placeholder="anthropic/claude-3.5-sonnet" class="admin-input font-tabular">' +
+            '<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">' +
+              '<div class="flex flex-wrap items-center gap-2">' +
+                '<h2 class="font-tabular text-xs uppercase tracking-[0.14em] text-accent font-semibold">OpenRouter Models &amp; Spend Guard</h2>' +
+                '<span class="badge-editorial ' + (s.free_models_only !== false ? 'badge-success' : 'badge-warning') + '">' +
+                  (s.free_models_only !== false ? '$0 Free Only' : 'Custom / Paid Allowed') +
+                '</span>' +
+                '<span class="badge-editorial">' + state.freeModels.length + ' live :free</span>' +
               '</div>' +
-              '<div class="space-y-1.5">' +
+              '<button type="button" data-action="refresh-free-models" class="btn-ghost text-xs font-tabular px-2.5 py-1 self-start sm:self-auto">Refresh :free Models</button>' +
+            '</div>' +
+            '<div class="rounded-[5px] border border-hairline bg-subtle/60 px-4 py-3 flex items-start gap-3">' +
+              '<input id="st-free-only" name="free_models_only" type="checkbox"' + (s.free_models_only !== false ? ' checked' : '') + ' class="h-4 w-4 mt-0.5 accent-[var(--accent)]">' +
+              '<div class="space-y-0.5">' +
+                '<label for="st-free-only" class="text-sm font-medium text-ink cursor-pointer">OpenRouter Free Models Only ($0 Spend Guard)</label>' +
+                '<p class="text-xs text-ink-muted">Restricts all research, writing, and audit completions to zero-cost <code>:free</code> models or <code>openrouter/free</code>.</p>' +
+              '</div>' +
+            '</div>' +
+            '<div class="grid grid-cols-1 md:grid-cols-2 gap-4">' +
+              '<div class="space-y-2">' +
+                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-model">Primary Research &amp; Writing Model</label>' +
+                '<select id="st-model-picker" data-sync-target="st-model" aria-label="Pick live free primary model" class="admin-select font-tabular text-xs">' +
+                  renderFreeModelOptions(s.openrouter_model || '', 'Pick live :free model to populate...') +
+                '</select>' +
+                '<input id="st-model" name="openrouter_model" data-sync-picker="st-model-picker" type="text" value="' + esc(s.openrouter_model || '') + '" placeholder="google/gemma-4-31b-it:free" class="admin-input font-tabular">' +
+              '</div>' +
+              '<div class="space-y-2">' +
                 '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-judge">Judge / Audit Model</label>' +
-                '<input id="st-judge" name="judge_model" type="text" value="' + esc(s.judge_model || '') + '" placeholder="openai/gpt-4o-mini" class="admin-input font-tabular">' +
+                '<select id="st-judge-picker" data-sync-target="st-judge" aria-label="Pick live free judge model" class="admin-select font-tabular text-xs">' +
+                  renderFreeModelOptions(s.judge_model || '', 'Pick live :free judge model...') +
+                '</select>' +
+                '<input id="st-judge" name="judge_model" data-sync-picker="st-judge-picker" type="text" value="' + esc(s.judge_model || '') + '" placeholder="openrouter/free" class="admin-input font-tabular">' +
               '</div>' +
             '</div>' +
           '</div>' +
@@ -883,19 +1037,22 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         faq_json: [],
         body_markdown: '',
         author: (state.settings && state.settings.default_author) || '',
-        category_slug: (state.skills[0] && state.skills[0].slug) || 'ai-llms',
+        category_slug: (state.skills[0] && state.skills[0].slug) || 'ai-coding-agents-mcp',
         archetype: 'architecture-analysis',
         tags_json: [],
+        keywords_json: [],
         sources_json: [],
         review_notes_json: [],
-        status: 'draft'
+        status: 'draft',
+        admin_locked: false,
+        last_edited_by: null
       };
 
       var catOpts = state.skills.map(function (s) {
         return '<option value="' + esc(s.slug) + '"' + (s.slug === p.category_slug ? ' selected' : '') + '>' + esc(s.name) + '</option>';
       }).join('');
       if (!catOpts) {
-        catOpts = '<option value="' + esc(p.category_slug || 'ai-llms') + '">' + esc(p.category_slug || 'ai-llms') + '</option>';
+        catOpts = '<option value="' + esc(p.category_slug || 'ai-coding-agents-mcp') + '">' + esc(p.category_slug || 'ai-coding-agents-mcp') + '</option>';
       }
 
       var archOpts = ARCHETYPES.map(function (a) {
@@ -912,8 +1069,12 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       root.innerHTML = '<div class="admin-modal-backdrop" data-modal-backdrop>' +
         '<div class="admin-modal-panel max-w-4xl p-6 space-y-5">' +
           '<div class="flex items-center justify-between gap-3 pb-4 border-b border-hairline">' +
-            '<div>' +
-              '<p class="font-tabular text-[10px] uppercase tracking-widest text-accent font-semibold">' + (isEdit ? 'Edit Briefing #' + p.id : 'New Editorial Briefing') + '</p>' +
+            '<div class="space-y-1">' +
+              '<div class="flex flex-wrap items-center gap-2">' +
+                '<p class="font-tabular text-[10px] uppercase tracking-widest text-accent font-semibold">' + (isEdit ? 'Edit Briefing #' + p.id : 'New Editorial Briefing') + '</p>' +
+                (isEdit && p.admin_locked === true ? '<span class="badge-editorial badge-accent">Admin Locked</span>' : '') +
+                (isEdit && p.admin_locked === true && p.last_edited_by ? '<span class="badge-editorial">Edited by ' + esc(p.last_edited_by) + '</span>' : '') +
+              '</div>' +
               '<h2 class="font-editorial text-2xl font-semibold text-ink">' + (isEdit ? esc(p.title) : 'Compose Markdown & GEO Dossier') + '</h2>' +
             '</div>' +
             '<button type="button" data-action="close-modal" class="btn-ghost text-xs font-tabular">Close</button>' +
@@ -951,6 +1112,10 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
               '<div class="space-y-1">' +
                 '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Tags (comma-separated)</label>' +
                 '<input name="tags" type="text" value="' + esc(Array.isArray(p.tags_json) ? p.tags_json.join(', ') : '') + '" class="admin-input">' +
+              '</div>' +
+              '<div class="space-y-1 md:col-span-2">' +
+                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Keywords (SEO / GEO, comma-separated)</label>' +
+                '<input name="keywords" type="text" value="' + esc(Array.isArray(p.keywords_json) ? p.keywords_json.join(', ') : '') + '" placeholder="cli coding agents, mcp token overhead, prompt injection defense, context rot" class="admin-input">' +
               '</div>' +
             '</div>' +
 
@@ -1027,6 +1192,19 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         .map(function (t) { return t.trim(); })
         .filter(Boolean);
 
+      var kwSeen = {};
+      var keywords = [];
+      String(fd.get('keywords') || '')
+        .split(',')
+        .forEach(function (k) {
+          var trimmed = k.trim();
+          if (!trimmed) return;
+          var key = trimmed.toLowerCase();
+          if (kwSeen[key]) return;
+          kwSeen[key] = true;
+          keywords.push(trimmed);
+        });
+
       return {
         title: String(fd.get('title') || '').trim(),
         slug: String(fd.get('slug') || '').trim() || undefined,
@@ -1038,6 +1216,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         tldr_summary: String(fd.get('tldr_summary') || '').trim(),
         body_markdown: String(fd.get('body_markdown') || ''),
         tags: tags,
+        keywords: keywords,
         sources: linesToArray(fd.get('sources_lines')),
         key_facts: keyFacts,
         faq: faq,
@@ -1220,6 +1399,8 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         } else if (action === 'refresh-all') {
           await loadAllWorkspaceData();
           toast('Workspace refreshed', 'success');
+        } else if (action === 'refresh-free-models') {
+          await refreshFreeModelsOnly();
         } else if (action === 'refresh-runs') {
           await refreshRunsOnly();
           render();
@@ -1268,6 +1449,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
           var payload = extractPostPayload(form);
           var lintRes = await apiFetch('/api/admin/lint', { method: 'POST', body: payload });
           var lr = (lintRes && (lintRes.lint || lintRes)) || {};
+          var lbd = lr.quality_breakdown || {};
           box.classList.remove('hidden');
           box.innerHTML = '<div class="flex flex-wrap items-center justify-between gap-2">' +
             '<div class="flex items-center gap-2">' +
@@ -1276,6 +1458,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
             '</div>' +
             '<span class="font-tabular text-ink-faint">' + esc(lr.word_count || 0) + ' words &middot; ' + esc(lr.reading_time_minutes || 1) + ' min</span>' +
           '</div>' +
+          (lbd.humanity_signals ? '<div class="pt-2">' + renderHumanityScorecard(lbd.humanity_signals) + '</div>' : '') +
           (Array.isArray(lr.errors) && lr.errors.length > 0
             ? '<ul class="list-disc pl-4 space-y-1 text-[var(--danger)]">' + lr.errors.map(function (er) { return '<li>' + esc(er) + '</li>'; }).join('') + '</ul>'
             : '<p class="text-[var(--success)]">Zero lint violations detected. Ready for editorial publication.</p>');
@@ -1307,6 +1490,16 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       }
     });
 
+    document.addEventListener('change', function (e) {
+      var target = e.target;
+      if (!target || !target.getAttribute) return;
+      var syncTargetId = target.getAttribute('data-sync-target');
+      if (syncTargetId && target.value) {
+        var inputEl = document.getElementById(syncTargetId);
+        if (inputEl) inputEl.value = target.value;
+      }
+    });
+
     document.addEventListener('input', function (e) {
       if (e.target && e.target.id === 'post-search-input') {
         state.postSearch = e.target.value;
@@ -1316,6 +1509,25 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         if (nextInput) {
           nextInput.focus();
           if (pos != null) nextInput.setSelectionRange(pos, pos);
+        }
+        return;
+      }
+      if (e.target && e.target.getAttribute) {
+        var pickerId = e.target.getAttribute('data-sync-picker');
+        if (pickerId) {
+          var pickerEl = document.getElementById(pickerId);
+          if (pickerEl) {
+            var typed = String(e.target.value || '').trim();
+            var matched = false;
+            for (var i = 0; i < pickerEl.options.length; i++) {
+              if (pickerEl.options[i].value === typed) {
+                pickerEl.value = typed;
+                matched = true;
+                break;
+              }
+            }
+            if (!matched) pickerEl.value = '';
+          }
         }
       }
     });
@@ -1388,7 +1600,8 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
             var dispatchBody = {
               topic: String(afd.get('topic') || '').trim() || undefined,
               category_slug: String(afd.get('category_slug') || '').trim() || undefined,
-              archetype: String(afd.get('archetype') || 'auto')
+              archetype: String(afd.get('archetype') || 'auto'),
+              model_override: String(afd.get('model_override') || '').trim() || undefined
             };
             await apiFetch('/api/admin/agent/run', { method: 'POST', body: dispatchBody });
             toast('Research agent dispatched', 'success');
@@ -1445,6 +1658,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
           var patch = {
             publishing_mode: String(stfd.get('publishing_mode') || 'draft_review'),
             min_publish_score: Math.max(50, Math.min(100, Math.round(Number(stfd.get('min_publish_score') || 80)))),
+            free_models_only: form.querySelector('[name="free_models_only"]').checked,
             schedule_enabled: form.querySelector('[name="schedule_enabled"]').checked,
             runs_per_day: Math.max(1, Math.min(24, Math.round(Number(stfd.get('runs_per_day') || 2)))),
             adsense_client_id: String(stfd.get('adsense_client_id') || '').trim() || null

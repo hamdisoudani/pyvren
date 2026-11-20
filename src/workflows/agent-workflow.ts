@@ -28,7 +28,7 @@ const STAGE_STEP_CONFIG = {
     delay: '5 seconds' as const,
     backoff: 'exponential' as const,
   },
-  timeout: '2 minutes' as const,
+  timeout: '4 minutes' as const,
 };
 
 interface LoadContextStepOutput {

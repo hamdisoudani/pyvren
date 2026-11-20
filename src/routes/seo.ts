@@ -42,6 +42,9 @@ function formatPostAsMarkdownDocument(post: PostRecord, settings: SiteSettings, 
     `word_count: ${post.word_count}`,
     `quality_score: ${post.quality_score}`,
     `tags: ${JSON.stringify(post.tags_json || [])}`,
+    ...(Array.isArray(post.keywords_json) && post.keywords_json.length > 0
+      ? [`keywords: ${JSON.stringify(post.keywords_json)}`]
+      : []),
     `sources: ${JSON.stringify(post.sources_json || [])}`,
     '---',
   ];
@@ -156,6 +159,9 @@ function buildLlmsFullTxt(settings: SiteSettings, posts: PostRecord[], baseUrl: 
 
     if (post.tags_json && post.tags_json.length > 0) {
       lines.push(`- **Tags:** ${post.tags_json.join(', ')}`);
+    }
+    if (Array.isArray(post.keywords_json) && post.keywords_json.length > 0) {
+      lines.push(`- **Keywords:** ${post.keywords_json.join(', ')}`);
     }
 
     lines.push('');

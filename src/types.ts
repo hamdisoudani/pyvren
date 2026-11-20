@@ -26,6 +26,7 @@ export interface SiteSettings {
   id: number;
   publishing_mode: PublishingMode;
   min_publish_score: number;
+  free_models_only: boolean;
   schedule_enabled: boolean;
   runs_per_day: number;
   openrouter_model: string;
@@ -75,6 +76,17 @@ export interface FaqItem {
   answer: string;
 }
 
+export interface HumanitySignals {
+  sentence_count: number;
+  avg_sentence_words: number;
+  sentence_length_std_dev: number;
+  bold_leadin_bullets: number;
+  em_dash_per_100_words: number;
+  robotic_openers_count: number;
+  concrete_metric_hits: number;
+  human_likeness_score: number;
+}
+
 export interface QualityBreakdown {
   overall: number;
   seo_structure: number;
@@ -85,6 +97,7 @@ export interface QualityBreakdown {
   adsense_compliance: number;
   warnings: string[];
   judge_notes?: string;
+  humanity_signals?: HumanitySignals;
 }
 
 export interface PostRecord {
@@ -101,6 +114,7 @@ export interface PostRecord {
   category_slug: string;
   archetype: Archetype;
   tags_json: string[];
+  keywords_json: string[];
   sources_json: string[];
   review_notes_json: string[];
   lint_passed: boolean;
@@ -110,6 +124,8 @@ export interface PostRecord {
   reading_time_minutes: number;
   word_count: number;
   status: PostStatus;
+  admin_locked: boolean;
+  last_edited_by: string | null;
   published_at: string | null;
   created_at: string;
   updated_at: string;
@@ -164,9 +180,15 @@ export interface PostInput {
   category_slug?: string;
   archetype: Archetype;
   tags?: string[];
+  keywords?: string[];
   sources?: string[];
   review_notes?: string[];
   status?: PostStatus | null;
+}
+
+export interface PostMutationContext {
+  actor: 'admin' | 'system';
+  adminEmail?: string;
 }
 
 export interface LintResult {
@@ -215,7 +237,7 @@ export interface DatabaseAdapter {
   getPostBySlug(slug: string, onlyPublished?: boolean): Promise<PostRecord | null>;
   slugExists(slug: string, excludeId?: number): Promise<boolean>;
   createPost(record: Omit<PostRecord, 'id' | 'created_at' | 'updated_at'>): Promise<PostRecord>;
-  updatePost(id: number, patch: Partial<PostRecord>): Promise<PostRecord | null>;
+  updatePost(id: number, patch: Partial<PostRecord>, ctx?: PostMutationContext): Promise<PostRecord | null>;
   deletePost(id: number): Promise<boolean>;
 
   // Agent Runs

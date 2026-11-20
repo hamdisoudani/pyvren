@@ -38,6 +38,32 @@ const PROMPT_BANNED_PHRASES = [
   'seamlessly',
   'leverage',
   'leveraging',
+  "in today's digital landscape",
+  'crucial role',
+  'robust solution',
+  'comprehensive guide',
+  'cutting-edge',
+  'revolutionize',
+  'revolutionizing',
+  'navigate the complexities',
+  'spearhead',
+  'pivotal',
+  'paramount',
+  'meticulous',
+  'meticulously',
+  'intricate',
+  'beacon',
+  'vibrant',
+  'foster a',
+  'it is worth mentioning',
+  "let's dive in",
+  'dive deep into',
+  'at the end of the day',
+  'unlocking the full potential',
+  'a double-edged sword',
+  'in the ever-changing',
+  'stands as a',
+  'in the realm of',
 ];
 
 const PROMPT_BANNED_HEADINGS = [
@@ -217,10 +243,20 @@ GEO / AEO ANSWER-FIRST & CITATION REQUIREMENTS:
 - Provide a crisp, factual "tldr_summary" (80 to 240 characters) that directly answers the core engineering question upfront so AI answer engines can quote it verbatim.
 - Provide 3 to 6 structured "key_facts" objects ({ "label": "...", "value": "...", "source_url": "https://..." }) containing concrete versions, latencies, costs, limits, or CVE identifiers.
 - Provide 2 to 4 high-intent "faq" objects ({ "question": "...", "answer": "..." }) answering real practitioner follow-up questions concisely.
+- Provide 5 to 8 high-intent lowercase search "keywords" targeting real developer and systems-engineering queries (distinct from slugified tags).
 - Include at least ONE Markdown comparison/specification pipe table (| Col A | Col B | with | --- | --- | separator) AND/OR at least ONE non-empty fenced code block with a language tag (e.g. \`\`\`bash, \`\`\`typescript, \`\`\`json, \`\`\`yaml, \`\`\`sql). Including both is strongly preferred.
 - Cite at least 3 DISTINCT deep primary https:// URLs inline inside body_markdown using descriptive Markdown links: [Anchor Text](https://domain.com/deep/path).
 - NEVER link bare root domains (such as https://github.com/ or https://cloudflare.com) — every citation URL MUST have a specific deep path (pathname length > 1) and come from the provided primary sources.
 - Also populate the top-level "sources" array with at least 2 (ideally 3-5) verified deep https:// URLs used in the article.
+
+HUMAN STAFF-ENGINEER VOICE & ANTI-AI-DETECTION RULES (MANDATORY):
+- Write like a battle-tested staff engineer publishing peer-reviewed production field notes, never like an AI assistant or marketing brochure.
+- Vary sentence cadence intentionally for high burstiness: alternate punchy 6-10 word direct verdicts ("This default breaks under burst traffic.", "Skip the proxy layer.") with substantive 20-30 word technical explanations detailing mechanisms, limits, and failure modes.
+- FORBIDDEN robotic transition openers: NEVER start sentences or paragraphs with "Furthermore,", "Moreover,", "Additionally,", "Consequently,", "Importantly,", "Notably,", "Ultimately,", or "Overall,". Connect ideas through technical causality instead.
+- Em-dash discipline: keep em-dashes ("—" or "--") strictly to at most 1 per 100 words. Prefer commas, periods, or parentheses.
+- NO walls of bold-colon bullets: NEVER write repetitive "- **Feature:** explanation" bullet stacks (keep bold-lead-in bullets well below 6 across the entire post). Present comparisons in prose paragraphs or a structured Markdown pipe table instead.
+- Ground prose with real numbers, versions, latencies, memory caps, costs, or CVE/GHSA IDs from the provided primary sources.
+- Include a concrete "When NOT to use this / Engineering Tradeoffs" section or explicit tradeoff nuance where appropriate, documenting operational limits, cost cliffs, or failure modes so the piece reads like honest engineering judgment rather than hype.
 
 HARD LINT & ANTI-SLOP CONSTRAINTS (ZERO TOLERANCE):
 - "title": strictly 30 to 70 characters, concrete and technical.
@@ -244,8 +280,9 @@ Return ONLY a single valid JSON object (no surrounding markdown prose) matching 
   "faq": [
     { "question": "string", "answer": "string" }
   ],
-  "body_markdown": "string (Markdown starting with an answer-first lead paragraph, then ## sections, table/code block, and >= 3 deep https:// inline citations; NO # H1)",
+  "body_markdown": "string (Markdown starting with an answer-first lead paragraph, then ## sections including concrete tradeoffs, table/code block, and >= 3 deep https:// inline citations; NO # H1)",
   "tags": ["tag-1", "tag-2", "tag-3"],
+  "keywords": ["lowercase search phrase 1", "lowercase search phrase 2", "lowercase search phrase 3", "lowercase search phrase 4", "lowercase search phrase 5"],
   "sources": ["https://...", "https://...", "https://..."],
   "review_notes": ["Concise verification note for human editor"]
 }`;

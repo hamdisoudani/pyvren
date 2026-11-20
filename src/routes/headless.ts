@@ -13,6 +13,7 @@ const VALID_ARCHETYPES: ReadonlySet<Archetype> = new Set([
 function withPublicUrls(post: PostRecord, baseUrl: string) {
   return {
     ...post,
+    keywords_json: Array.isArray(post.keywords_json) ? post.keywords_json : [],
     canonical_url: `${baseUrl}/blog/${post.slug}`,
     markdown_url: `${baseUrl}/blog/${post.slug}.md`,
   };
@@ -149,6 +150,21 @@ export function createHeadlessRoutes(): Hono<{ Bindings: WorkerEnv }> {
     c.header('Cache-Control', 'public, max-age=120, s-maxage=600, stale-while-revalidate=3600');
     return c.json(withPublicUrls(post, baseUrl));
   });
+
+  // Explicitly block any write attempts on the public read-only posts API
+  for (const path of ['/api/v1/posts', '/api/v1/posts/*'] as const) {
+    app.on(['POST', 'PUT', 'PATCH', 'DELETE'], path, (c) => {
+      c.header('Allow', 'GET, HEAD, OPTIONS');
+      c.header('Cache-Control', 'no-store');
+      return c.json(
+        {
+          error:
+            'Method Not Allowed: /api/v1/posts is strictly read-only. Only an authenticated admin can modify posts via /api/admin/posts.',
+        },
+        405,
+      );
+    });
+  }
 
   const handlePublicSkills = async (c: { env: WorkerEnv; header: (name: string, value: string) => void; json: <T>(data: T) => Response }) => {
     const db = createDatabase(c.env);

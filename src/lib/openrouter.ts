@@ -6,11 +6,12 @@ export interface OpenRouterMessage {
 }
 
 export interface OpenRouterCallOptions {
-  model: string;
+  model?: string;
   messages: OpenRouterMessage[];
   temperature?: number;
   maxTokens?: number;
   jsonMode?: boolean;
+  freeModelsOnly?: boolean;
 }
 
 export interface OpenRouterUsage {
@@ -25,9 +26,296 @@ export interface OpenRouterResponse {
   model: string;
 }
 
+export interface OpenRouterFreeModelInfo {
+  id: string;
+  name: string;
+  context_length: number;
+  supports_json: boolean;
+  supports_tools: boolean;
+}
+
+export const CURATED_FREE_MODELS: string[] = [
+  'openrouter/free',
+  'baidu/ernie-5.5-flash-preview:free',
+  'inclusionai/ling-3.2-flash:free',
+  'nvidia/nemotron-3.5-super-vl:free',
+  'dots-studio/dots-3-note-preview:free',
+  'google/gemma-4-31b-it:free',
+  'google/gemma-4-26b-a4b-it:free',
+];
+
+const CURATED_FREE_MODEL_METADATA: Record<string, OpenRouterFreeModelInfo> = {
+  'openrouter/free': {
+    id: 'openrouter/free',
+    name: 'OpenRouter: Free Router (Auto)',
+    context_length: 200_000,
+    supports_json: true,
+    supports_tools: true,
+  },
+  'baidu/ernie-5.5-flash-preview:free': {
+    id: 'baidu/ernie-5.5-flash-preview:free',
+    name: 'Baidu: ERNIE 5.5 Flash Preview (free)',
+    context_length: 1_024_000,
+    supports_json: true,
+    supports_tools: true,
+  },
+  'inclusionai/ling-3.2-flash:free': {
+    id: 'inclusionai/ling-3.2-flash:free',
+    name: 'InclusionAI: Ling 3.2 Flash (free)',
+    context_length: 1_048_576,
+    supports_json: true,
+    supports_tools: true,
+  },
+  'nvidia/nemotron-3.5-super-vl:free': {
+    id: 'nvidia/nemotron-3.5-super-vl:free',
+    name: 'NVIDIA: Nemotron 3.5 Super VL (free)',
+    context_length: 1_000_000,
+    supports_json: true,
+    supports_tools: true,
+  },
+  'dots-studio/dots-3-note-preview:free': {
+    id: 'dots-studio/dots-3-note-preview:free',
+    name: 'Dots Studio: Dots 3 Note Preview (free)',
+    context_length: 512_000,
+    supports_json: true,
+    supports_tools: true,
+  },
+  'google/gemma-4-31b-it:free': {
+    id: 'google/gemma-4-31b-it:free',
+    name: 'Google: Gemma 4 31B IT (free)',
+    context_length: 262_144,
+    supports_json: true,
+    supports_tools: true,
+  },
+  'google/gemma-4-26b-a4b-it:free': {
+    id: 'google/gemma-4-26b-a4b-it:free',
+    name: 'Google: Gemma 4 26B A4B IT (free)',
+    context_length: 262_144,
+    supports_json: true,
+    supports_tools: true,
+  },
+};
+
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_MODELS_ENDPOINT = 'https://openrouter.ai/api/v1/models';
+const FREE_MODELS_CACHE_TTL_MS = 15 * 60 * 1_000;
 const TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);
-const MAX_RETRIES = 2;
+const FAILOVER_STATUSES = new Set([402, 404, 429, 502, 503, 504]);
+const MAX_FAILOVER_CANDIDATES = 7;
+const RATE_LIMIT_COOLDOWN_MS = 2 * 60 * 1_000;
+
+interface FreeModelsCache {
+  models: OpenRouterFreeModelInfo[];
+  expiresAt: number;
+}
+
+let cachedFreeModels: FreeModelsCache | null = null;
+const rateLimitedUntil = new Map<string, number>();
+
+/**
+ * Returns true ONLY if the model identifier is OpenRouter's free router or explicitly suffixed with `:free`.
+ */
+export function isFreeOpenRouterModel(modelId: string): boolean {
+  if (typeof modelId !== 'string') return false;
+  const id = modelId.trim();
+  if (!id) return false;
+  return id === 'openrouter/free' || id.endsWith(':free');
+}
+
+function getCuratedFallbackModels(): OpenRouterFreeModelInfo[] {
+  return CURATED_FREE_MODELS.map((id) => ({
+    ...(CURATED_FREE_MODEL_METADATA[id] || {
+      id,
+      name: id,
+      context_length: 65_536,
+      supports_json: true,
+      supports_tools: false,
+    }),
+  }));
+}
+
+function sortFreeModels(models: OpenRouterFreeModelInfo[]): OpenRouterFreeModelInfo[] {
+  const curatedIndex = new Map<string, number>();
+  CURATED_FREE_MODELS.forEach((id, idx) => curatedIndex.set(id, idx));
+
+  return [...models].sort((a, b) => {
+    const rankA = curatedIndex.has(a.id) ? curatedIndex.get(a.id)! : Number.MAX_SAFE_INTEGER;
+    const rankB = curatedIndex.has(b.id) ? curatedIndex.get(b.id)! : Number.MAX_SAFE_INTEGER;
+    if (rankA !== rankB) return rankA - rankB;
+    if (a.context_length !== b.context_length) return b.context_length - a.context_length;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+/**
+ * Fetches live free text/chat models from OpenRouter's catalog (cached 15 minutes in module memory).
+ * Gracefully falls back to CURATED_FREE_MODELS metadata if the catalog fetch fails.
+ */
+export async function listOpenRouterFreeModels(
+  env: WorkerEnv,
+  forceRefresh = false,
+): Promise<OpenRouterFreeModelInfo[]> {
+  const now = Date.now();
+  if (!forceRefresh && cachedFreeModels && now < cachedFreeModels.expiresAt) {
+    return cachedFreeModels.models.map((m) => ({ ...m }));
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12_000);
+
+  try {
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+    };
+    const apiKey = env.OPENROUTER_API_KEY?.trim();
+    if (apiKey) {
+      headers.Authorization = `Bearer ${apiKey}`;
+    }
+
+    const response = await fetch(OPENROUTER_MODELS_ENDPOINT, {
+      method: 'GET',
+      headers,
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      return getCuratedFallbackModels();
+    }
+
+    const payload = (await response.json()) as {
+      data?: Array<{
+        id?: string;
+        name?: string;
+        context_length?: number;
+        supported_parameters?: string[];
+        architecture?: {
+          modality?: string;
+          output_modalities?: string[];
+        };
+      }>;
+    };
+
+    const rawList = Array.isArray(payload.data) ? payload.data : [];
+    const seen = new Set<string>();
+    const filtered: OpenRouterFreeModelInfo[] = [];
+
+    for (const item of rawList) {
+      const id = typeof item.id === 'string' ? item.id.trim() : '';
+      if (!id || seen.has(id)) continue;
+      if (!isFreeOpenRouterModel(id)) continue;
+      if (id.toLowerCase().includes('lyria')) continue;
+
+      // Filter strictly to text/chat output models
+      const outputModalities = item.architecture?.output_modalities;
+      if (
+        id !== 'openrouter/free' &&
+        Array.isArray(outputModalities) &&
+        outputModalities.length > 0 &&
+        !outputModalities.some((m) => typeof m === 'string' && m.toLowerCase() === 'text')
+      ) {
+        continue;
+      }
+      const modality = item.architecture?.modality;
+      if (
+        id !== 'openrouter/free' &&
+        typeof modality === 'string' &&
+        modality.includes('->') &&
+        !modality.toLowerCase().includes('->text')
+      ) {
+        continue;
+      }
+
+      const supportedParams = Array.isArray(item.supported_parameters)
+        ? item.supported_parameters
+        : [];
+      const supportsJson =
+        id === 'openrouter/free' ||
+        supportedParams.includes('response_format') ||
+        supportedParams.includes('structured_outputs');
+      const supportsTools = id === 'openrouter/free' || supportedParams.includes('tools');
+
+      const parsedCtx = Number(item.context_length);
+      const contextLength = Number.isFinite(parsedCtx) && parsedCtx > 0 ? parsedCtx : 32_768;
+
+      seen.add(id);
+      filtered.push({
+        id,
+        name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : id,
+        context_length: contextLength,
+        supports_json: supportsJson,
+        supports_tools: supportsTools,
+      });
+    }
+
+    if (filtered.length === 0) {
+      return getCuratedFallbackModels();
+    }
+
+    const sorted = sortFreeModels(filtered);
+    cachedFreeModels = {
+      models: sorted,
+      expiresAt: now + FREE_MODELS_CACHE_TTL_MS,
+    };
+    return sorted.map((m) => ({ ...m }));
+  } catch {
+    return getCuratedFallbackModels();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Resolves the ordered candidate model chain, strictly enforcing free-only models when requested.
+ */
+export function resolveFreeModelChain(
+  requestedModel: string | undefined,
+  freeModelsOnly: boolean,
+  liveFreeIds?: string[],
+): string[] {
+  const requested = typeof requestedModel === 'string' ? requestedModel.trim() : '';
+
+  const validLiveFree = Array.isArray(liveFreeIds)
+    ? liveFreeIds
+        .map((id) => (typeof id === 'string' ? id.trim() : ''))
+        .filter((id) => isFreeOpenRouterModel(id) && !id.toLowerCase().includes('lyria'))
+    : [];
+
+  // Build prioritized free fallback pool: live curated models first, then remaining curated, then remaining live
+  const liveSet = new Set(validLiveFree);
+  const curatedLive = CURATED_FREE_MODELS.filter((id) => liveSet.has(id));
+  const curatedOffline = CURATED_FREE_MODELS.filter((id) => !liveSet.has(id));
+  const freePool =
+    curatedLive.length > 0
+      ? [...curatedLive, ...validLiveFree, ...curatedOffline]
+      : [...CURATED_FREE_MODELS, ...validLiveFree];
+
+  const ordered: string[] = [];
+  const pushUnique = (id: string) => {
+    if (!id || ordered.includes(id)) return;
+    ordered.push(id);
+  };
+
+  if (freeModelsOnly) {
+    if (requested && isFreeOpenRouterModel(requested) && !requested.toLowerCase().includes('lyria')) {
+      pushUnique(requested);
+    }
+    for (const id of freePool) {
+      pushUnique(id);
+    }
+    return ordered;
+  }
+
+  if (requested) {
+    pushUnique(requested);
+  }
+  for (const id of CURATED_FREE_MODELS) {
+    pushUnique(id);
+  }
+  for (const id of validLiveFree) {
+    pushUnique(id);
+  }
+  return ordered;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -62,8 +350,24 @@ function normalizeMessageContent(rawContent: unknown): string {
   return '';
 }
 
+function isResponseFormatRejection(rawText: string): boolean {
+  const lower = rawText.toLowerCase();
+  return lower.includes('response_format') || lower.includes('json_object');
+}
+
+function isNonFailoverAuthError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('invalid api key') ||
+    lower.includes('unauthorized') ||
+    lower.includes('no auth credentials')
+  );
+}
+
 /**
- * Calls the OpenRouter Chat Completions API with transient retry handling (429/502/503/504).
+ * Calls the OpenRouter Chat Completions API with free-model-only enforcement (by default),
+ * automatic failover across up to 4 candidate models on 402/404/429/502/503/504 or empty output,
+ * and automatic retry without response_format if a free provider rejects json_object.
  */
 export async function callOpenRouter(
   env: WorkerEnv,
@@ -75,112 +379,170 @@ export async function callOpenRouter(
   }
 
   const referer = normalizeBaseUrl(env.BASE_URL);
-  const bodyPayload: Record<string, unknown> = {
-    model: opts.model,
-    messages: opts.messages,
-    temperature: opts.temperature ?? 0.3,
-    max_tokens: opts.maxTokens ?? 4096,
-  };
-  if (opts.jsonMode) {
-    bodyPayload.response_format = { type: 'json_object' };
-  }
+  const freeModelsOnly = opts.freeModelsOnly !== false;
+  const cachedLiveIds =
+    cachedFreeModels && Date.now() < cachedFreeModels.expiresAt
+      ? cachedFreeModels.models.map((m) => m.id)
+      : undefined;
+
+  const rawCandidates = resolveFreeModelChain(opts.model, freeModelsOnly, cachedLiveIds);
+  const nowMs = Date.now();
+  const healthyCandidates = rawCandidates.filter((id) => (rateLimitedUntil.get(id) ?? 0) <= nowMs);
+  const cooledCandidates = rawCandidates.filter((id) => (rateLimitedUntil.get(id) ?? 0) > nowMs);
+  const candidates = [...healthyCandidates, ...cooledCandidates].slice(0, MAX_FAILOVER_CANDIDATES);
 
   let lastError: Error | null = null;
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90_000);
+  for (let candidateIdx = 0; candidateIdx < candidates.length; candidateIdx++) {
+    const candidateModel = candidates[candidateIdx];
+    const isLastCandidate = candidateIdx === candidates.length - 1;
+    let useJsonMode = Boolean(opts.jsonMode);
+    let retriedWithoutJsonFormat = false;
+    let transientRetries = 0;
+    const maxTransientRetries = isLastCandidate ? 1 : 0;
 
-    try {
-      const response = await fetch(OPENROUTER_ENDPOINT, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': referer,
-          'X-Title': 'Pyvren Research',
-        },
-        body: JSON.stringify(bodyPayload),
-        signal: controller.signal,
-      });
-
-      if (TRANSIENT_STATUSES.has(response.status) && attempt < MAX_RETRIES) {
-        const delayMs = parseRetryDelayMs(response, attempt);
-        clearTimeout(timeout);
-        await sleep(delayMs);
-        continue;
+    while (true) {
+      const bodyPayload: Record<string, unknown> = {
+        model: candidateModel,
+        messages: opts.messages,
+        temperature: opts.temperature ?? 0.3,
+        max_tokens: opts.maxTokens ?? 4096,
+      };
+      if (useJsonMode) {
+        bodyPayload.response_format = { type: 'json_object' };
       }
 
-      const rawText = await response.text();
-      if (!response.ok) {
-        throw new Error(
-          `OpenRouter API error (${response.status}): ${rawText.slice(0, 320)}`,
-        );
-      }
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 90_000);
 
-      const data = JSON.parse(rawText) as {
-        model?: string;
-        choices?: Array<{
-          message?: {
-            content?: unknown;
+      try {
+        const response = await fetch(OPENROUTER_ENDPOINT, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': referer,
+            'X-Title': 'Pyvren Research',
+          },
+          body: JSON.stringify(bodyPayload),
+          signal: controller.signal,
+        });
+
+        const rawText = await response.text();
+
+        if (
+          response.status === 400 &&
+          useJsonMode &&
+          !retriedWithoutJsonFormat &&
+          isResponseFormatRejection(rawText)
+        ) {
+          useJsonMode = false;
+          retriedWithoutJsonFormat = true;
+          continue;
+        }
+
+        if (response.status === 429) {
+          rateLimitedUntil.set(candidateModel, Date.now() + RATE_LIMIT_COOLDOWN_MS);
+        }
+
+        if (FAILOVER_STATUSES.has(response.status)) {
+          lastError = new Error(
+            `OpenRouter API error (${response.status}) on ${candidateModel}: ${rawText.slice(0, 320)}`,
+          );
+          if (TRANSIENT_STATUSES.has(response.status) && transientRetries < maxTransientRetries) {
+            const delayMs = parseRetryDelayMs(response, transientRetries);
+            transientRetries++;
+            clearTimeout(timeout);
+            await sleep(delayMs);
+            continue;
+          }
+          break;
+        }
+
+        if (!response.ok) {
+          throw new Error(
+            `OpenRouter API error (${response.status}) on ${candidateModel}: ${rawText.slice(0, 320)}`,
+          );
+        }
+
+        const data = JSON.parse(rawText) as {
+          model?: string;
+          choices?: Array<{
+            message?: {
+              content?: unknown;
+            };
+          }>;
+          usage?: {
+            prompt_tokens?: number;
+            completion_tokens?: number;
+            total_tokens?: number;
           };
-        }>;
-        usage?: {
-          prompt_tokens?: number;
-          completion_tokens?: number;
-          total_tokens?: number;
+          error?: { message?: string; code?: number };
         };
-        error?: { message?: string };
-      };
 
-      if (data.error?.message) {
-        throw new Error(`OpenRouter returned error: ${data.error.message}`);
+        if (data.error?.message) {
+          const errMessage = `OpenRouter returned error on ${candidateModel}: ${data.error.message}`;
+          if (isNonFailoverAuthError(data.error.message)) {
+            throw new Error(errMessage);
+          }
+          lastError = new Error(errMessage);
+          break;
+        }
+
+        const content = normalizeMessageContent(data.choices?.[0]?.message?.content).trim();
+        if (!content) {
+          lastError = new Error(`OpenRouter returned an empty completion from ${candidateModel}.`);
+          break;
+        }
+
+        const promptTokens = Number(data.usage?.prompt_tokens ?? 0) || 0;
+        const completionTokens = Number(data.usage?.completion_tokens ?? 0) || 0;
+        const totalTokens =
+          Number(data.usage?.total_tokens ?? promptTokens + completionTokens) ||
+          promptTokens + completionTokens;
+
+        return {
+          content,
+          usage: {
+            prompt_tokens: promptTokens,
+            completion_tokens: completionTokens,
+            total_tokens: totalTokens,
+          },
+          model: data.model || candidateModel,
+        };
+      } catch (err) {
+        const caught = err instanceof Error ? err : new Error(String(err));
+        const isAbortOrNetwork =
+          caught.name === 'AbortError' ||
+          caught.message.toLowerCase().includes('network') ||
+          caught.message.toLowerCase().includes('fetch failed');
+        if (isAbortOrNetwork) {
+          lastError = caught;
+          if (!isLastCandidate) {
+            break;
+          }
+          if (transientRetries < maxTransientRetries) {
+            transientRetries++;
+            await sleep(1_000 * Math.pow(2, transientRetries - 1));
+            continue;
+          }
+          throw lastError;
+        }
+        throw caught;
+      } finally {
+        clearTimeout(timeout);
       }
-
-      const content = normalizeMessageContent(data.choices?.[0]?.message?.content).trim();
-      if (!content) {
-        throw new Error('OpenRouter returned an empty completion.');
-      }
-
-      const promptTokens = Number(data.usage?.prompt_tokens ?? 0) || 0;
-      const completionTokens = Number(data.usage?.completion_tokens ?? 0) || 0;
-      const totalTokens =
-        Number(data.usage?.total_tokens ?? promptTokens + completionTokens) ||
-        promptTokens + completionTokens;
-
-      return {
-        content,
-        usage: {
-          prompt_tokens: promptTokens,
-          completion_tokens: completionTokens,
-          total_tokens: totalTokens,
-        },
-        model: data.model || opts.model,
-      };
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      const isAbortOrNetwork =
-        lastError.name === 'AbortError' ||
-        lastError.message.toLowerCase().includes('network') ||
-        lastError.message.toLowerCase().includes('fetch failed');
-      if (isAbortOrNetwork && attempt < MAX_RETRIES) {
-        await sleep(1_000 * Math.pow(2, attempt));
-        continue;
-      }
-      throw lastError;
-    } finally {
-      clearTimeout(timeout);
     }
   }
 
-  throw lastError || new Error('OpenRouter request failed after retries.');
+  throw lastError || new Error('OpenRouter request failed across all candidate models.');
 }
 
 /**
  * Repairs common LLM JSON formatting glitches inside string literals
  * (raw newlines/tabs, invalid backslash escapes like \s or \d from code blocks, trailing commas).
  */
-function repairLlmJson(input: string): string {
+export function repairLlmJson(input: string): string {
   let out = '';
   let inString = false;
   let i = 0;

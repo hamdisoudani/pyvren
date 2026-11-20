@@ -6,6 +6,7 @@ import type {
   Archetype,
   CategorySkill,
   DatabaseAdapter,
+  PostMutationContext,
   PostRecord,
   PostStatus,
   QualityBreakdown,
@@ -20,12 +21,13 @@ export const DEFAULT_SEEDED_SETTINGS: SiteSettings = {
   id: 1,
   publishing_mode: 'draft_review',
   min_publish_score: 78,
+  free_models_only: true,
   schedule_enabled: false,
   runs_per_day: 3,
-  openrouter_model: 'google/gemini-2.5-flash',
-  judge_model: 'google/gemini-2.5-flash',
+  openrouter_model: 'openrouter/free',
+  judge_model: 'openrouter/free',
   default_topic_feed:
-    'AI model releases, LLM security & prompt injection defense, cloud GPU economics, and CISA KEV engineering advisories',
+    'CLI coding agents & MCP, LLM security & prompt injection defense, open-weights & local SLMs, Cloudflare Workers & GPU economics, CISA KEV advisories, and live web-data browser agents',
   default_author: 'Hamdi Soudani',
   author_bio:
     'Systems engineer and technical editor researching AI infrastructure, model security, and edge web performance.',
@@ -46,63 +48,151 @@ export const DEFAULT_SEEDED_SETTINGS: SiteSettings = {
 export const DEFAULT_SEEDED_SKILLS: CategorySkill[] = [
   {
     id: 1,
-    slug: 'ai-llms',
-    name: 'AI Models & LLM Engineering',
+    slug: 'ai-coding-agents-mcp',
+    name: 'CLI Coding Agents, MCP & Multi-Agent Harnesses',
     description:
-      'Deep technical teardowns of frontier and open-weights LLMs, inference engines, quantization, context scaling, and real cost/latency benchmarks.',
+      'Field-tested engineering analysis of terminal coding agents, MCP vs CLI token economics, A2A coordination protocols, agent harnesses, and verifiable coding benchmarks.',
     enabled: true,
     priority: 100,
     target_audience:
-      'AI engineers, ML infra teams, and developers selecting production LLM stacks',
+      'Staff software engineers, developer-platform leads, and teams adopting autonomous coding workflows',
     system_instructions:
-      'Focus on measurable metrics: tokens/sec, TTFT, context window retention, API $/1M token pricing, KV-cache memory math, and reproducible evaluation harnesses. Compare against at least 2 competing models in a Markdown table. Avoid hype adjectives.',
-    research_feeds_json: ['hn_top_infra', 'arxiv_ai', 'huggingface_trending'],
+      'Write like a staff engineer who actually runs terminal agents and MCP servers in CI. Ground claims in concrete numbers: SWE-bench Pro / Terminal-Bench 2.0 pass rates, exact token overhead (CLI vs MCP schema loading), exit-code feedback loops, OAuth/multi-tenant boundaries, and real config snippets (JSON/TOML/CLI). Always include an explicit "When NOT to use this" engineering tradeoff section. Mix short 6-10 word verdicts with deeper architectural explanations. Never use filler transitions like Furthermore/Moreover/Additionally or walls of bold-colon bullets.',
+    research_feeds_json: ['hn_top_infra', 'github_advisories', 'arxiv_ai'],
     search_queries_json: [
-      'open weights LLM benchmark inference latency cost comparison',
-      'vLLM SGLang llama.cpp quantization throughput benchmark',
-      'OpenRouter new frontier model API pricing context window',
+      'CLI coding agents vs IDE Terminal-Bench SWE-bench Pro 2026 benchmark',
+      'MCP Model Context Protocol token overhead security OAuth production',
+      'multi-agent harness A2A protocol orchestration production architecture',
     ],
     preferred_archetypes_json: ['benchmark-index', 'architecture-analysis'],
     required_sections_json: [
-      'Direct Answer & TL;DR',
-      'Quantitative Comparison Table',
-      'Production Tradeoffs & Failure Modes',
-      'Reproducible Configuration / Code',
+      'Direct Engineering Verdict',
+      'Token, Latency & Accuracy Comparison Table',
+      'Failure Modes & Context Pollution',
+      'Minimal Reproducible Config / Harness Snippet',
+      'When NOT to Adopt This Pattern',
     ],
     quality_rubric_json: {
       min_primary_sources: 3,
       require_table_or_code: true,
-      min_words: 650,
+      min_words: 700,
       geo_faq_count: 3,
+      require_concrete_metrics: true,
     },
-    banned_patterns_json: [],
+    banned_patterns_json: [
+      'vibe coding revolution',
+      'replaces all developers',
+      'magic bullet',
+      'seamless integration',
+    ],
     created_at: SEED_TIMESTAMP,
     updated_at: SEED_TIMESTAMP,
   },
   {
     id: 2,
     slug: 'ai-security-jailbreaks',
-    name: 'AI Security & Jailbreak Defense',
+    name: 'AI Security, Prompt Injection & Jailbreak Defense',
     description:
-      'Defensive research on LLM prompt injection, jailbreak taxonomies, red-teaming benchmarks, OWASP LLM Top 10, guardrails, and sandboxed agent architectures.',
+      'Defensive engineering teardowns of indirect prompt injection, tool-result smuggling, unauthenticated MCP exposure, red-team benchmarks, OWASP LLM Top 10, and sandboxed agent isolation.',
     enabled: true,
-    priority: 95,
+    priority: 98,
     target_audience:
-      'Security engineers, AI safety researchers, and teams deploying tool-calling agents',
+      'Application security engineers, AI red-teamers, CISOs, and developers shipping tool-calling agents',
     system_instructions:
-      'Write strictly from a defensive engineering and security research perspective. Analyze attack classes (indirect prompt injection, multi-turn jailbreak drift, tool-call smuggling, system prompt extraction) using peer-reviewed papers, OWASP LLM Top 10, NIST AI RMF, and public advisories. NEVER publish copy-paste exploit payloads designed to bypass safety controls for harm; instead show detection rules, architectural isolation patterns, guardrail latency benchmarks, and mitigation code.',
+      'Write strictly from a defensive security engineering perspective (100% AdSense and safety compliant). Analyze real failure mechanics—indirect prompt injection via fetched web/tool outputs, multi-turn guardrail drift, unauthenticated MCP servers, data exfiltration channels, and privilege escalation in autonomous agents—citing OWASP LLM Top 10, NIST AI RMF, Anthropic/Google threat intelligence, and arXiv security papers. NEVER publish weaponized exploit strings or bypass recipes. Always deliver: (1) an explicit threat model table mapping attack surface -> blast radius -> concrete control, (2) runnable defensive code/policy/sandbox config, and (3) latency/false-positive overhead numbers for guardrails.',
     research_feeds_json: ['arxiv_ai_sec', 'github_advisories', 'cisa_kev'],
     search_queries_json: [
-      'LLM prompt injection defense benchmark guardrail evaluation',
-      'OWASP LLM Top 10 agent tool-calling security mitigation',
-      'jailbreak red teaming taxonomy defense arxiv paper',
+      'OWASP LLM Top 10 indirect prompt injection tool calling defense',
+      'MCP server authentication vulnerability security audit mitigation',
+      'AI agent sandbox isolation guardrail latency benchmark arxiv',
     ],
     preferred_archetypes_json: ['advisory-teardown', 'architecture-analysis'],
     required_sections_json: [
-      'Threat Model & Mechanism',
-      'Observed Failure Vectors (Defensive Analysis)',
-      'Guardrail & Mitigation Architecture',
-      'Verification & Hardening Checklist',
+      'Threat Model & Attack Surface Matrix',
+      'Why Naive Prompt Filters Fail',
+      'Defense-in-Depth & Sandbox Isolation Architecture',
+      'Runnable Guardrail Policy / Verification Code',
+      'Operational Tradeoffs & False-Positive Budget',
+    ],
+    quality_rubric_json: {
+      min_primary_sources: 3,
+      require_table_or_code: true,
+      min_words: 700,
+      geo_faq_count: 3,
+      defensive_only: true,
+    },
+    banned_patterns_json: [
+      'unbreakable security',
+      '100% immune',
+      'silver bullet',
+      'stay ahead of bad actors',
+    ],
+    created_at: SEED_TIMESTAMP,
+    updated_at: SEED_TIMESTAMP,
+  },
+  {
+    id: 3,
+    slug: 'ai-llms',
+    name: 'Frontier LLMs, Local SLMs & Context Engineering',
+    description:
+      'Quantitative benchmarks of frontier & open-weights LLMs, 1B-32B Small Language Models, context rot / lost-in-the-middle mitigation, Recursive Language Models, and inference engines.',
+    enabled: true,
+    priority: 94,
+    target_audience: 'ML infrastructure engineers, AI architects, and cost-conscious product teams',
+    system_instructions:
+      'Lead with hard numbers: tokens/second, TTFT, $/1M input & output tokens, VRAM footprint at FP8/Q4_K_M, effective context accuracy before context rot (~32K+ tokens), and real latency tradeoffs across vLLM, SGLang, llama.cpp, or OpenRouter routing. Compare at least 3 models or runtimes in a crisp Markdown table. Explain exact failure modes (context poisoning, distraction, KV-cache OOM) rather than repeating vendor press releases. Vary sentence length naturally like a real benchmark engineer.',
+    research_feeds_json: ['huggingface_trending', 'arxiv_ai', 'hn_top_infra'],
+    search_queries_json: [
+      'open weights local LLM coding benchmark quantization VRAM tokens per second',
+      'context engineering context rot long context benchmark LLM',
+      'small language models SLM vs frontier LLM latency cost enterprise',
+    ],
+    preferred_archetypes_json: ['benchmark-index', 'architecture-analysis'],
+    required_sections_json: [
+      'Benchmark Verdict & Cost Math',
+      'Model / Runtime Quantitative Comparison Table',
+      'Context Window & Memory Bottlenecks',
+      'Reproducible Inference / Routing Config',
+      'Selection Rubric by Workload',
+    ],
+    quality_rubric_json: {
+      min_primary_sources: 3,
+      require_table_or_code: true,
+      min_words: 700,
+      geo_faq_count: 3,
+      require_concrete_metrics: true,
+    },
+    banned_patterns_json: [
+      'unprecedented capabilities',
+      'redefines artificial intelligence',
+      'next-generation powerhouse',
+    ],
+    created_at: SEED_TIMESTAMP,
+    updated_at: SEED_TIMESTAMP,
+  },
+  {
+    id: 4,
+    slug: 'cloud-gpu-infra',
+    name: 'Cloudflare Edge, Sovereign AI & GPU Economics',
+    description:
+      'Production architecture studies on Cloudflare Workers & Workflows limits, serverless Postgres scaling, spot H100/B200 GPU economics, and sovereign AI residency deployments.',
+    enabled: true,
+    priority: 88,
+    target_audience: 'Platform engineers, SREs, staff backend engineers, and FinOps architects',
+    system_instructions:
+      'Anchor every paragraph in verified platform limits, cold-start milliseconds, egress math, and hourly $/GPU or $/million-request pricing tables. Include real copy-pasteable configs (`wrangler.jsonc`, SQL RLS/indexes, Terraform, or curl benchmarks). Explicitly expose hidden billing traps (idle compute wakeups, egress fees, per-step workflow retries, connection pool exhaustion) and state exact thresholds where containers or bare-metal beat serverless.',
+    research_feeds_json: ['hn_top_infra', 'github_advisories'],
+    search_queries_json: [
+      'Cloudflare Workers Workflows CPU limits durable execution pricing benchmark',
+      'cloud GPU H100 B200 hourly spot pricing comparison 2026',
+      'Supabase PostgREST vs Neon Postgres serverless cold start pooling',
+    ],
+    preferred_archetypes_json: ['benchmark-index', 'migration-fix-log'],
+    required_sections_json: [
+      'Cost & Platform Limits Table',
+      'Measured Bottlenecks & Hidden Billing Traps',
+      'Production Configuration Snippet',
+      'Migration Checklist & Break-Even Thresholds',
     ],
     quality_rubric_json: {
       min_primary_sources: 3,
@@ -110,34 +200,70 @@ export const DEFAULT_SEEDED_SKILLS: CategorySkill[] = [
       min_words: 650,
       geo_faq_count: 3,
     },
-    banned_patterns_json: [],
+    banned_patterns_json: ['infinite scalability', 'zero effort deployment', 'future-proof cloud'],
     created_at: SEED_TIMESTAMP,
     updated_at: SEED_TIMESTAMP,
   },
   {
-    id: 3,
-    slug: 'cloud-gpu-infra',
-    name: 'Cloud, Edge & GPU Infrastructure',
+    id: 5,
+    slug: 'agentic-browser-web-data',
+    name: 'Live Web Data, Browser Agents & GEO Retrieval',
     description:
-      'Serverless edge runtimes, Cloudflare Workers economics, spot GPU cluster pricing, Postgres scaling, and latency architecture studies.',
+      'Technical evaluations of web-grounding pipelines for AI agents, headless browser automation, clean Markdown extraction (Jina/Firecrawl/Playwright), and Generative Engine Optimization (llms.txt).',
     enabled: true,
-    priority: 85,
-    target_audience:
-      'Platform engineers, SREs, and CTOs optimizing cloud spend and edge latency',
+    priority: 84,
+    target_audience: 'AI search engineers, data pipeline architects, and technical SEO/GEO leads',
     system_instructions:
-      'Ground every architectural claim in documented vendor limits, concrete pricing tables, cold-start numbers, and real deployment configs (wrangler.jsonc, SQL, Terraform, or CLI commands). Highlight hidden billing traps and migration tradeoffs.',
-    research_feeds_json: ['hn_top_infra', 'github_advisories'],
+      'Focus on measurable retrieval quality: extraction fidelity on tables and code blocks, token savings vs raw HTML, anti-bot / SSRF boundaries, latency per URL, and how ChatGPT Search, Gemini, and Perplexity parse structured JSON-LD, Markdown mirrors, and llms.txt. Provide real curl/TypeScript/Python snippets and comparative extraction tables. Avoid marketing fluff or SEO folklore without primary documentation.',
+    research_feeds_json: ['hn_top_infra', 'arxiv_ai'],
     search_queries_json: [
-      'Cloudflare Workers Workflows limits latency benchmark',
-      'cloud GPU spot pricing H100 B200 hourly comparison',
-      'serverless Postgres connection pooling cold start latency',
+      'AI agent live web data retrieval benchmark Firecrawl Jina Playwright',
+      'llms.txt structured data GEO AI search citation study 2026',
+      'browser automation AI agents reliability benchmark failure modes',
     ],
-    preferred_archetypes_json: ['benchmark-index', 'migration-fix-log'],
+    preferred_archetypes_json: ['benchmark-index', 'architecture-analysis'],
     required_sections_json: [
-      'Runtime & Cost Breakdown Table',
-      'Bottleneck Analysis',
-      'Production Configuration',
-      'When NOT to Use This Stack',
+      'Retrieval & Token Efficiency Table',
+      'Where HTML Extraction & Browser Agents Break',
+      'SSRF-Safe Pipeline Implementation',
+      'GEO & Citation Verification Checklist',
+    ],
+    quality_rubric_json: {
+      min_primary_sources: 3,
+      require_table_or_code: true,
+      min_words: 650,
+      geo_faq_count: 3,
+    },
+    banned_patterns_json: [
+      'skyrocket your rankings',
+      'secret hack',
+      'dominate search overnight',
+    ],
+    created_at: SEED_TIMESTAMP,
+    updated_at: SEED_TIMESTAMP,
+  },
+  {
+    id: 6,
+    slug: 'dev-tooling-benchmarks',
+    name: 'Critical CVEs, CISA KEV & Supply-Chain Patch Logs',
+    description:
+      'Rapid-response technical teardowns of newly exploited CISA KEV vulnerabilities, critical GitHub Security Advisories, npm/PyPI supply-chain attacks, and zero-downtime upgrade logs.',
+    enabled: true,
+    priority: 82,
+    target_audience: 'DevSecOps engineers, incident responders, and backend maintainers',
+    system_instructions:
+      'Lead immediately with the blast-radius summary: exact CVE ID, CVSS score, CISA KEV due date, affected version ranges, and fixed version. Never pad the opening with generic security platitudes ("cybersecurity is more important than ever"). Provide the exact root-cause mechanism from the primary advisory/commit, copy-paste upgrade & lockfile verification commands, and a concrete regression test or CI check.',
+    research_feeds_json: ['cisa_kev', 'github_advisories', 'hn_top_infra'],
+    search_queries_json: [
+      'CISA KEV newly added exploited vulnerability remediation 2026',
+      'GitHub Security Advisory critical npm python rust vulnerability patch',
+    ],
+    preferred_archetypes_json: ['advisory-teardown', 'migration-fix-log'],
+    required_sections_json: [
+      'Affected Versions & Remediation Matrix',
+      'Technical Root Cause (Primary Advisory)',
+      'Exact Upgrade & Verification Commands',
+      'CI Detection & Regression Guard',
     ],
     quality_rubric_json: {
       min_primary_sources: 3,
@@ -145,41 +271,11 @@ export const DEFAULT_SEEDED_SKILLS: CategorySkill[] = [
       min_words: 600,
       geo_faq_count: 3,
     },
-    banned_patterns_json: [],
-    created_at: SEED_TIMESTAMP,
-    updated_at: SEED_TIMESTAMP,
-  },
-  {
-    id: 4,
-    slug: 'dev-tooling-benchmarks',
-    name: 'Security Advisories & Dev Tooling',
-    description:
-      'High-urgency CVE teardowns, CISA KEV patch logs, framework migration postmortems, and runtime performance comparisons.',
-    enabled: true,
-    priority: 80,
-    target_audience:
-      'Full-stack developers, DevSecOps teams, and engineering leads',
-    system_instructions:
-      'Lead with exact affected versions, fixed versions, CVSS/KEV status, and a copy-paste remediation diff or command. Verify every package version and advisory URL from primary vendor disclosures before writing.',
-    research_feeds_json: ['cisa_kev', 'github_advisories', 'hn_top_infra'],
-    search_queries_json: [
-      'CISA KEV newly added web cloud vulnerability remediation',
-      'GitHub Security Advisory critical npm python patch analysis',
+    banned_patterns_json: [
+      'cybersecurity is more important than ever',
+      'stay vigilant',
+      'bad actors are always evolving',
     ],
-    preferred_archetypes_json: ['advisory-teardown', 'migration-fix-log'],
-    required_sections_json: [
-      'Affected Versions & Blast Radius Table',
-      'Root Cause Analysis',
-      'Exact Patch & Verification Commands',
-      'Detection & Regression Guard',
-    ],
-    quality_rubric_json: {
-      min_primary_sources: 3,
-      require_table_or_code: true,
-      min_words: 550,
-      geo_faq_count: 3,
-    },
-    banned_patterns_json: [],
     created_at: SEED_TIMESTAMP,
     updated_at: SEED_TIMESTAMP,
   },
@@ -191,6 +287,37 @@ export class AdminAlreadyExistsError extends Error {
   ) {
     super(message);
     this.name = 'AdminAlreadyExistsError';
+  }
+}
+
+export class AdminOnlyMutationError extends Error {
+  constructor(
+    message = 'Only an authenticated admin can modify post title, tags, keywords, or body.',
+  ) {
+    super(message);
+    this.name = 'AdminOnlyMutationError';
+  }
+}
+
+export const ADMIN_PROTECTED_POST_FIELDS = [
+  'title',
+  'tags_json',
+  'keywords_json',
+  'body_markdown',
+] as const;
+
+function touchesAdminProtectedPostFields(patch: Partial<PostRecord>): boolean {
+  return ADMIN_PROTECTED_POST_FIELDS.some((field) => patch[field] !== undefined);
+}
+
+export function assertAdminOnlyPostMutation(
+  patch: Partial<PostRecord>,
+  ctx?: PostMutationContext,
+): void {
+  if (touchesAdminProtectedPostFields(patch) && ctx?.actor !== 'admin') {
+    throw new AdminOnlyMutationError(
+      'Only an authenticated admin can modify post title, tags, keywords, or body.',
+    );
   }
 }
 
@@ -260,6 +387,10 @@ function normalizeSettingsRow(row: Partial<SiteSettings>): SiteSettings {
     ...row,
     id: 1,
     min_publish_score: Number(row.min_publish_score ?? DEFAULT_SEEDED_SETTINGS.min_publish_score),
+    free_models_only:
+      row.free_models_only === undefined || row.free_models_only === null
+        ? DEFAULT_SEEDED_SETTINGS.free_models_only
+        : Boolean(row.free_models_only),
     runs_per_day: Number(row.runs_per_day ?? DEFAULT_SEEDED_SETTINGS.runs_per_day),
     schedule_enabled: Boolean(row.schedule_enabled ?? DEFAULT_SEEDED_SETTINGS.schedule_enabled),
     adsense_client_id: row.adsense_client_id ?? null,
@@ -297,6 +428,7 @@ function normalizePostRow(row: PostRecord): PostRecord {
     key_facts_json: Array.isArray(row.key_facts_json) ? row.key_facts_json : [],
     faq_json: Array.isArray(row.faq_json) ? row.faq_json : [],
     tags_json: Array.isArray(row.tags_json) ? row.tags_json : [],
+    keywords_json: Array.isArray(row.keywords_json) ? row.keywords_json : [],
     sources_json: Array.isArray(row.sources_json) ? row.sources_json : [],
     review_notes_json: Array.isArray(row.review_notes_json) ? row.review_notes_json : [],
     lint_passed: Boolean(row.lint_passed),
@@ -314,6 +446,8 @@ function normalizePostRow(row: PostRecord): PostRecord {
         : { ...DEFAULT_QUALITY_BREAKDOWN, warnings: [] },
     reading_time_minutes: Number(row.reading_time_minutes ?? 1),
     word_count: Number(row.word_count ?? 0),
+    admin_locked: Boolean(row.admin_locked ?? false),
+    last_edited_by: row.last_edited_by ?? null,
     published_at: row.published_at ?? null,
   };
 }
@@ -684,10 +818,16 @@ export class SupabaseRestDatabase implements DatabaseAdapter {
   async createPost(
     record: Omit<PostRecord, 'id' | 'created_at' | 'updated_at'>,
   ): Promise<PostRecord> {
+    const payload = {
+      ...record,
+      keywords_json: Array.isArray(record.keywords_json) ? record.keywords_json : [],
+      admin_locked: Boolean(record.admin_locked ?? false),
+      last_edited_by: record.last_edited_by ?? null,
+    };
     const { data } = await this.requestJson<PostRecord[]>('/posts', {
       method: 'POST',
       prefer: 'return=representation',
-      body: record,
+      body: payload,
     });
     if (!data || data.length === 0) {
       throw new Error('Failed to create post: empty response from Supabase');
@@ -695,8 +835,22 @@ export class SupabaseRestDatabase implements DatabaseAdapter {
     return normalizePostRow(data[0]);
   }
 
-  async updatePost(id: number, patch: Partial<PostRecord>): Promise<PostRecord | null> {
+  async updatePost(
+    id: number,
+    patch: Partial<PostRecord>,
+    ctx?: PostMutationContext,
+  ): Promise<PostRecord | null> {
+    assertAdminOnlyPostMutation(patch, ctx);
+
     const { id: _ignoreId, created_at: _ignoreCreated, ...rest } = patch;
+    const adminLockPatch: Partial<PostRecord> =
+      ctx?.actor === 'admin' && touchesAdminProtectedPostFields(patch)
+        ? {
+            admin_locked: true,
+            last_edited_by: ctx.adminEmail || 'admin',
+          }
+        : {};
+
     const { data } = await this.requestJson<PostRecord[]>(
       `/posts?id=eq.${encodeURIComponent(String(id))}`,
       {
@@ -704,6 +858,7 @@ export class SupabaseRestDatabase implements DatabaseAdapter {
         prefer: 'return=representation',
         body: {
           ...rest,
+          ...adminLockPatch,
           updated_at: new Date().toISOString(),
         },
       },
@@ -1003,7 +1158,8 @@ export class InMemoryDatabase implements DatabaseAdapter {
           p.description.toLowerCase().includes(query) ||
           p.tldr_summary.toLowerCase().includes(query) ||
           p.body_markdown.toLowerCase().includes(query) ||
-          p.tags_json.some((t) => t.toLowerCase().includes(query)),
+          p.tags_json.some((t) => t.toLowerCase().includes(query)) ||
+          p.keywords_json.some((k) => k.toLowerCase().includes(query)),
       );
     }
 
@@ -1081,7 +1237,13 @@ export class InMemoryDatabase implements DatabaseAdapter {
     return structuredClone(created);
   }
 
-  async updatePost(id: number, patch: Partial<PostRecord>): Promise<PostRecord | null> {
+  async updatePost(
+    id: number,
+    patch: Partial<PostRecord>,
+    ctx?: PostMutationContext,
+  ): Promise<PostRecord | null> {
+    assertAdminOnlyPostMutation(patch, ctx);
+
     const existing = this.posts.get(id);
     if (!existing) return null;
 
@@ -1090,9 +1252,18 @@ export class InMemoryDatabase implements DatabaseAdapter {
     }
 
     const { id: _ignoreId, created_at: _ignoreCreated, ...rest } = patch;
+    const adminLockPatch: Partial<PostRecord> =
+      ctx?.actor === 'admin' && touchesAdminProtectedPostFields(patch)
+        ? {
+            admin_locked: true,
+            last_edited_by: ctx.adminEmail || 'admin',
+          }
+        : {};
+
     const updated = normalizePostRow({
       ...existing,
       ...structuredClone(rest),
+      ...adminLockPatch,
       id: existing.id,
       created_at: existing.created_at,
       updated_at: new Date().toISOString(),

@@ -1,4 +1,11 @@
-import type { Archetype, FaqItem, KeyFact, LintResult, QualityBreakdown } from '../types';
+import type {
+  Archetype,
+  FaqItem,
+  HumanitySignals,
+  KeyFact,
+  LintResult,
+  QualityBreakdown,
+} from '../types';
 import { ARCHETYPES } from './skills';
 
 export const BANNED_SLOP_PHRASES: string[] = [
@@ -21,6 +28,32 @@ export const BANNED_SLOP_PHRASES: string[] = [
   'seamlessly',
   'leverage',
   'leveraging',
+  "in today's digital landscape",
+  'crucial role',
+  'robust solution',
+  'comprehensive guide',
+  'cutting-edge',
+  'revolutionize',
+  'revolutionizing',
+  'navigate the complexities',
+  'spearhead',
+  'pivotal',
+  'paramount',
+  'meticulous',
+  'meticulously',
+  'intricate',
+  'beacon',
+  'vibrant',
+  'foster a',
+  'it is worth mentioning',
+  "let's dive in",
+  'dive deep into',
+  'at the end of the day',
+  'unlocking the full potential',
+  'a double-edged sword',
+  'in the ever-changing',
+  'stands as a',
+  'in the realm of',
 ];
 
 export const BANNED_GENERIC_HEADINGS: string[] = [
@@ -176,19 +209,187 @@ function normalizeHeading(raw: string): string {
     .toLowerCase();
 }
 
-function countConcreteMetrics(prose: string): number {
+const TABLE_SEPARATOR_REGEX = /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/;
+const BOLD_LEADIN_BULLET_REGEX = /^\s*[-*]\s+\*\*[^*]{2,50}:\*\*|^\s*[-*]\s+\*\*[^*]{2,50}\*\*:/;
+const ROBOTIC_OPENER_REGEX =
+  /^(?:[-*+]\s+|\d+\.\s+)?(?:[*_"'“”‘’(\[]+)?(?:furthermore|moreover|additionally|consequently|importantly|notably|ultimately|overall),/i;
+
+function countConcreteMetrics(text: string): number {
+  const withoutUrls = text
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/https?:\/\/\S+/gi, ' ');
+
   const patterns = [
-    /\b\d+(?:\.\d+)?\s*(?:%|ms|s|sec|seconds|us|µs|ns|MB|GB|TB|GiB|MiB|KB|tok\/s|tokens\/s|tokens\/sec|req\/s|RPS|QPS|x)\b/gi,
+    /\b\d+(?:\.\d+)?\s*(?:ms|sec|seconds|us|µs|ns|GB|MB|KB|TB|GiB|MiB|tok\/s|tokens\/s|tokens\/sec|req\/s|RPS|QPS|s|x|M|K)(?![a-zA-Z0-9])/gi,
+    /\b\d+(?:\.\d+)?\s*(?:%|\$)/g,
     /\$\s?\d+(?:,\d{3})*(?:\.\d+)?(?:\s*\/\s*(?:1M|M|K|hr|hour|month|GB))?/gi,
     /\b(?:CVE-\d{4}-\d{4,7}|GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4})\b/gi,
-    /\bv?\d+\.\d+(?:\.\d+)?\b/g,
+    /\bv\d+\.\d+(?:\.\d+)?\b/gi,
   ];
   let hits = 0;
   for (const rx of patterns) {
-    const matches = prose.match(rx);
+    const matches = withoutUrls.match(rx);
     if (matches) hits += matches.length;
   }
   return hits;
+}
+
+function isolateNaturalProse(markdownWithoutFences: string): string {
+  const lines = markdownWithoutFences.split(/\r?\n/);
+  const keptLines: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // Skip Markdown headings
+    if (/^#{1,6}\s+/.test(trimmed)) {
+      keptLines.push('');
+      continue;
+    }
+
+    // Skip horizontal rules
+    if (/^(?:[-*_]\s*){3,}$/.test(trimmed)) {
+      keptLines.push('');
+      continue;
+    }
+
+    // Skip Markdown pipe tables (header + separator + contiguous pipe rows)
+    if (trimmed.includes('|') && i + 1 < lines.length && TABLE_SEPARATOR_REGEX.test(lines[i + 1].trim())) {
+      i += 1;
+      while (i + 1 < lines.length && lines[i + 1].trim().includes('|')) {
+        i += 1;
+      }
+      keptLines.push('');
+      continue;
+    }
+
+    keptLines.push(line.replace(/^\s*>\s?/, ''));
+  }
+
+  return keptLines
+    .join('\n')
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/`([^`]+)`/g, '$1');
+}
+
+function extractProseSentences(naturalProse: string): string[] {
+  const paragraphs = naturalProse
+    .split(/\r?\n+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  const sentences: string[] = [];
+  for (const para of paragraphs) {
+    // Protect decimal/version dots and common abbreviations before sentence splitting
+    const protectedText = para
+      .replace(/(?<=\d)\.(?=\d)/g, '__DOT__')
+      .replace(/\b(e\.g|i\.e|etc|vs|cf|al|dr|mr|ms)\./gi, '$1__DOT__')
+      .replace(/\b([A-Za-z0-9]+)\.(js|ts|py|go|rs|io|ai|com|org|dev|net|gov)\b/gi, '$1__DOT__$2');
+
+    const rawParts = protectedText.split(/[.!?]+(?:\s+|$)/);
+    for (const part of rawParts) {
+      const restored = part.replace(/__DOT__/g, '.').trim();
+      if (!restored) continue;
+      if (countWords(restored) >= 2) {
+        sentences.push(restored);
+      }
+    }
+  }
+  return sentences;
+}
+
+/**
+ * Stylometric Human-Likeness & Anti-AI-Detection Analyzer.
+ * Measures burstiness (sentence-length standard deviation), bold-lead-in bullet walls,
+ * em-dash frequency, robotic transition openers, and concrete technical metrics.
+ */
+export function analyzeHumanitySignals(bodyMarkdown: string): HumanitySignals {
+  const withoutFences = stripFencedCodeBlocks(bodyMarkdown || '');
+  const lines = withoutFences.split(/\r?\n/);
+
+  let boldLeadinBullets = 0;
+  for (const line of lines) {
+    if (BOLD_LEADIN_BULLET_REGEX.test(line)) {
+      boldLeadinBullets++;
+    }
+  }
+
+  const naturalProse = isolateNaturalProse(withoutFences);
+  const naturalProseWords = countWords(naturalProse);
+
+  // Count Unicode em-dashes and double-hyphen dashes (excluding triple-hyphen rules)
+  const emDashMatches = naturalProse.match(/(?:—|(?<!-)--(?!-))/g);
+  const emDashCount = emDashMatches ? emDashMatches.length : 0;
+  const emDashPer100Words =
+    naturalProseWords > 0 ? Number(((emDashCount / naturalProseWords) * 100).toFixed(2)) : 0;
+
+  const sentences = extractProseSentences(naturalProse);
+  const sentenceWordCounts = sentences.map((s) => countWords(s));
+  const sentenceCount = sentenceWordCounts.length;
+
+  let avgSentenceWords = 0;
+  let sentenceLengthStdDev = 0;
+  if (sentenceCount > 0) {
+    const sum = sentenceWordCounts.reduce((acc, n) => acc + n, 0);
+    avgSentenceWords = sum / sentenceCount;
+    const variance =
+      sentenceWordCounts.reduce((acc, n) => acc + Math.pow(n - avgSentenceWords, 2), 0) /
+      sentenceCount;
+    sentenceLengthStdDev = Math.sqrt(variance);
+  }
+
+  let roboticOpenersCount = 0;
+  for (const sentence of sentences) {
+    if (ROBOTIC_OPENER_REGEX.test(sentence)) {
+      roboticOpenersCount++;
+    }
+  }
+
+  const concreteMetricHits = countConcreteMetrics(withoutFences);
+
+  let score = 100;
+  if (sentenceCount >= 12) {
+    if (sentenceLengthStdDev < 3.5) {
+      score -= 25;
+    } else if (sentenceLengthStdDev < 4.5) {
+      score -= 15;
+    }
+  }
+
+  if (boldLeadinBullets > 10) {
+    score -= 22;
+  } else if (boldLeadinBullets > 6) {
+    score -= 12;
+  }
+
+  if (emDashPer100Words > 1.8) {
+    score -= 12;
+  }
+
+  if (roboticOpenersCount >= 5) {
+    score -= 20;
+  } else if (roboticOpenersCount >= 3) {
+    score -= 12;
+  }
+
+  if (concreteMetricHits < 3) {
+    score -= 10;
+  }
+
+  return {
+    sentence_count: sentenceCount,
+    avg_sentence_words: Number(avgSentenceWords.toFixed(2)),
+    sentence_length_std_dev: Number(sentenceLengthStdDev.toFixed(2)),
+    bold_leadin_bullets: boldLeadinBullets,
+    em_dash_per_100_words: emDashPer100Words,
+    robotic_openers_count: roboticOpenersCount,
+    concrete_metric_hits: concreteMetricHits,
+    human_likeness_score: clampScore(score),
+  };
 }
 
 export function lintPostPayload(input: LintPostPayloadInput): LintResult {
@@ -397,6 +598,41 @@ export function lintPostPayload(input: LintPostPayloadInput): LintResult {
     errors.push('AdSense safety violation: excessive profanity detected in editorial prose.');
   }
 
+  // 13. Stylometric human-likeness & anti-AI-detection analysis
+  const humanitySignals = analyzeHumanitySignals(body);
+
+  if (humanitySignals.sentence_count >= 12 && humanitySignals.sentence_length_std_dev < 4.5) {
+    warnings.push(
+      `Sentence length burstiness is too flat (std dev ${humanitySignals.sentence_length_std_dev} across ${humanitySignals.sentence_count} sentences). Mix short 6-10 word direct verdicts with 20-30 word technical explanations.`,
+    );
+  }
+
+  if (humanitySignals.bold_leadin_bullets >= 10) {
+    errors.push(
+      `Detected a wall of ${humanitySignals.bold_leadin_bullets} bold-colon bullet items ("- **Label:** ..."). Rewrite repetitive bullet lists into cohesive engineering prose paragraphs or a structured Markdown comparison table (must be < 10).`,
+    );
+  } else if (humanitySignals.bold_leadin_bullets > 6) {
+    warnings.push(
+      `Excessive bold-lead-in bullet spam detected (${humanitySignals.bold_leadin_bullets} items). Convert most "- **Label:** ..." bullets into natural prose or a Markdown table.`,
+    );
+  }
+
+  if (humanitySignals.em_dash_per_100_words > 1.8) {
+    warnings.push(
+      `Em-dash frequency is too high (${humanitySignals.em_dash_per_100_words} per 100 words; keep <= 1.8). Replace excess em-dashes with commas, periods, or parentheses.`,
+    );
+  }
+
+  if (humanitySignals.robotic_openers_count >= 4) {
+    errors.push(
+      `Detected ${humanitySignals.robotic_openers_count} robotic transition openers ("Furthermore,", "Moreover,", "Additionally,", "Consequently,", etc.). Rewrite transitions into direct human engineering prose (must be < 4).`,
+    );
+  } else if (humanitySignals.robotic_openers_count >= 3) {
+    warnings.push(
+      `Detected ${humanitySignals.robotic_openers_count} robotic transition openers ("Furthermore,", "Moreover,", "Additionally,", etc.). Replace them with direct technical transitions.`,
+    );
+  }
+
   // --- Deterministic 6-dimension quality scoring (0..100 each) ---
 
   // A. SEO structure
@@ -479,7 +715,7 @@ export function lintPostPayload(input: LintPostPayloadInput): LintResult {
   } else {
     infoScore += Math.floor((proseWordCount / 350) * 12);
   }
-  const metricHits = countConcreteMetrics(prose);
+  const metricHits = humanitySignals.concrete_metric_hits;
   infoScore += Math.min(25, metricHits * 3);
   const information_gain = clampScore(infoScore);
 
@@ -499,13 +735,16 @@ export function lintPostPayload(input: LintPostPayloadInput): LintResult {
   else if (srcCount === 1) groundingScore += 12;
   const source_grounding = clampScore(groundingScore);
 
-  // E. Anti-slop cleanliness
-  const antiSlopRaw =
+  // E. Anti-slop cleanliness (blending lexical cleanliness with stylometric human-likeness)
+  const lexicalAntiSlop = clampScore(
     100 -
-    matchedSlop.size * 18 -
-    matchedGenericHeadings.length * 20 -
-    foundPlaceholders.length * 25;
-  const anti_slop_cleanliness = clampScore(antiSlopRaw);
+      matchedSlop.size * 18 -
+      matchedGenericHeadings.length * 20 -
+      foundPlaceholders.length * 25,
+  );
+  const anti_slop_cleanliness = clampScore(
+    lexicalAntiSlop * 0.65 + humanitySignals.human_likeness_score * 0.35,
+  );
 
   // F. AdSense compliance
   let adsenseRaw = 100;
@@ -533,6 +772,7 @@ export function lintPostPayload(input: LintPostPayloadInput): LintResult {
     anti_slop_cleanliness,
     adsense_compliance,
     warnings,
+    humanity_signals: humanitySignals,
   };
 
   return {

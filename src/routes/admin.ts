@@ -14,6 +14,7 @@ import {
 import { AdminAlreadyExistsError, createDatabase, ensureUniqueSlug } from '../lib/db';
 import { lintPostPayload } from '../lib/linter';
 import { compileMarkdown } from '../lib/markdown';
+import { isFreeOpenRouterModel, listOpenRouterFreeModels } from '../lib/openrouter';
 import { constantTimeEqual, slugify } from '../lib/security';
 import type {
   AgentDispatchPayload,
@@ -24,6 +25,13 @@ import type {
   SiteSettings,
 } from '../types';
 import { renderBlogPostPage } from '../ui/pages';
+
+type AdminRouteEnv = {
+  Bindings: WorkerEnv;
+  Variables: {
+    adminEmail: string;
+  };
+};
 
 const ARCHETYPE_ENUM = z.enum([
   'advisory-teardown',
@@ -61,6 +69,7 @@ const SETTINGS_PATCH_SCHEMA = z
   .object({
     publishing_mode: z.enum(['draft_review', 'auto_publish']).optional(),
     min_publish_score: z.number().int().min(50).max(100).optional(),
+    free_models_only: z.boolean().optional(),
     schedule_enabled: z.boolean().optional(),
     runs_per_day: z.number().int().min(1).max(24).optional(),
     openrouter_model: z.string().trim().min(1).max(200).optional(),
@@ -111,6 +120,8 @@ const POST_CREATE_SCHEMA = z.object({
   archetype: ARCHETYPE_ENUM,
   tags: z.array(z.string().trim().min(1)).optional(),
   tags_json: z.array(z.string().trim().min(1)).optional(),
+  keywords: z.array(z.string().trim().min(1)).optional(),
+  keywords_json: z.array(z.string().trim().min(1)).optional(),
   sources: z.array(z.string().trim().min(1)).optional(),
   sources_json: z.array(z.string().trim().min(1)).optional(),
   review_notes: z.array(z.string().trim().min(1)).optional(),
@@ -205,8 +216,8 @@ async function parseJsonBody(req: Request): Promise<{ ok: true; data: unknown } 
   }
 }
 
-export function createAdminRoutes(): Hono<{ Bindings: WorkerEnv }> {
-  const app = new Hono<{ Bindings: WorkerEnv }>();
+export function createAdminRoutes(): Hono<AdminRouteEnv> {
+  const app = new Hono<AdminRouteEnv>();
 
   // Always mark admin API & admin SPA routes non-indexable and non-cacheable
   app.use('/api/admin/*', async (c, next) => {
@@ -239,6 +250,7 @@ export function createAdminRoutes(): Hono<{ Bindings: WorkerEnv }> {
       return c.json({ error: 'Unauthorized' }, 401);
     }
 
+    c.set('adminEmail', auth.email || 'admin');
     await next();
   });
 
@@ -430,6 +442,18 @@ export function createAdminRoutes(): Hono<{ Bindings: WorkerEnv }> {
     return c.json(settings);
   });
 
+  app.get('/api/admin/openrouter/free-models', async (c) => {
+    const db = createDatabase(c.env);
+    const settings = await db.getSettings();
+    const models = await listOpenRouterFreeModels(c.env, c.req.query('refresh') === '1');
+    return c.json({
+      free_models_only: settings.free_models_only,
+      current_model: settings.openrouter_model,
+      judge_model: settings.judge_model,
+      models,
+    });
+  });
+
   app.put('/api/admin/settings', async (c) => {
     const rawBody = await parseJsonBody(c.req.raw);
     if (!rawBody.ok) {
@@ -447,6 +471,27 @@ export function createAdminRoutes(): Hono<{ Bindings: WorkerEnv }> {
     }
 
     const db = createDatabase(c.env);
+    const existingSettings = await db.getSettings();
+    const effectiveFreeModelsOnly =
+      patch.free_models_only !== undefined
+        ? patch.free_models_only
+        : existingSettings.free_models_only;
+
+    if (effectiveFreeModelsOnly) {
+      if (
+        (patch.openrouter_model !== undefined && !isFreeOpenRouterModel(patch.openrouter_model)) ||
+        (patch.judge_model !== undefined && !isFreeOpenRouterModel(patch.judge_model))
+      ) {
+        return c.json(
+          {
+            error:
+              'Free-models-only mode is enabled. Choose an OpenRouter :free model (or disable free_models_only first).',
+          },
+          400,
+        );
+      }
+    }
+
     const updated = await db.updateSettings(patch);
     return c.json(updated);
   });
@@ -592,6 +637,7 @@ export function createAdminRoutes(): Hono<{ Bindings: WorkerEnv }> {
     }
 
     const body = parsed.data;
+    const adminEmail = c.get('adminEmail') || 'admin';
     const db = createDatabase(c.env);
     const settings = await db.getSettings();
     const categorySlug = (body.category_slug || 'ai-llms').trim();
@@ -601,6 +647,7 @@ export function createAdminRoutes(): Hono<{ Bindings: WorkerEnv }> {
     const keyFacts = normalizeKeyFacts(body.key_facts ?? body.key_facts_json);
     const faq = normalizeFaq(body.faq ?? body.faq_json);
     const tags = body.tags ?? body.tags_json ?? [];
+    const keywords = body.keywords ?? body.keywords_json ?? [];
     const sources = body.sources ?? body.sources_json ?? [];
     const reviewNotes = body.review_notes ?? body.review_notes_json ?? [];
     const tldrSummary = (body.tldr_summary || '').trim();
@@ -644,6 +691,7 @@ export function createAdminRoutes(): Hono<{ Bindings: WorkerEnv }> {
       category_slug: categorySlug,
       archetype: body.archetype,
       tags_json: tags,
+      keywords_json: keywords,
       sources_json: sources,
       review_notes_json: reviewNotes,
       lint_passed: lint.passed,
@@ -653,6 +701,8 @@ export function createAdminRoutes(): Hono<{ Bindings: WorkerEnv }> {
       reading_time_minutes: lint.reading_time_minutes || compiled.readingTimeMinutes,
       word_count: lint.word_count || compiled.wordCount,
       status: resolvedStatus,
+      admin_locked: true,
+      last_edited_by: adminEmail,
       published_at: publishedAt,
     });
 
@@ -675,6 +725,7 @@ export function createAdminRoutes(): Hono<{ Bindings: WorkerEnv }> {
       return c.json({ error: 'Invalid post update.', details: parsed.error.flatten() }, 400);
     }
 
+    const adminEmail = c.get('adminEmail') || 'admin';
     const db = createDatabase(c.env);
     const existing = await db.getPostById(id);
     if (!existing) {
@@ -699,6 +750,7 @@ export function createAdminRoutes(): Hono<{ Bindings: WorkerEnv }> {
         ? normalizeFaq(body.faq ?? body.faq_json)
         : existing.faq_json;
     const tags = body.tags ?? body.tags_json ?? existing.tags_json;
+    const keywords = body.keywords ?? body.keywords_json ?? existing.keywords_json;
     const sources = body.sources ?? body.sources_json ?? existing.sources_json;
     const reviewNotes = body.review_notes ?? body.review_notes_json ?? existing.review_notes_json;
 
@@ -728,30 +780,37 @@ export function createAdminRoutes(): Hono<{ Bindings: WorkerEnv }> {
         ? existing.published_at || new Date().toISOString()
         : existing.published_at;
 
-    const updated = await db.updatePost(id, {
-      slug: nextSlug,
-      title,
-      description,
-      tldr_summary: tldrSummary,
-      key_facts_json: keyFacts,
-      faq_json: faq,
-      body_markdown: bodyMarkdown,
-      body_html: compiled.html,
-      author,
-      category_slug: categorySlug,
-      archetype,
-      tags_json: tags,
-      sources_json: sources,
-      review_notes_json: reviewNotes,
-      lint_passed: lint.passed,
-      lint_errors_json: lint.errors,
-      quality_score: lint.quality_score,
-      quality_breakdown_json: lint.quality_breakdown,
-      reading_time_minutes: lint.reading_time_minutes || compiled.readingTimeMinutes,
-      word_count: lint.word_count || compiled.wordCount,
-      status: nextStatus,
-      published_at: nextPublishedAt,
-    });
+    const updated = await db.updatePost(
+      id,
+      {
+        slug: nextSlug,
+        title,
+        description,
+        tldr_summary: tldrSummary,
+        key_facts_json: keyFacts,
+        faq_json: faq,
+        body_markdown: bodyMarkdown,
+        body_html: compiled.html,
+        author,
+        category_slug: categorySlug,
+        archetype,
+        tags_json: tags,
+        keywords_json: keywords,
+        sources_json: sources,
+        review_notes_json: reviewNotes,
+        lint_passed: lint.passed,
+        lint_errors_json: lint.errors,
+        quality_score: lint.quality_score,
+        quality_breakdown_json: lint.quality_breakdown,
+        reading_time_minutes: lint.reading_time_minutes || compiled.readingTimeMinutes,
+        word_count: lint.word_count || compiled.wordCount,
+        status: nextStatus,
+        admin_locked: true,
+        last_edited_by: adminEmail,
+        published_at: nextPublishedAt,
+      },
+      { actor: 'admin', adminEmail },
+    );
 
     if (!updated) {
       return c.json({ error: 'Post not found.' }, 404);
@@ -776,6 +835,7 @@ export function createAdminRoutes(): Hono<{ Bindings: WorkerEnv }> {
       return c.json({ error: 'Invalid status payload.', details: parsed.error.flatten() }, 400);
     }
 
+    const adminEmail = c.get('adminEmail') || 'admin';
     const db = createDatabase(c.env);
     const existing = await db.getPostById(id);
     if (!existing) {
@@ -789,10 +849,14 @@ export function createAdminRoutes(): Hono<{ Bindings: WorkerEnv }> {
         ? existing.published_at || new Date().toISOString()
         : existing.published_at;
 
-    const updated = await db.updatePost(id, {
-      status: nextStatus,
-      published_at: publishedAt,
-    });
+    const updated = await db.updatePost(
+      id,
+      {
+        status: nextStatus,
+        published_at: publishedAt,
+      },
+      { actor: 'admin', adminEmail },
+    );
 
     if (!updated) {
       return c.json({ error: 'Post not found.' }, 404);

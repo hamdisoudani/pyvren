@@ -18,7 +18,12 @@ import type {
 import { ensureUniqueSlug } from './db';
 import { lintPostPayload } from './linter';
 import { compileMarkdown } from './markdown';
-import { callOpenRouter, extractJsonObject } from './openrouter';
+import {
+  CURATED_FREE_MODELS,
+  callOpenRouter,
+  extractJsonObject,
+  resolveFreeModelChain,
+} from './openrouter';
 import { isSafePublicUrl, slugify } from './security';
 import { buildSkillSystemPrompt, selectArchetype, selectSkillForRun } from './skills';
 import {
@@ -43,6 +48,7 @@ export interface TopicHuntOutput {
   angle: string;
   searchQueries: string[];
   feedItems: FeedItem[];
+  resolvedModel?: string;
 }
 
 export interface PrimarySourceDoc {
@@ -62,6 +68,7 @@ export interface DraftArticlePayload {
   faq: FaqItem[];
   body_markdown: string;
   tags: string[];
+  keywords: string[];
   sources: string[];
   review_notes: string[];
 }
@@ -70,11 +77,13 @@ export interface DraftAndRefineOutput {
   draft: DraftArticlePayload;
   lintResult: LintResult;
   attempts: number;
+  resolvedModel?: string;
 }
 
 export interface QualityAssessmentOutput {
   finalScore: number;
   finalBreakdown: QualityBreakdown;
+  resolvedJudgeModel?: string;
 }
 
 export interface PersistGateOutput {
@@ -118,6 +127,104 @@ function isDeepUrl(rawUrl: string): boolean {
   if (check.url.protocol !== 'https:') return false;
   const trimmedPath = check.url.pathname.replace(/\/+$/, '');
   return check.url.pathname.length > 1 && trimmedPath.length > 0;
+}
+
+const KEYWORD_STOP_WORDS = new Set([
+  'the',
+  'and',
+  'for',
+  'with',
+  'from',
+  'that',
+  'this',
+  'into',
+  'onto',
+  'over',
+  'under',
+  'about',
+  'using',
+  'used',
+  'how',
+  'why',
+  'what',
+  'when',
+  'where',
+  'your',
+  'their',
+  'more',
+  'most',
+  'less',
+  'than',
+  'then',
+  'will',
+  'should',
+  'could',
+  'would',
+  'have',
+  'been',
+  'being',
+  'does',
+  'without',
+  'versus',
+]);
+
+function deriveCleanKeywords(
+  rawKeywords: unknown,
+  tags: string[],
+  title: string,
+  fallbackTopic: string,
+): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+
+  const pushKeyword = (value: string) => {
+    const cleaned = value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9.\-+/# ]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 64);
+    if (cleaned.length < 2 || seen.has(cleaned)) return;
+    seen.add(cleaned);
+    normalized.push(cleaned);
+  };
+
+  if (Array.isArray(rawKeywords)) {
+    for (const kw of rawKeywords) {
+      if (typeof kw === 'string' && kw.trim().length > 0) {
+        pushKeyword(kw);
+      }
+      if (normalized.length >= 8) break;
+    }
+  }
+
+  // Backfill from tags (converting kebab-case to natural search phrases)
+  if (normalized.length < 5) {
+    for (const tag of tags) {
+      pushKeyword(tag.replace(/-/g, ' '));
+      if (normalized.length >= 8) break;
+    }
+  }
+
+  // Backfill from title & fallback topic phrases if still short
+  if (normalized.length < 5) {
+    const tokens = `${title} ${fallbackTopic}`
+      .toLowerCase()
+      .replace(/[^a-z0-9.\-+/# ]+/g, ' ')
+      .split(/\s+/)
+      .filter((tok) => tok.length >= 3 && !KEYWORD_STOP_WORDS.has(tok));
+
+    for (let i = 0; i < tokens.length - 1 && normalized.length < 6; i++) {
+      pushKeyword(`${tokens[i]} ${tokens[i + 1]}`);
+    }
+    for (const tok of tokens) {
+      if (normalized.length >= 8) break;
+      pushKeyword(tok);
+    }
+  }
+
+  return normalized.slice(0, 8);
 }
 
 function normalizeDraftPayload(
@@ -180,6 +287,8 @@ function normalizeDraftPayload(
       ).slice(0, 8)
     : [];
 
+  const keywords = deriveCleanKeywords(raw.keywords, tags, title, fallbackTopic);
+
   const sourceSet = new Set<string>();
   if (Array.isArray(raw.sources)) {
     for (const s of raw.sources) {
@@ -214,6 +323,7 @@ function normalizeDraftPayload(
     faq,
     body_markdown,
     tags,
+    keywords,
     sources: Array.from(sourceSet).slice(0, 10),
     review_notes,
   };
@@ -235,11 +345,14 @@ export async function stageLoadContext(
   const skill = selectSkillForRun(skills, payload.category_slug, recentPosts);
   const lastArchetype = recentPosts[0]?.archetype;
   const archetype = selectArchetype(skill, payload.archetype, lastArchetype);
-  const model =
+  const freeModelsOnly = settings.free_models_only !== false;
+  const requestedModel =
     payload.model_override?.trim() ||
     settings.openrouter_model?.trim() ||
-    'google/gemini-2.5-flash';
-  const judgeModel = settings.judge_model?.trim() || model;
+    CURATED_FREE_MODELS[0];
+  const model = resolveFreeModelChain(requestedModel, freeModelsOnly)[0] || CURATED_FREE_MODELS[0];
+  const requestedJudge = settings.judge_model?.trim() || model;
+  const judgeModel = resolveFreeModelChain(requestedJudge, freeModelsOnly)[0] || model;
 
   return {
     settings,
@@ -350,8 +463,11 @@ Select the single highest-value, freshest, non-duplicate technical topic support
       temperature: 0.3,
       maxTokens: 900,
       jsonMode: true,
+      freeModelsOnly: ctx.settings.free_models_only !== false,
     });
     addTokenUsage(usage, completion.usage);
+    const resolvedModel = completion.model || ctx.model;
+    ctx.model = resolvedModel;
 
     const parsed = extractJsonObject<{
       topic?: string;
@@ -378,8 +494,8 @@ Select the single highest-value, freshest, non-duplicate technical topic support
     pushTrace(trace, {
       stage: 'hunt_topics',
       tool_name: 'openrouter_topic_selection',
-      input: hasExplicitTopic ? cleanRequested : ctx.skill.slug,
-      summary: `Selected topic "${selectedTopic}" with ${searchQueries.length} search queries`,
+      input: resolvedModel,
+      summary: `Selected topic "${selectedTopic}" via ${resolvedModel} with ${searchQueries.length} search queries`,
       ok: true,
     });
 
@@ -388,6 +504,7 @@ Select the single highest-value, freshest, non-duplicate technical topic support
       angle,
       searchQueries,
       feedItems,
+      resolvedModel,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -586,6 +703,8 @@ ${sourceDossier}
 
 Write the complete publication-ready article now as a single valid JSON object adhering strictly to all schema, GEO/AEO, citation, and anti-slop rules.`;
 
+  const freeModelsOnly = ctx.settings.free_models_only !== false;
+
   const draftRes = await callOpenRouter(env, {
     model: ctx.model,
     messages: [
@@ -595,8 +714,19 @@ Write the complete publication-ready article now as a single valid JSON object a
     temperature: 0.3,
     maxTokens: 8_192,
     jsonMode: true,
+    freeModelsOnly,
   });
   addTokenUsage(usage, draftRes.usage);
+  let resolvedModel = draftRes.model || ctx.model;
+  ctx.model = resolvedModel;
+
+  pushTrace(trace, {
+    stage: 'draft_and_refine',
+    tool_name: 'openrouter_draft',
+    input: resolvedModel,
+    summary: `Generated initial draft via ${resolvedModel} (${draftRes.usage.total_tokens} tokens)`,
+    ok: true,
+  });
 
   let parsedDraftRaw: Partial<DraftArticlePayload>;
   try {
@@ -606,12 +736,12 @@ Write the complete publication-ready article now as a single valid JSON object a
     pushTrace(trace, {
       stage: 'draft_and_refine',
       tool_name: 'json_parse_retry',
-      input: 'attempt 1',
-      summary: `Initial draft JSON malformed (${parseMsg}); retrying with strict JSON formatting`,
+      input: resolvedModel,
+      summary: `Initial draft JSON from ${resolvedModel} malformed (${parseMsg}); retrying with strict JSON formatting`,
       ok: false,
     });
     const retryJsonRes = await callOpenRouter(env, {
-      model: ctx.model,
+      model: resolvedModel,
       messages: [
         { role: 'system', content: systemPrompt },
         {
@@ -622,8 +752,18 @@ Write the complete publication-ready article now as a single valid JSON object a
       temperature: 0.2,
       maxTokens: 8_192,
       jsonMode: true,
+      freeModelsOnly,
     });
     addTokenUsage(usage, retryJsonRes.usage);
+    resolvedModel = retryJsonRes.model || resolvedModel;
+    ctx.model = resolvedModel;
+    pushTrace(trace, {
+      stage: 'draft_and_refine',
+      tool_name: 'openrouter_json_retry',
+      input: resolvedModel,
+      summary: `Retried JSON draft via ${resolvedModel} (${retryJsonRes.usage.total_tokens} tokens)`,
+      ok: true,
+    });
     parsedDraftRaw = extractJsonObject<Partial<DraftArticlePayload>>(retryJsonRes.content);
   }
 
@@ -674,7 +814,7 @@ ${JSON.stringify(draft, null, 2)}
 Return the FULL corrected JSON object with ALL lint errors resolved while preserving factual accuracy, tables/code blocks, and deep inline https:// citations. Return ONLY valid JSON.`;
 
     const retryRes = await callOpenRouter(env, {
-      model: ctx.model,
+      model: resolvedModel,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: correctionPrompt },
@@ -682,8 +822,19 @@ Return the FULL corrected JSON object with ALL lint errors resolved while preser
       temperature: 0.2,
       maxTokens: 6_000,
       jsonMode: true,
+      freeModelsOnly,
     });
     addTokenUsage(usage, retryRes.usage);
+    resolvedModel = retryRes.model || resolvedModel;
+    ctx.model = resolvedModel;
+
+    pushTrace(trace, {
+      stage: 'draft_and_refine',
+      tool_name: 'openrouter_lint_correction',
+      input: resolvedModel,
+      summary: `Executed lint self-correction pass ${pass} via ${resolvedModel} (${retryRes.usage.total_tokens} tokens)`,
+      ok: true,
+    });
 
     draft = normalizeDraftPayload(
       extractJsonObject<Partial<DraftArticlePayload>>(retryRes.content),
@@ -715,7 +866,7 @@ Return the FULL corrected JSON object with ALL lint errors resolved while preser
     });
   }
 
-  return { draft, lintResult, attempts };
+  return { draft, lintResult, attempts, resolvedModel };
 }
 
 /**
@@ -748,7 +899,7 @@ export async function stageQualityAssessment(
 Evaluate the draft against three criteria:
 1. factual_grounding (0-100): Are technical claims, metrics, and versions genuinely supported by the cited primary sources without hallucination?
 2. geo_clarity (0-100): Are tldr_summary, key_facts, faq, and headings concise, answer-first, and extractable by search/AI engines?
-3. anti_slop_tone (0-100): Is the prose crisp, authoritative, non-generic, and strictly defensive/AdSense-safe?
+3. anti_slop_tone (0-100): Is the prose crisp, authoritative, non-generic, human-sounding, and strictly defensive/AdSense-safe?
 
 Return ONLY valid JSON:
 {
@@ -784,8 +935,11 @@ ${sourceExcerpts}`;
       temperature: 0.1,
       maxTokens: 700,
       jsonMode: true,
+      freeModelsOnly: ctx.settings.free_models_only !== false,
     });
     addTokenUsage(usage, judgeRes.usage);
+    const resolvedJudgeModel = judgeRes.model || ctx.judgeModel;
+    ctx.judgeModel = resolvedJudgeModel;
 
     const parsed = extractJsonObject<{
       factual_grounding?: number;
@@ -844,19 +998,21 @@ ${sourceExcerpts}`;
       adsense_compliance: baseBreakdown.adsense_compliance,
       warnings: Array.from(new Set([...baseBreakdown.warnings, ...extraWarnings])),
       judge_notes: typeof parsed.judge_notes === 'string' ? parsed.judge_notes.trim() : undefined,
+      ...(baseBreakdown.humanity_signals ? { humanity_signals: baseBreakdown.humanity_signals } : {}),
     };
 
     pushTrace(trace, {
       stage: 'quality_assessment',
       tool_name: 'openrouter_editorial_judge',
-      input: ctx.judgeModel,
-      summary: `Blended quality score ${overall}/100 (deterministic=${lintResult.quality_score}, grounding=${judgeGrounding}, geo=${judgeGeo}, tone=${judgeAntiSlop})`,
+      input: resolvedJudgeModel,
+      summary: `Blended quality score ${overall}/100 via ${resolvedJudgeModel} (deterministic=${lintResult.quality_score}, grounding=${judgeGrounding}, geo=${judgeGeo}, tone=${judgeAntiSlop})`,
       ok: true,
     });
 
     return {
       finalScore: overall,
       finalBreakdown,
+      resolvedJudgeModel,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -878,13 +1034,39 @@ ${sourceExcerpts}`;
     return {
       finalScore: degradedScore,
       finalBreakdown: baseBreakdown,
+      resolvedJudgeModel: ctx.judgeModel,
     };
   }
 }
 
+const DRAFT_MODEL_TRACE_TOOLS = new Set([
+  'openrouter_lint_correction',
+  'openrouter_json_retry',
+  'openrouter_draft',
+  'openrouter_topic_selection',
+]);
+
+function resolveRecordedModelFromTrace(ctx: AgentContext, trace?: TraceEntry[]): string {
+  if (Array.isArray(trace)) {
+    for (let i = trace.length - 1; i >= 0; i--) {
+      const entry = trace[i];
+      if (
+        entry &&
+        entry.ok &&
+        DRAFT_MODEL_TRACE_TOOLS.has(entry.tool_name) &&
+        typeof entry.input === 'string' &&
+        entry.input.includes('/')
+      ) {
+        return entry.input.trim();
+      }
+    }
+  }
+  return ctx.model;
+}
+
 /**
  * Stage 6: Compile markdown, ensure unique slug, enforce the HARD PUBLISHING GATE,
- * persist post, and mark agent_runs completed.
+ * persist a brand-new post (never mutating existing posts), and mark agent_runs completed.
  */
 export async function stagePersistWithGate(
   db: DatabaseAdapter,
@@ -923,6 +1105,7 @@ export async function stagePersistWithGate(
     }
   }
 
+  // Agent strictly creates brand-new posts and never mutates existing posts via db.updatePost
   const post = await db.createPost({
     slug: uniqueSlug,
     title: draft.title,
@@ -936,6 +1119,7 @@ export async function stagePersistWithGate(
     category_slug: ctx.skill.slug,
     archetype: ctx.archetype,
     tags_json: draft.tags,
+    keywords_json: draft.keywords,
     sources_json: draft.sources,
     review_notes_json: reviewNotes,
     lint_passed: lintResult.passed,
@@ -945,15 +1129,19 @@ export async function stagePersistWithGate(
     reading_time_minutes: compiled.readingTimeMinutes,
     word_count: compiled.wordCount,
     status,
+    admin_locked: false,
+    last_edited_by: null,
     published_at: publishedAt,
   });
+
+  const resolvedModelUsed = resolveRecordedModelFromTrace(ctx, trace);
 
   if (trace) {
     pushTrace(trace, {
       stage: 'persist_with_gate',
       tool_name: 'stagePersistWithGate',
       input: uniqueSlug,
-      summary: `Persisted post #${post.id} (${uniqueSlug}) as "${status}" (score=${finalScore}, lint_passed=${lintResult.passed})`,
+      summary: `Persisted post #${post.id} (${uniqueSlug}) as "${status}" via ${resolvedModelUsed} (score=${finalScore}, lint_passed=${lintResult.passed})`,
       ok: true,
     });
   }
@@ -967,7 +1155,7 @@ export async function stagePersistWithGate(
       category_slug: ctx.skill.slug,
       archetype: ctx.archetype,
       topic: draft.title,
-      model_used: ctx.model,
+      model_used: resolvedModelUsed,
       post_id: post.id,
       quality_score: finalScore,
       ...(trace ? { trace_json: trace } : {}),
@@ -997,12 +1185,15 @@ export async function runEditorialAgentDirect(
     runRecord = await db.getAgentRunById(payload.run_id);
   }
   if (!runRecord) {
+    const initialModel =
+      resolveFreeModelChain(payload.model_override || env.DEFAULT_OPENROUTER_MODEL, true)[0] ||
+      CURATED_FREE_MODELS[0];
     runRecord = await db.createAgentRun({
       trigger_source: payload.trigger_source || 'manual',
       category_slug: payload.category_slug || 'auto',
       topic: payload.topic || 'auto',
       archetype: payload.archetype || 'auto',
-      model_used: payload.model_override || env.DEFAULT_OPENROUTER_MODEL || '',
+      model_used: initialModel,
       status: 'running',
       current_stage: 'load_context',
     });
@@ -1032,6 +1223,7 @@ export async function runEditorialAgentDirect(
     await db.updateAgentRun(runId, {
       current_stage: 'deep_research',
       topic: hunted.topic,
+      model_used: hunted.resolvedModel || ctx.model,
       trace_json: trace,
       token_usage_json: usage,
     });
@@ -1050,7 +1242,7 @@ export async function runEditorialAgentDirect(
     });
 
     // Stage 4: Draft & deterministic self-correction loop
-    const { draft, lintResult } = await stageDraftAndRefine(
+    const { draft, lintResult, resolvedModel } = await stageDraftAndRefine(
       env,
       ctx,
       hunted.topic,
@@ -1058,8 +1250,12 @@ export async function runEditorialAgentDirect(
       trace,
       usage,
     );
+    if (resolvedModel) {
+      ctx.model = resolvedModel;
+    }
     await db.updateAgentRun(runId, {
       current_stage: 'quality_assessment',
+      model_used: ctx.model,
       trace_json: trace,
       token_usage_json: usage,
     });
@@ -1076,6 +1272,7 @@ export async function runEditorialAgentDirect(
     );
     await db.updateAgentRun(runId, {
       current_stage: 'persist_with_gate',
+      model_used: ctx.model,
       quality_score: finalScore,
       trace_json: trace,
       token_usage_json: usage,

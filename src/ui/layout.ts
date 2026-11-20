@@ -16,6 +16,7 @@ export interface PublicLayoutOptions {
   currentPath?: string;
   extraHead?: string;
   markdownAlternateUrl?: string;
+  keywords?: string[];
 }
 
 const GOOGLE_FONTS_HREF =
@@ -52,6 +53,7 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
     currentPath = '/',
     extraHead = '',
     markdownAlternateUrl,
+    keywords,
   } = opts;
 
   const baseUrl = normalizeBaseUrl(settings.base_url);
@@ -93,6 +95,14 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
           .join('\n  ')
       : '';
 
+  const normalizedKeywords = Array.isArray(keywords)
+    ? keywords.map((k) => String(k || '').trim()).filter(Boolean)
+    : [];
+  const keywordsMetaTag =
+    normalizedKeywords.length > 0
+      ? `<meta name="keywords" content="${escapeHtml(normalizedKeywords.slice(0, 12).join(', '))}">`
+      : '';
+
   const markdownLinkTag = markdownAlternateUrl
     ? `<link rel="alternate" type="text/markdown" title="Markdown briefing" href="${escapeHtml(markdownAlternateUrl)}">`
     : '';
@@ -129,6 +139,7 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(title)}</title>
   <meta name="description" content="${escapeHtml(description)}">
+  ${keywordsMetaTag}
   <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
   <link rel="canonical" href="${escapeHtml(canonicalUrl)}">
   <link rel="alternate" type="application/rss+xml" title="${escapeHtml(siteName)} RSS Feed" href="${escapeHtml(baseUrl)}/rss.xml">

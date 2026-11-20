@@ -898,6 +898,16 @@ export function renderBlogPostPage(opts: {
   const baseUrl = normalizeBaseUrl(settings.base_url);
   const siteName = settings.site_name || 'Pyvren Research';
   const postUrl = `${baseUrl}/blog/${encodeURIComponent(post.slug)}`;
+  const combinedKeywords: string[] = [];
+  const seenKeywords = new Set<string>();
+  for (const raw of [...(post.keywords_json || []), ...(post.tags_json || [])]) {
+    const trimmed = String(raw || '').trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seenKeywords.has(key)) continue;
+    seenKeywords.add(key);
+    combinedKeywords.push(trimmed);
+  }
   const jsonLd: unknown[] = [
     {
       '@context': 'https://schema.org',
@@ -908,7 +918,7 @@ export function renderBlogPostPage(opts: {
       dateModified: updatedIso || publishedIso,
       wordCount: post.word_count,
       articleSection: categoryName,
-      keywords: post.tags_json.join(', '),
+      keywords: combinedKeywords.join(', '),
       mainEntityOfPage: {
         '@type': 'WebPage',
         '@id': postUrl,
@@ -966,6 +976,7 @@ export function renderBlogPostPage(opts: {
     publishedAt: publishedIso,
     updatedAt: updatedIso,
     author: authorName,
+    keywords: combinedKeywords,
     jsonLd,
     currentPath: `/blog/${post.slug}`,
     markdownAlternateUrl: `${baseUrl}${markdownUrl}`,
