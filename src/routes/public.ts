@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import type { WorkerEnv } from '../env';
+import { normalizeBaseUrl, type WorkerEnv } from '../env';
 import { createDatabase } from '../lib/db';
 import { compileMarkdown } from '../lib/markdown';
 import { computeEtag } from '../lib/security';
@@ -11,6 +11,7 @@ import {
   renderNotFoundPage,
   renderTrustPage,
 } from '../ui/pages';
+import { formatPostAsMarkdownDocument } from './seo';
 
 const BLOG_PAGE_SIZE = 10;
 
@@ -49,7 +50,7 @@ export function createPublicRoutes(): Hono<{ Bindings: WorkerEnv }> {
     const [settings, skills, rawPosts] = await Promise.all([
       db.getSettings(),
       db.listSkills(true),
-      db.listPosts({ status: 'published', limit: 7 }),
+      db.listPosts({ status: 'published', limit: 7, excludeHeavyHtml: true }),
     ]);
 
     const publishedPosts = rawPosts.filter((p) => p.status === 'published');
@@ -88,6 +89,7 @@ export function createPublicRoutes(): Hono<{ Bindings: WorkerEnv }> {
         search: query,
         limit: 500,
         offset: 0,
+        excludeHeavyHtml: true,
       });
       const publishedMatched = matched.filter((p) => p.status === 'published');
       totalCount = publishedMatched.length;
@@ -124,6 +126,7 @@ export function createPublicRoutes(): Hono<{ Bindings: WorkerEnv }> {
       category_slug: category,
       limit: BLOG_PAGE_SIZE,
       offset,
+      excludeHeavyHtml: true,
     });
     posts = rows.filter((p) => p.status === 'published');
 
@@ -174,6 +177,7 @@ export function createPublicRoutes(): Hono<{ Bindings: WorkerEnv }> {
         search: query,
         limit: 500,
         offset: 0,
+        excludeHeavyHtml: true,
       });
       const publishedMatched = matched.filter((p) => p.status === 'published');
       totalPages = Math.max(1, Math.ceil(publishedMatched.length / BLOG_PAGE_SIZE));
@@ -193,6 +197,7 @@ export function createPublicRoutes(): Hono<{ Bindings: WorkerEnv }> {
         category_slug: skill.slug,
         limit: BLOG_PAGE_SIZE,
         offset,
+        excludeHeavyHtml: true,
       });
       posts = rows.filter((p) => p.status === 'published');
     }
@@ -212,7 +217,7 @@ export function createPublicRoutes(): Hono<{ Bindings: WorkerEnv }> {
     });
   });
 
-  // 4. Single Published Blog Post Page (strictly published only; 404 for drafts/missing; ETag/304)
+  // 4. Single Published Blog Post Page (strictly published only; 404 for drafts/missing; ETag/304 + Markdown negotiation)
   app.get('/blog/:slug', async (c) => {
     const slug = (c.req.param('slug') || '').trim();
     const db = createDatabase(c.env);
@@ -225,7 +230,19 @@ export function createPublicRoutes(): Hono<{ Bindings: WorkerEnv }> {
       });
     }
 
-    const etag = await computeEtag([post.slug, post.updated_at, settings.updated_at]);
+    const baseUrl = normalizeBaseUrl(settings.base_url || c.env.BASE_URL);
+    const encodedSlug = encodeURIComponent(post.slug);
+    const linkHeader = `<${baseUrl}/blog/${encodedSlug}.md>; rel="alternate"; type="text/markdown", <${baseUrl}/blog/${encodedSlug}>; rel="canonical"`;
+    const varyHeader = 'Accept, Accept-Encoding';
+    const accept = (c.req.header('accept') || '').toLowerCase();
+    const wantsMarkdown = accept.includes('text/markdown') && !accept.includes('text/html');
+
+    const etag = await computeEtag([
+      post.slug,
+      post.updated_at,
+      settings.updated_at,
+      wantsMarkdown ? 'md' : 'html',
+    ]);
     const cacheControl = 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400';
 
     if (isEtagMatching(c.req.header('if-none-match'), etag)) {
@@ -233,6 +250,22 @@ export function createPublicRoutes(): Hono<{ Bindings: WorkerEnv }> {
         status: 304,
         headers: {
           ETag: etag,
+          Vary: varyHeader,
+          Link: linkHeader,
+          'Cache-Control': cacheControl,
+        },
+      });
+    }
+
+    if (wantsMarkdown) {
+      const markdown = formatPostAsMarkdownDocument(post, settings, baseUrl);
+      return new Response(markdown, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/markdown; charset=utf-8',
+          ETag: etag,
+          Vary: varyHeader,
+          Link: linkHeader,
           'Cache-Control': cacheControl,
         },
       });
@@ -244,6 +277,7 @@ export function createPublicRoutes(): Hono<{ Bindings: WorkerEnv }> {
         status: 'published',
         category_slug: post.category_slug,
         limit: 4,
+        excludeHeavyHtml: true,
       }),
     ]);
 
@@ -252,7 +286,11 @@ export function createPublicRoutes(): Hono<{ Bindings: WorkerEnv }> {
       .slice(0, 3);
 
     if (relatedPosts.length < 3) {
-      const fallbackPosts = await db.listPosts({ status: 'published', limit: 6 });
+      const fallbackPosts = await db.listPosts({
+        status: 'published',
+        limit: 6,
+        excludeHeavyHtml: true,
+      });
       const seenIds = new Set<number>([post.id, ...relatedPosts.map((p) => p.id)]);
       for (const candidate of fallbackPosts) {
         if (candidate.status === 'published' && !seenIds.has(candidate.id)) {
@@ -274,6 +312,8 @@ export function createPublicRoutes(): Hono<{ Bindings: WorkerEnv }> {
 
     return htmlResponse(html, 200, {
       ETag: etag,
+      Vary: varyHeader,
+      Link: linkHeader,
       'Cache-Control': cacheControl,
     });
   });

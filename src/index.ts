@@ -1,16 +1,76 @@
 import { Hono } from 'hono';
 import type { WorkerEnv } from './env';
 import { runEditorialAgentDirect } from './lib/agent';
-import { createDatabase, DEFAULT_SEEDED_SETTINGS } from './lib/db';
+import {
+  countPostsCreatedInLastHours,
+  createDatabase,
+  DEFAULT_SEEDED_SETTINGS,
+  recoverStaleAndFindActiveRun,
+} from './lib/db';
+import { buildSecurityHeaders } from './lib/security';
 import { createAdminRoutes } from './routes/admin';
 import { createHeadlessRoutes } from './routes/headless';
 import { createPublicRoutes } from './routes/public';
 import { createSeoRoutes } from './routes/seo';
-import type { AgentDispatchPayload } from './types';
+import type { AgentDispatchPayload, SiteSettings } from './types';
 import { renderAdminSpaHtml } from './ui/admin-spa';
 import { renderNotFoundPage } from './ui/pages';
 
 export { EditorialAgentWorkflow } from './workflows/agent-workflow';
+
+export function shouldExecuteScheduledDiscovery(
+  settings: SiteSettings,
+  now: Date,
+  postsLast24h: number,
+  hasActiveRun: boolean,
+): { shouldRun: boolean; reason: string } {
+  if (!settings.schedule_enabled) {
+    return { shouldRun: false, reason: 'schedule_disabled' };
+  }
+
+  if (hasActiveRun) {
+    return { shouldRun: false, reason: 'active_run_in_progress' };
+  }
+
+  const maxPostsPerDay = Math.max(1, settings.max_posts_per_day || 2);
+  if (postsLast24h >= maxPostsPerDay) {
+    return { shouldRun: false, reason: 'daily_post_cap_reached' };
+  }
+
+  const nowMs = now.getTime();
+  let elapsedMs: number | null = null;
+  if (settings.last_scheduled_run_at) {
+    const lastRunMs = new Date(settings.last_scheduled_run_at).getTime();
+    if (Number.isFinite(lastRunMs)) {
+      elapsedMs = nowMs - lastRunMs;
+      // Prevent double-firing within the same 45-minute window
+      if (elapsedMs < 45 * 60 * 1000) {
+        return { shouldRun: false, reason: 'recent_scheduled_run_cooldown' };
+      }
+    }
+  }
+
+  if (
+    Array.isArray(settings.preferred_hours_utc_json) &&
+    settings.preferred_hours_utc_json.length > 0
+  ) {
+    if (!settings.preferred_hours_utc_json.includes(now.getUTCHours())) {
+      return { shouldRun: false, reason: 'outside_preferred_utc_hour' };
+    }
+  } else {
+    const runsPerDay = Math.max(1, Math.min(24, settings.runs_per_day || 3));
+    const intervalHours = 24 / runsPerDay;
+    if (elapsedMs !== null) {
+      const elapsedHours = elapsedMs / (1000 * 60 * 60);
+      // 5-minute tolerance so slightly early cron ticks still execute on schedule
+      if (elapsedHours < intervalHours - 0.08) {
+        return { shouldRun: false, reason: 'interval_not_elapsed' };
+      }
+    }
+  }
+
+  return { shouldRun: true, reason: 'scheduled_slot_matched' };
+}
 
 export function createApp(): Hono<{ Bindings: WorkerEnv }> {
   const app = new Hono<{ Bindings: WorkerEnv }>();
@@ -18,9 +78,12 @@ export function createApp(): Hono<{ Bindings: WorkerEnv }> {
   // Global security headers middleware
   app.use('*', async (c, next) => {
     await next();
-    c.header('X-Content-Type-Options', 'nosniff');
-    c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
-    c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    const secHeaders = buildSecurityHeaders({
+      allowSameOriginFrame: c.req.path.startsWith('/api/admin/preview/'),
+    });
+    for (const [name, value] of Object.entries(secHeaders)) {
+      c.header(name, value);
+    }
   });
 
   // Register ALL API, SEO, and Public SSR routes FIRST (strict precedence order)
@@ -32,13 +95,14 @@ export function createApp(): Hono<{ Bindings: WorkerEnv }> {
   // Static assets fallback when reached by Worker runtime
   app.get('/assets/*', async (c) => {
     if (c.env.ASSETS) {
-      return c.env.ASSETS.fetch(c.req.raw);
+      const assetRes = await c.env.ASSETS.fetch(c.req.raw);
+      return new Response(assetRes.body, assetRes);
     }
     return c.text('Asset not found', 404);
   });
 
   // Admin SPA registered LAST with strict noindex & no-store headers
-  const serveAdminSpa = async (c: { env: WorkerEnv }) => {
+  const serveAdminSpa = async (c: { env: WorkerEnv; req: { path: string } }) => {
     const db = createDatabase(c.env);
     const settings = await db.getSettings();
     const html = renderAdminSpaHtml(settings);
@@ -48,9 +112,9 @@ export function createApp(): Hono<{ Bindings: WorkerEnv }> {
         'Content-Type': 'text/html; charset=utf-8',
         'X-Robots-Tag': 'noindex, nofollow',
         'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff',
-        'Referrer-Policy': 'strict-origin-when-cross-origin',
-        'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+        ...buildSecurityHeaders({
+          allowSameOriginFrame: c.req.path.startsWith('/api/admin/preview/'),
+        }),
       },
     });
   };
@@ -60,9 +124,14 @@ export function createApp(): Hono<{ Bindings: WorkerEnv }> {
 
   // Real HTTP 404 handler (JSON for /api/*, SSR 404 page for everything else)
   app.notFound(async (c) => {
+    const secHeaders = buildSecurityHeaders({
+      allowSameOriginFrame: c.req.path.startsWith('/api/admin/preview/'),
+    });
+
     if (c.req.path.startsWith('/api/')) {
       return c.json({ error: 'Not found' }, 404, {
         'Cache-Control': 'no-store',
+        ...secHeaders,
       });
     }
 
@@ -80,9 +149,7 @@ export function createApp(): Hono<{ Bindings: WorkerEnv }> {
       headers: {
         'Content-Type': 'text/html; charset=utf-8',
         'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff',
-        'Referrer-Policy': 'strict-origin-when-cross-origin',
-        'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+        ...secHeaders,
       },
     });
   });
@@ -97,29 +164,37 @@ const worker: ExportedHandler<WorkerEnv> = {
     return app.fetch(request, env, ctx);
   },
 
-  async scheduled(_controller, env, ctx) {
+  async scheduled(controller, env, ctx) {
     const db = createDatabase(env);
     const settings = await db.getSettings();
+
+    const scheduledMs =
+      typeof controller?.scheduledTime === 'number' && Number.isFinite(controller.scheduledTime)
+        ? controller.scheduledTime
+        : Date.now();
+    const now = new Date(scheduledMs);
 
     if (!settings.schedule_enabled) {
       return;
     }
 
-    const runsPerDay = Math.max(1, Math.min(24, settings.runs_per_day || 3));
-    const intervalHours = 24 / runsPerDay;
+    const [activeRun, postsLast24h] = await Promise.all([
+      recoverStaleAndFindActiveRun(db),
+      countPostsCreatedInLastHours(db, 24),
+    ]);
 
-    if (settings.last_scheduled_run_at) {
-      const lastRunMs = new Date(settings.last_scheduled_run_at).getTime();
-      if (Number.isFinite(lastRunMs)) {
-        const elapsedHours = (Date.now() - lastRunMs) / (1000 * 60 * 60);
-        // 5-minute tolerance so slightly early cron ticks still execute on schedule
-        if (elapsedHours < intervalHours - 0.08) {
-          return;
-        }
-      }
+    const decision = shouldExecuteScheduledDiscovery(
+      settings,
+      now,
+      postsLast24h,
+      activeRun !== null,
+    );
+
+    if (!decision.shouldRun) {
+      return;
     }
 
-    const nowIso = new Date().toISOString();
+    const nowIso = now.toISOString();
     await db.updateSettings({ last_scheduled_run_at: nowIso });
 
     const run = await db.createAgentRun({

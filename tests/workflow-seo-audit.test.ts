@@ -683,7 +683,7 @@ When running on free OpenRouter model tiers, pair exponential backoff with a ran
     // Prove Worker CPU budget stays tiny (well under 30,000ms Paid limit and tiny per step!)
     expect(totalCpuMs).toBeLessThan(500);
 
-    const savedPost = await db.getPostById(result.postId);
+    const savedPost = await db.getPostById(result.postId!);
     expect(savedPost?.lint_passed).toBe(true);
     expect(savedPost?.keywords_json.length).toBeGreaterThanOrEqual(2);
     expect(savedPost?.admin_locked).toBe(false);

@@ -17,6 +17,8 @@ export interface PublicLayoutOptions {
   extraHead?: string;
   markdownAlternateUrl?: string;
   keywords?: string[];
+  robotsMeta?: string;
+  ogImageUrl?: string;
 }
 
 const GOOGLE_FONTS_HREF =
@@ -54,6 +56,8 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
     extraHead = '',
     markdownAlternateUrl,
     keywords,
+    robotsMeta = 'index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1',
+    ogImageUrl,
   } = opts;
 
   const baseUrl = normalizeBaseUrl(settings.base_url);
@@ -61,6 +65,7 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
   const tagline = settings.site_tagline || 'Independent technical briefings and primary-source engineering analysis.';
   const adsenseClientId = (settings.adsense_client_id || '').trim();
   const currentYear = new Date().getUTCFullYear();
+  const resolvedOgImage = ogImageUrl || `${baseUrl}/og/default.svg`;
 
   const organizationSchema: Record<string, unknown> = {
     '@context': 'https://schema.org',
@@ -111,6 +116,11 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
     ? `<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(adsenseClientId)}" crossorigin="anonymous"></script>`
     : '';
 
+  const readingProgressBarHtml =
+    ogType === 'article'
+      ? `<div id="reading-progress" aria-hidden="true" style="position:fixed;top:0;left:0;z-index:60;height:2px;width:100%;background:var(--accent);transform:scaleX(0);transform-origin:left center;pointer-events:none;transition:transform 80ms linear"></div>`
+      : '';
+
   const navItems = [
     { href: '/blog', label: 'Briefings' },
     { href: '/#categories', label: 'Categories' },
@@ -140,22 +150,30 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
   <title>${escapeHtml(title)}</title>
   <meta name="description" content="${escapeHtml(description)}">
   ${keywordsMetaTag}
-  <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+  <meta name="robots" content="${escapeHtml(robotsMeta)}">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="canonical" href="${escapeHtml(canonicalUrl)}">
   <link rel="alternate" type="application/rss+xml" title="${escapeHtml(siteName)} RSS Feed" href="${escapeHtml(baseUrl)}/rss.xml">
+  <link rel="alternate" type="application/feed+json" title="${escapeHtml(siteName)} JSON Feed" href="${escapeHtml(baseUrl)}/feed.json">
   ${markdownLinkTag}
   <meta property="og:title" content="${escapeHtml(title)}">
   <meta property="og:description" content="${escapeHtml(description)}">
   <meta property="og:url" content="${escapeHtml(canonicalUrl)}">
   <meta property="og:site_name" content="${escapeHtml(siteName)}">
   <meta property="og:type" content="${escapeHtml(ogType)}">
+  <meta property="og:image" content="${escapeHtml(resolvedOgImage)}">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
   ${articleMetaTags}
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="${escapeHtml(title)}">
   <meta name="twitter:description" content="${escapeHtml(description)}">
+  <meta name="twitter:image" content="${escapeHtml(resolvedOgImage)}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="${GOOGLE_FONTS_HREF}">
+  <link rel="preload" as="style" href="${GOOGLE_FONTS_HREF}">
+  <link rel="stylesheet" href="${GOOGLE_FONTS_HREF}" media="print" onload="this.media='all'">
+  <noscript><link rel="stylesheet" href="${GOOGLE_FONTS_HREF}"></noscript>
   <link rel="stylesheet" href="/assets/app.css">
   <script>(function(){try{var s=localStorage.getItem('pyvren-theme');var t=(s==='dark'||s==='light')?s:(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}}catch(e){}})();</script>
   ${jsonLdScripts}
@@ -163,6 +181,7 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
   ${extraHead}
 </head>
 <body class="min-h-screen flex flex-col bg-paper text-ink antialiased">
+  ${readingProgressBarHtml}
   <a href="#main-content" class="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:px-3 focus:py-2 focus:rounded focus:bg-surface focus:text-ink focus:border focus:border-strong">Skip to main content</a>
 
   <header class="editorial-topbar sticky top-0 z-40">
@@ -235,7 +254,9 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
           <h2 class="font-tabular text-[11px] uppercase tracking-[0.12em] text-ink-faint font-semibold">Machine-Readable</h2>
           <ul class="space-y-2 text-sm font-tabular text-[13px]">
             <li><a href="/rss.xml" class="text-ink-secondary hover:text-accent transition-colors">/rss.xml</a></li>
+            <li><a href="/feed.json" class="text-ink-secondary hover:text-accent transition-colors">/feed.json</a></li>
             <li><a href="/sitemap.xml" class="text-ink-secondary hover:text-accent transition-colors">/sitemap.xml</a></li>
+            <li><a href="/news-sitemap.xml" class="text-ink-secondary hover:text-accent transition-colors">/news-sitemap.xml</a></li>
             <li><a href="/llms.txt" class="text-ink-secondary hover:text-accent transition-colors">/llms.txt</a></li>
             <li><a href="/api/v1/posts" class="text-ink-secondary hover:text-accent transition-colors">/api/v1/posts</a></li>
           </ul>
@@ -296,6 +317,66 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
         targets.forEach(function(el){io.observe(el);});
       }
     }
+    var progressBar=document.getElementById('reading-progress');
+    if(progressBar){
+      var ticking=false;
+      var updateProgress=function(){
+        var doc=document.documentElement;
+        var scrollTop=window.scrollY||doc.scrollTop||0;
+        var scrollable=(doc.scrollHeight-window.innerHeight)||0;
+        var ratio=scrollable>0?Math.min(1,Math.max(0,scrollTop/scrollable)):0;
+        progressBar.style.transform='scaleX('+ratio.toFixed(4)+')';
+        ticking=false;
+      };
+      window.addEventListener('scroll',function(){
+        if(!ticking){
+          ticking=true;
+          window.requestAnimationFrame(updateProgress);
+        }
+      },{passive:true});
+      window.addEventListener('resize',updateProgress,{passive:true});
+      updateProgress();
+    }
+    var pres=document.querySelectorAll('pre');
+    pres.forEach(function(pre){
+      if(pre.getAttribute('data-copy-bound'))return;
+      pre.setAttribute('data-copy-bound','1');
+      var wrapper=document.createElement('div');
+      wrapper.style.position='relative';
+      if(pre.parentNode){
+        pre.parentNode.insertBefore(wrapper,pre);
+        wrapper.appendChild(pre);
+      }
+      var copyBtn=document.createElement('button');
+      copyBtn.type='button';
+      copyBtn.textContent='Copy';
+      copyBtn.setAttribute('aria-label','Copy code snippet');
+      copyBtn.style.cssText='position:absolute;top:8px;right:8px;z-index:2;padding:3px 8px;border-radius:4px;border:1px solid var(--code-border);background:rgba(23,24,27,0.88);color:var(--code-ink);font-family:var(--font-mono);font-size:11px;line-height:1.3;cursor:pointer;opacity:0.86;';
+      copyBtn.addEventListener('click',function(){
+        var codeEl=pre.querySelector('code');
+        var raw=codeEl?codeEl.textContent:(pre.textContent||'');
+        var finish=function(ok){
+          copyBtn.textContent=ok?'Copied':'Error';
+          setTimeout(function(){copyBtn.textContent='Copy';},1600);
+        };
+        if(navigator.clipboard&&navigator.clipboard.writeText){
+          navigator.clipboard.writeText(raw||'').then(function(){finish(true);},function(){finish(false);});
+        }else{
+          try{
+            var ta=document.createElement('textarea');
+            ta.value=raw||'';
+            ta.style.position='fixed';
+            ta.style.opacity='0';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            finish(true);
+          }catch(err){finish(false);}
+        }
+      });
+      wrapper.appendChild(copyBtn);
+    });
   })();</script>
 </body>
 </html>`;

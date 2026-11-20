@@ -71,45 +71,291 @@ function truncateText(input: string, maxChars: number): string {
   return `${slice.trim()}\n\n[Truncated for context budget]`;
 }
 
-function parseArxivAtom(xml: string): FeedItem[] {
+function stripCdata(input: string): string {
+  return input.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, '$1');
+}
+
+function cleanXmlFragmentToText(raw: string): string {
+  if (!raw) return '';
+  const unwrapped = stripCdata(raw);
+  const decodedOnce = decodeHtmlEntities(unwrapped);
+  const withoutTags = decodedOnce.replace(/<[^>]+>/g, ' ');
+  return normalizeWhitespace(decodeHtmlEntities(withoutTags));
+}
+
+function extractAtomEntryLink(block: string): string {
+  const linkTags = block.match(/<link\b[^>]*\/?>/gi) || [];
+  let fallbackHref = '';
+
+  for (const tag of linkTags) {
+    const hrefMatch = /\bhref=["']([^"']+)["']/i.exec(tag);
+    if (!hrefMatch?.[1]) continue;
+    const href = decodeHtmlEntities(stripCdata(hrefMatch[1])).trim();
+    if (!href) continue;
+
+    const relMatch = /\brel=["']([^"']+)["']/i.exec(tag);
+    const rel = (relMatch?.[1] || '').trim().toLowerCase();
+    if (rel === 'alternate' || rel === '') {
+      return href;
+    }
+    if (rel !== 'self' && rel !== 'enclosure' && !fallbackHref) {
+      fallbackHref = href;
+    }
+  }
+
+  if (fallbackHref) return fallbackHref;
+
+  const idMatch = /<id\b[^>]*>([\s\S]*?)<\/id>/i.exec(block);
+  if (idMatch?.[1]) {
+    const rawId = decodeHtmlEntities(stripCdata(idMatch[1])).trim();
+    if (/^https?:\/\//i.test(rawId)) {
+      return rawId;
+    }
+  }
+
+  return '';
+}
+
+/**
+ * Universal parser supporting both RSS 2.0 `<item>` feeds and Atom `<entry>` feeds.
+ */
+export function parseRssOrAtomXml(xml: string, maxItems = 12): FeedItem[] {
+  if (typeof xml !== 'string' || !xml.trim()) return [];
+  const cap = Math.max(1, Math.floor(maxItems));
   const items: FeedItem[] = [];
-  const entryRegex = /<entry\b[^>]*>([\s\S]*?)<\/entry>/gi;
+  const seenUrls = new Set<string>();
+
+  // 1. RSS 2.0 <item> blocks
+  const rssItemRegex = /<item\b[^>]*>([\s\S]*?)<\/item>/gi;
   let match: RegExpExecArray | null;
 
-  while ((match = entryRegex.exec(xml)) !== null) {
+  while ((match = rssItemRegex.exec(xml)) !== null && items.length < cap) {
     const block = match[1];
-    const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(block);
-    const summaryMatch = /<summary[^>]*>([\s\S]*?)<\/summary>/i.exec(block);
-    const publishedMatch = /<published[^>]*>([\s\S]*?)<\/published>/i.exec(block);
-    const idMatch = /<id[^>]*>([\s\S]*?)<\/id>/i.exec(block);
-    const altLinkMatch =
-      /<link\b[^>]*rel=["']alternate["'][^>]*href=["']([^"']+)["'][^>]*\/?>/i.exec(block) ||
-      /<link\b[^>]*href=["']([^"']+)["'][^>]*rel=["']alternate["'][^>]*\/?>/i.exec(block);
+    const titleMatch = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(block);
+    const linkMatch = /<link\b[^>]*>([\s\S]*?)<\/link>/i.exec(block);
+    const guidMatch = /<guid\b[^>]*>([\s\S]*?)<\/guid>/i.exec(block);
+    const descMatch =
+      /<description\b[^>]*>([\s\S]*?)<\/description>/i.exec(block) ||
+      /<content:encoded\b[^>]*>([\s\S]*?)<\/content:encoded>/i.exec(block);
+    const pubDateMatch =
+      /<pubDate\b[^>]*>([\s\S]*?)<\/pubDate>/i.exec(block) ||
+      /<dc:date\b[^>]*>([\s\S]*?)<\/dc:date>/i.exec(block);
 
-    const rawUrl = (altLinkMatch?.[1] || idMatch?.[1] || '').trim().replace(/^http:\/\//i, 'https://');
-    const title = normalizeWhitespace(decodeHtmlEntities(titleMatch?.[1] || ''));
-    const summary = normalizeWhitespace(decodeHtmlEntities(summaryMatch?.[1] || '')).slice(0, 420);
-    const published = normalizeWhitespace(publishedMatch?.[1] || '') || undefined;
+    const rawLink = decodeHtmlEntities(stripCdata(linkMatch?.[1] || guidMatch?.[1] || ''))
+      .trim()
+      .replace(/^http:\/\//i, 'https://');
+    const title = cleanXmlFragmentToText(titleMatch?.[1] || '');
+    const summary = cleanXmlFragmentToText(descMatch?.[1] || '').slice(0, 420);
+    const published = cleanXmlFragmentToText(pubDateMatch?.[1] || '') || undefined;
 
-    if (title && rawUrl && isSafePublicUrl(rawUrl).ok) {
-      items.push({ title, url: rawUrl, summary, published });
+    if (title && rawLink && !seenUrls.has(rawLink) && isSafePublicUrl(rawLink).ok) {
+      seenUrls.add(rawLink);
+      items.push({ title, url: rawLink, summary, published });
+    }
+  }
+
+  if (items.length > 0) {
+    return items;
+  }
+
+  // 2. Atom <entry> blocks
+  const atomEntryRegex = /<entry\b[^>]*>([\s\S]*?)<\/entry>/gi;
+  while ((match = atomEntryRegex.exec(xml)) !== null && items.length < cap) {
+    const block = match[1];
+    const titleMatch = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(block);
+    const summaryMatch =
+      /<summary\b[^>]*>([\s\S]*?)<\/summary>/i.exec(block) ||
+      /<content\b[^>]*>([\s\S]*?)<\/content>/i.exec(block);
+    const publishedMatch =
+      /<published\b[^>]*>([\s\S]*?)<\/published>/i.exec(block) ||
+      /<updated\b[^>]*>([\s\S]*?)<\/updated>/i.exec(block);
+
+    const rawLink = extractAtomEntryLink(block).replace(/^http:\/\//i, 'https://');
+    const title = cleanXmlFragmentToText(titleMatch?.[1] || '');
+    const summary = cleanXmlFragmentToText(summaryMatch?.[1] || '').slice(0, 420);
+    const published = cleanXmlFragmentToText(publishedMatch?.[1] || '') || undefined;
+
+    if (title && rawLink && !seenUrls.has(rawLink) && isSafePublicUrl(rawLink).ok) {
+      seenUrls.add(rawLink);
+      items.push({ title, url: rawLink, summary, published });
     }
   }
 
   return items;
 }
 
+interface GithubAdvisoryRow {
+  ghsa_id?: string;
+  cve_id?: string | null;
+  summary?: string;
+  description?: string;
+  html_url?: string;
+  severity?: string;
+  published_at?: string;
+  vulnerabilities?: Array<{
+    package?: {
+      ecosystem?: string;
+      name?: string;
+    };
+  }>;
+}
+
+const AI_ECOSYSTEM_PACKAGE_RE =
+  /\b(llm|langchain|llamaindex|mcp|openai|anthropic|vllm|sglang|transformers|huggingface|pytorch|torch|onnx|ollama|gradio|streamlit|fastapi|starlette|aiohttp|httpx|pydantic|agent|rag|litellm|dspy|crewai|autogen|haystack|milvus|qdrant|chromadb|weaviate|ray|mlflow|bentoml|triton|safetensors|jinja2|flask|django|urllib3)\b/i;
+
+async function fetchAlgoliaHnStories(
+  feedName: string,
+  url: string,
+  label: string,
+  trace?: TraceEntry[],
+): Promise<FeedItem[]> {
+  const res = await safeFetch(url, {
+    headers: { 'User-Agent': BOT_USER_AGENT, Accept: 'application/json' },
+    timeoutMs: 12_000,
+    maxBytes: 500_000,
+  });
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  const data = JSON.parse(res.text) as {
+    hits?: Array<{
+      objectID?: string;
+      title?: string;
+      url?: string | null;
+      points?: number;
+      num_comments?: number;
+      created_at?: string;
+    }>;
+  };
+  const hits = Array.isArray(data.hits) ? data.hits : [];
+  const items: FeedItem[] = [];
+  for (const hit of hits) {
+    if (items.length >= 12) break;
+    if (!hit.url || !hit.title) continue;
+    if (!isSafePublicUrl(hit.url).ok) continue;
+    items.push({
+      title: normalizeWhitespace(hit.title),
+      url: hit.url,
+      summary: `HN discussion (${hit.points ?? 0} points, ${hit.num_comments ?? 0} comments${hit.created_at ? `, ${hit.created_at}` : ''}): https://news.ycombinator.com/item?id=${hit.objectID || ''}`,
+      published: hit.created_at,
+    });
+  }
+
+  pushTrace(trace, {
+    stage: 'hunt_topics',
+    tool_name: 'fetchAuthoritativeFeed',
+    input: feedName,
+    url,
+    summary: `Fetched ${items.length} ${label}`,
+    ok: true,
+  });
+  return items;
+}
+
+async function fetchGithubTrendingRepos(
+  feedName: string,
+  url: string,
+  label: string,
+  trace?: TraceEntry[],
+): Promise<FeedItem[]> {
+  const res = await safeFetch(url, {
+    headers: {
+      'User-Agent': BOT_USER_AGENT,
+      Accept: 'application/vnd.github+json',
+    },
+    timeoutMs: 12_000,
+    maxBytes: 600_000,
+  });
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  const parsed = JSON.parse(res.text) as {
+    items?: Array<{
+      full_name?: string;
+      html_url?: string;
+      description?: string | null;
+      stargazers_count?: number;
+      pushed_at?: string;
+      language?: string | null;
+    }>;
+  };
+  const repos = Array.isArray(parsed.items) ? parsed.items : [];
+  const items: FeedItem[] = repos
+    .slice(0, 10)
+    .filter((r) => Boolean(r.full_name && r.html_url && isSafePublicUrl(r.html_url).ok))
+    .map((r) => ({
+      title: normalizeWhitespace(
+        `${r.full_name} (${r.stargazers_count ?? 0} stars) — ${r.description || 'Trending GitHub repository'}`,
+      ).slice(0, 180),
+      url: r.html_url!,
+      summary: normalizeWhitespace(
+        `GitHub ${r.full_name} (${r.stargazers_count ?? 0} stars${r.language ? `, ${r.language}` : ''}, pushed ${r.pushed_at || 'recently'}): ${r.description || ''}`,
+      ).slice(0, 420),
+      published: r.pushed_at,
+    }));
+
+  pushTrace(trace, {
+    stage: 'hunt_topics',
+    tool_name: 'fetchAuthoritativeFeed',
+    input: feedName,
+    url,
+    summary: `Fetched ${items.length} ${label}`,
+    ok: true,
+  });
+  return items;
+}
+
+function formatOpenRouterPerMillionPrice(rawPrice: string | number | undefined): string {
+  if (rawPrice === undefined || rawPrice === null || rawPrice === '') return 'N/A';
+  const num = Number(rawPrice);
+  if (!Number.isFinite(num) || num < 0) return String(rawPrice);
+  if (num === 0) return '$0/1M (free)';
+  const perMillion = num * 1_000_000;
+  return perMillion >= 0.01 ? `$${perMillion.toFixed(2)}/1M` : `$${perMillion.toExponential(2)}/1M`;
+}
+
 /**
- * Fetches curated authoritative research feeds safely via safeFetch.
+ * Fetches curated authoritative research feeds or custom https:// RSS/Atom feeds safely via safeFetch.
  * Never throws uncaught errors; records failures in trace and returns [].
  */
 export async function fetchAuthoritativeFeed(
   feedName: string,
   trace?: TraceEntry[],
 ): Promise<FeedItem[]> {
-  const normalized = feedName.trim().toLowerCase();
+  const trimmedFeed = feedName.trim();
+  const normalized = trimmedFeed.toLowerCase();
+  const nowMs = Date.now();
+  const sevenDaysAgoUnix = Math.floor((nowMs - 7 * 24 * 60 * 60 * 1000) / 1000);
+  const fourteenDaysAgoIsoDate = new Date(nowMs - 14 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
 
   try {
+    // Support arbitrary custom https:// RSS 2.0 or Atom feed URLs configured per category skill
+    if (normalized.startsWith('https://')) {
+      const res = await safeFetch(trimmedFeed, {
+        headers: {
+          'User-Agent': BOT_USER_AGENT,
+          Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8',
+        },
+        timeoutMs: 12_000,
+        maxBytes: 800_000,
+      });
+      if (res.status < 200 || res.status >= 300) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const items = parseRssOrAtomXml(res.text, 12);
+      pushTrace(trace, {
+        stage: 'hunt_topics',
+        tool_name: 'fetchAuthoritativeFeed',
+        input: feedName,
+        url: trimmedFeed,
+        summary: `Fetched ${items.length} items from custom RSS/Atom feed`,
+        ok: true,
+      });
+      return items;
+    }
+
     switch (normalized) {
       case 'cisa_kev': {
         const url =
@@ -117,7 +363,7 @@ export async function fetchAuthoritativeFeed(
         const res = await safeFetch(url, {
           headers: { 'User-Agent': BOT_USER_AGENT, Accept: 'application/json' },
           timeoutMs: 12_000,
-          maxBytes: 2_500_000,
+          maxBytes: 3_500_000,
         });
         if (res.status < 200 || res.status >= 300) {
           throw new Error(`HTTP ${res.status}`);
@@ -143,11 +389,12 @@ export async function fetchAuthoritativeFeed(
           .filter((v) => Boolean(v.cveID))
           .map((v) => {
             const cve = v.cveID!.trim();
+            const addedLabel = v.dateAdded ? `[dateAdded: ${v.dateAdded}] ` : '';
             const title = normalizeWhitespace(
               `${cve}: ${v.vendorProject || ''} ${v.product || ''} — ${v.vulnerabilityName || 'KEV Advisory'}`,
             );
             const summary = normalizeWhitespace(
-              `${v.shortDescription || ''} ${v.requiredAction ? `Required action: ${v.requiredAction}` : ''}`,
+              `${addedLabel}${v.shortDescription || ''} ${v.requiredAction ? `Required action: ${v.requiredAction}` : ''}`,
             ).slice(0, 420);
             return {
               title,
@@ -169,29 +416,21 @@ export async function fetchAuthoritativeFeed(
       }
 
       case 'github_advisories': {
-        const url = 'https://api.github.com/advisories?per_page=10';
+        const url = 'https://api.github.com/advisories?per_page=12&severity=critical,high';
         const res = await safeFetch(url, {
           headers: {
             'User-Agent': BOT_USER_AGENT,
             Accept: 'application/vnd.github+json',
           },
           timeoutMs: 12_000,
-          maxBytes: 500_000,
+          maxBytes: 600_000,
         });
         if (res.status < 200 || res.status >= 300) {
           throw new Error(`HTTP ${res.status}`);
         }
-        const rows = JSON.parse(res.text) as Array<{
-          ghsa_id?: string;
-          cve_id?: string | null;
-          summary?: string;
-          description?: string;
-          html_url?: string;
-          severity?: string;
-          published_at?: string;
-        }>;
+        const rows = JSON.parse(res.text) as GithubAdvisoryRow[];
         const items: FeedItem[] = (Array.isArray(rows) ? rows : [])
-          .slice(0, 10)
+          .slice(0, 12)
           .filter((r) => Boolean(r.html_url && isSafePublicUrl(r.html_url).ok))
           .map((r) => ({
             title: normalizeWhitespace(
@@ -209,45 +448,222 @@ export async function fetchAuthoritativeFeed(
           tool_name: 'fetchAuthoritativeFeed',
           input: feedName,
           url,
-          summary: `Fetched ${items.length} GitHub Security Advisories`,
+          summary: `Fetched ${items.length} GitHub High/Critical Security Advisories`,
           ok: true,
         });
         return items;
       }
 
-      case 'hn_top_infra': {
-        const url =
-          'https://hn.algolia.com/api/v1/search_by_date?tags=story&numericFilters=points>50';
+      case 'github_advisories_ai': {
+        const url = 'https://api.github.com/advisories?per_page=25&ecosystem=pip';
         const res = await safeFetch(url, {
-          headers: { 'User-Agent': BOT_USER_AGENT, Accept: 'application/json' },
+          headers: {
+            'User-Agent': BOT_USER_AGENT,
+            Accept: 'application/vnd.github+json',
+          },
           timeoutMs: 12_000,
-          maxBytes: 500_000,
+          maxBytes: 800_000,
         });
         if (res.status < 200 || res.status >= 300) {
           throw new Error(`HTTP ${res.status}`);
         }
-        const data = JSON.parse(res.text) as {
-          hits?: Array<{
-            objectID?: string;
-            title?: string;
-            url?: string | null;
-            points?: number;
-            num_comments?: number;
-            created_at?: string;
+        const parsedRows = JSON.parse(res.text) as unknown;
+        const rows = (Array.isArray(parsedRows) ? parsedRows : []) as GithubAdvisoryRow[];
+        const validRows = rows.filter((r) => Boolean(r.html_url && isSafePublicUrl(r.html_url).ok));
+
+        const severityRank = (sev?: string): number => {
+          const s = (sev || '').toLowerCase();
+          if (s === 'critical') return 3;
+          if (s === 'high') return 2;
+          if (s === 'medium') return 1;
+          return 0;
+        };
+
+        const isAiOrWebFramework = (r: GithubAdvisoryRow): boolean => {
+          const pkgNames = (r.vulnerabilities || [])
+            .map((v) => v.package?.name || '')
+            .join(' ');
+          const haystack = `${pkgNames} ${r.summary || ''} ${r.description || ''}`;
+          return AI_ECOSYSTEM_PACKAGE_RE.test(haystack);
+        };
+
+        const aiMatched = validRows
+          .filter(isAiOrWebFramework)
+          .sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
+        const fallbackHigh = validRows
+          .filter((r) => !isAiOrWebFramework(r))
+          .sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
+
+        const combined = [...aiMatched, ...fallbackHigh].slice(0, 12);
+        const items: FeedItem[] = combined.map((r) => {
+          const pkg = r.vulnerabilities?.[0]?.package?.name;
+          return {
+            title: normalizeWhitespace(
+              `${r.ghsa_id || 'GHSA'}${r.cve_id ? ` (${r.cve_id})` : ''}${pkg ? ` [${pkg}]` : ''}: ${r.summary || 'Python Advisory'}`,
+            ),
+            url: r.html_url!,
+            summary: normalizeWhitespace(
+              `${r.severity ? `[${r.severity.toUpperCase()}] ` : ''}${r.description || r.summary || ''}`,
+            ).slice(0, 420),
+            published: r.published_at,
+          };
+        });
+
+        pushTrace(trace, {
+          stage: 'hunt_topics',
+          tool_name: 'fetchAuthoritativeFeed',
+          input: feedName,
+          url,
+          summary: `Fetched ${items.length} Python/AI GitHub Security Advisories (${aiMatched.length} AI/framework matches)`,
+          ok: true,
+        });
+        return items;
+      }
+
+      case 'github_trending_ai_agents': {
+        const url = `https://api.github.com/search/repositories?q=(mcp+OR+%22coding+agent%22+OR+%22ai+agent%22+OR+swe-bench)+pushed:%3E${fourteenDaysAgoIsoDate}&sort=stars&order=desc&per_page=10`;
+        return await fetchGithubTrendingRepos(
+          feedName,
+          url,
+          'trending AI agent GitHub repositories',
+          trace,
+        );
+      }
+
+      case 'github_trending_web_agents': {
+        const url = `https://api.github.com/search/repositories?q=(%22browser+agent%22+OR+playwright+OR+%22llms.txt%22+OR+crawler+OR+rag)+pushed:%3E${fourteenDaysAgoIsoDate}&sort=stars&order=desc&per_page=10`;
+        return await fetchGithubTrendingRepos(
+          feedName,
+          url,
+          'trending web/browser agent GitHub repositories',
+          trace,
+        );
+      }
+
+      case 'github_llm_releases': {
+        const repos = ['vllm-project/vllm', 'sgl-project/sglang', 'ggml-org/llama.cpp'];
+        const settled = await Promise.allSettled(
+          repos.map(async (repo) => {
+            const url = `https://api.github.com/repos/${repo}/releases?per_page=2`;
+            const res = await safeFetch(url, {
+              headers: {
+                'User-Agent': BOT_USER_AGENT,
+                Accept: 'application/vnd.github+json',
+              },
+              timeoutMs: 12_000,
+              maxBytes: 500_000,
+            });
+            if (res.status < 200 || res.status >= 300) {
+              throw new Error(`${repo} HTTP ${res.status}`);
+            }
+            const releases = JSON.parse(res.text) as Array<{
+              tag_name?: string;
+              name?: string;
+              html_url?: string;
+              published_at?: string;
+              created_at?: string;
+              body?: string;
+            }>;
+            return (Array.isArray(releases) ? releases : [])
+              .slice(0, 2)
+              .filter((rel) => Boolean(rel.html_url && isSafePublicUrl(rel.html_url).ok))
+              .map((rel): FeedItem => {
+                const tag = rel.tag_name || rel.name || 'release';
+                const pub = rel.published_at || rel.created_at;
+                const notesExcerpt = normalizeWhitespace(
+                  (rel.body || '').replace(/[#*`>]/g, ' '),
+                ).slice(0, 360);
+                return {
+                  title: normalizeWhitespace(
+                    `${repo} ${tag}${rel.name && rel.name !== rel.tag_name ? ` — ${rel.name}` : ''}`,
+                  ),
+                  url: rel.html_url!,
+                  summary: normalizeWhitespace(
+                    `${pub ? `[Released ${pub}] ` : ''}${notesExcerpt || `New ${repo} release ${tag}`}`,
+                  ).slice(0, 420),
+                  published: pub,
+                };
+              });
+          }),
+        );
+
+        const fulfilled = settled.filter(
+          (r): r is PromiseFulfilledResult<FeedItem[]> => r.status === 'fulfilled',
+        );
+        if (fulfilled.length === 0) {
+          throw new Error('All LLM engine GitHub release fetches failed');
+        }
+
+        const items = fulfilled
+          .flatMap((r) => r.value)
+          .sort((a, b) => (b.published || '').localeCompare(a.published || ''));
+
+        pushTrace(trace, {
+          stage: 'hunt_topics',
+          tool_name: 'fetchAuthoritativeFeed',
+          input: feedName,
+          url: 'https://api.github.com/repos/{vllm,sglang,llama.cpp}/releases',
+          summary: `Fetched ${items.length} latest releases across vLLM, SGLang, and llama.cpp`,
+          ok: true,
+        });
+        return items;
+      }
+
+      case 'openrouter_newest_models': {
+        const url = 'https://openrouter.ai/api/v1/models';
+        const res = await safeFetch(url, {
+          headers: { 'User-Agent': BOT_USER_AGENT, Accept: 'application/json' },
+          timeoutMs: 14_000,
+          maxBytes: 4_000_000,
+        });
+        if (res.status < 200 || res.status >= 300) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const parsed = JSON.parse(res.text) as {
+          data?: Array<{
+            id?: string;
+            name?: string;
+            created?: number;
+            context_length?: number;
+            description?: string;
+            pricing?: {
+              prompt?: string | number;
+              completion?: string | number;
+            };
           }>;
         };
-        const hits = Array.isArray(data.hits) ? data.hits : [];
+        const models = Array.isArray(parsed.data) ? parsed.data : [];
+        const newest = [...models]
+          .filter((m) => Boolean(m?.id && m.id.includes('/')))
+          .sort((a, b) => (Number(b.created) || 0) - (Number(a.created) || 0))
+          .slice(0, 10);
+
         const items: FeedItem[] = [];
-        for (const hit of hits) {
-          if (items.length >= 12) break;
-          if (!hit.url || !hit.title) continue;
-          const safe = isSafePublicUrl(hit.url);
-          if (!safe.ok) continue;
+        for (const m of newest) {
+          const id = m.id!.trim().replace(/^\/+/, '');
+          const modelUrl = `https://openrouter.ai/${id}`;
+          if (!isSafePublicUrl(modelUrl).ok) continue;
+
+          const name = (m.name || id).trim();
+          const ctxLabel = m.context_length
+            ? m.context_length >= 1000
+              ? `${Math.round(m.context_length / 1000)}k`
+              : String(m.context_length)
+            : 'N/A';
+          const promptPrice = formatOpenRouterPerMillionPrice(m.pricing?.prompt);
+          const completionPrice = formatOpenRouterPerMillionPrice(m.pricing?.completion);
+          const createdIso =
+            m.created && Number.isFinite(m.created) && m.created > 0
+              ? new Date(m.created * 1000).toISOString()
+              : undefined;
+
           items.push({
-            title: normalizeWhitespace(hit.title),
-            url: hit.url,
-            summary: `HN discussion (${hit.points ?? 0} points, ${hit.num_comments ?? 0} comments): https://news.ycombinator.com/item?id=${hit.objectID || ''}`,
-            published: hit.created_at,
+            title: normalizeWhitespace(`New Model on OpenRouter: ${name} (${id}) — ${ctxLabel} ctx`),
+            url: modelUrl,
+            summary: normalizeWhitespace(
+              `Pricing: prompt ${promptPrice}, completion ${completionPrice} | Context: ${m.context_length ?? 'N/A'} tokens. ${m.description || ''}`,
+            ).slice(0, 420),
+            published: createdIso,
           });
         }
 
@@ -256,24 +672,69 @@ export async function fetchAuthoritativeFeed(
           tool_name: 'fetchAuthoritativeFeed',
           input: feedName,
           url,
-          summary: `Fetched ${items.length} HN stories (>50 pts)`,
+          summary: `Fetched ${items.length} newest models from OpenRouter API`,
           ok: true,
         });
         return items;
       }
 
-      case 'arxiv_ai': {
-        const url =
-          'https://export.arxiv.org/api/query?search_query=cat:cs.CL+OR+cat:cs.LG&sortBy=submittedDate&sortOrder=descending&max_results=8';
+      case 'cloudflare_changelog_rss': {
+        const url = 'https://developers.cloudflare.com/changelog/rss/index.xml';
         const res = await safeFetch(url, {
-          headers: { 'User-Agent': BOT_USER_AGENT, Accept: 'application/atom+xml,text/xml' },
-          timeoutMs: 14_000,
-          maxBytes: 500_000,
+          headers: {
+            'User-Agent': BOT_USER_AGENT,
+            Accept: 'application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8',
+          },
+          timeoutMs: 12_000,
+          maxBytes: 800_000,
         });
         if (res.status < 200 || res.status >= 300) {
           throw new Error(`HTTP ${res.status}`);
         }
-        const items = parseArxivAtom(res.text);
+        const items = parseRssOrAtomXml(res.text, 12);
+        pushTrace(trace, {
+          stage: 'hunt_topics',
+          tool_name: 'fetchAuthoritativeFeed',
+          input: feedName,
+          url,
+          summary: `Fetched ${items.length} Cloudflare Changelog RSS entries`,
+          ok: true,
+        });
+        return items;
+      }
+
+      case 'hn_top_infra': {
+        const url = `https://hn.algolia.com/api/v1/search_by_date?tags=story&numericFilters=points>50,created_at_i>${sevenDaysAgoUnix}`;
+        return await fetchAlgoliaHnStories(feedName, url, 'HN stories (>50 pts, 7d)', trace);
+      }
+
+      case 'hn_ai_coding': {
+        const url = `https://hn.algolia.com/api/v1/search_by_date?query=MCP%20OR%20%22Claude%20Code%22%20OR%20%22coding%20agent%22%20OR%20%22SWE-bench%22&tags=story&numericFilters=points>20,created_at_i>${sevenDaysAgoUnix}`;
+        return await fetchAlgoliaHnStories(feedName, url, 'HN AI coding stories (>20 pts, 7d)', trace);
+      }
+
+      case 'hn_ai_security': {
+        const url = `https://hn.algolia.com/api/v1/search_by_date?query=%22prompt%20injection%22%20OR%20jailbreak%20OR%20%22MCP%20security%22%20OR%20%22LLM%20security%22&tags=story&numericFilters=points>15,created_at_i>${sevenDaysAgoUnix}`;
+        return await fetchAlgoliaHnStories(feedName, url, 'HN AI security stories (>15 pts, 7d)', trace);
+      }
+
+      case 'hn_cloud_gpu': {
+        const url = `https://hn.algolia.com/api/v1/search_by_date?query=%22Cloudflare%20Workers%22%20OR%20H100%20OR%20B200%20OR%20Postgres%20OR%20serverless&tags=story&numericFilters=points>30,created_at_i>${sevenDaysAgoUnix}`;
+        return await fetchAlgoliaHnStories(feedName, url, 'HN Cloud/GPU stories (>30 pts, 7d)', trace);
+      }
+
+      case 'arxiv_ai': {
+        const url =
+          'https://export.arxiv.org/api/query?search_query=cat:cs.CL+OR+cat:cs.LG&sortBy=submittedDate&sortOrder=descending&max_results=10';
+        const res = await safeFetch(url, {
+          headers: { 'User-Agent': BOT_USER_AGENT, Accept: 'application/atom+xml,text/xml' },
+          timeoutMs: 14_000,
+          maxBytes: 600_000,
+        });
+        if (res.status < 200 || res.status >= 300) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const items = parseRssOrAtomXml(res.text, 10);
         pushTrace(trace, {
           stage: 'hunt_topics',
           tool_name: 'fetchAuthoritativeFeed',
@@ -287,16 +748,16 @@ export async function fetchAuthoritativeFeed(
 
       case 'arxiv_ai_sec': {
         const url =
-          'https://export.arxiv.org/api/query?search_query=all:prompt+injection+OR+all:jailbreak+OR+all:llm+security&sortBy=submittedDate&sortOrder=descending&max_results=8';
+          'https://export.arxiv.org/api/query?search_query=all:prompt+injection+OR+all:jailbreak+OR+all:llm+security&sortBy=submittedDate&sortOrder=descending&max_results=10';
         const res = await safeFetch(url, {
           headers: { 'User-Agent': BOT_USER_AGENT, Accept: 'application/atom+xml,text/xml' },
           timeoutMs: 14_000,
-          maxBytes: 500_000,
+          maxBytes: 600_000,
         });
         if (res.status < 200 || res.status >= 300) {
           throw new Error(`HTTP ${res.status}`);
         }
-        const items = parseArxivAtom(res.text);
+        const items = parseRssOrAtomXml(res.text, 10);
         pushTrace(trace, {
           stage: 'hunt_topics',
           tool_name: 'fetchAuthoritativeFeed',
@@ -308,12 +769,35 @@ export async function fetchAuthoritativeFeed(
         return items;
       }
 
+      case 'arxiv_ir_rag': {
+        const url =
+          'https://export.arxiv.org/api/query?search_query=cat:cs.IR&sortBy=submittedDate&sortOrder=descending&max_results=10';
+        const res = await safeFetch(url, {
+          headers: { 'User-Agent': BOT_USER_AGENT, Accept: 'application/atom+xml,text/xml' },
+          timeoutMs: 14_000,
+          maxBytes: 600_000,
+        });
+        if (res.status < 200 || res.status >= 300) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const items = parseRssOrAtomXml(res.text, 10);
+        pushTrace(trace, {
+          stage: 'hunt_topics',
+          tool_name: 'fetchAuthoritativeFeed',
+          input: feedName,
+          url,
+          summary: `Fetched ${items.length} arXiv cs.IR retrieval papers`,
+          ok: true,
+        });
+        return items;
+      }
+
       case 'huggingface_trending': {
-        const url = 'https://huggingface.co/api/daily_papers?limit=8';
+        const url = 'https://huggingface.co/api/daily_papers?limit=10';
         const res = await safeFetch(url, {
           headers: { 'User-Agent': BOT_USER_AGENT, Accept: 'application/json' },
           timeoutMs: 12_000,
-          maxBytes: 500_000,
+          maxBytes: 600_000,
         });
         if (res.status < 200 || res.status >= 300) {
           throw new Error(`HTTP ${res.status}`);
@@ -330,7 +814,7 @@ export async function fetchAuthoritativeFeed(
           };
         }>;
         const items: FeedItem[] = (Array.isArray(rows) ? rows : [])
-          .slice(0, 8)
+          .slice(0, 10)
           .filter((r) => Boolean(r.paper?.id))
           .map((r) => ({
             title: normalizeWhitespace(r.paper?.title || r.title || 'Hugging Face Daily Paper'),
@@ -454,22 +938,42 @@ function parseDuckDuckGoHtml(html: string): SearchSourceItem[] {
   return results;
 }
 
+export interface SearchWebOptions {
+  freshness?: 'day' | 'week' | 'month' | 'any';
+  mode?: 'web' | 'news';
+}
+
 /**
  * Searches public web sources using Serper (if configured) or DuckDuckGo HTML fallback.
+ * Supports optional freshness (`day` | `week` | `month` | `any`) and mode (`web` | `news`).
  * All returned URLs are validated through isSafePublicUrl.
  */
 export async function searchWebSources(
   query: string,
   env: WorkerEnv,
   trace?: TraceEntry[],
+  opts?: SearchWebOptions,
 ): Promise<SearchSourceItem[]> {
   const cleanQuery = query.trim();
   if (!cleanQuery) return [];
 
+  const freshness = opts?.freshness;
+  const mode = opts?.mode ?? 'web';
+
   // 1. Try Serper if API key is configured
   const serperKey = env.SERPER_API_KEY?.trim();
   if (serperKey) {
-    const endpoint = 'https://google.serper.dev/search';
+    const endpoint =
+      mode === 'news' ? 'https://google.serper.dev/news' : 'https://google.serper.dev/search';
+    const tbs =
+      freshness === 'day'
+        ? 'qdr:d'
+        : freshness === 'week'
+          ? 'qdr:w'
+          : freshness === 'month'
+            ? 'qdr:m'
+            : undefined;
+
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 12_000);
@@ -480,29 +984,39 @@ export async function searchWebSources(
             'X-API-KEY': serperKey,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ q: cleanQuery, num: 8 }),
+          body: JSON.stringify({
+            q: cleanQuery,
+            num: 8,
+            ...(tbs ? { tbs } : {}),
+          }),
           signal: controller.signal,
         });
         if (!response.ok) {
           throw new Error(`Serper HTTP ${response.status}`);
         }
         const data = (await response.json()) as {
-          organic?: Array<{ title?: string; link?: string; snippet?: string }>;
+          organic?: Array<{ title?: string; link?: string; snippet?: string; date?: string }>;
+          news?: Array<{ title?: string; link?: string; snippet?: string; date?: string }>;
         };
-        const organic = Array.isArray(data.organic) ? data.organic : [];
+        const rawList = Array.isArray(data.news)
+          ? data.news
+          : Array.isArray(data.organic)
+            ? data.organic
+            : [];
         const seen = new Set<string>();
         const results: SearchSourceItem[] = [];
-        for (const item of organic) {
+        for (const item of rawList) {
           if (!item.link) continue;
           const check = isSafePublicUrl(item.link);
           if (!check.ok || !check.url) continue;
           const normalizedUrl = check.url.toString();
           if (seen.has(normalizedUrl)) continue;
           seen.add(normalizedUrl);
+          const datePrefix = item.date ? `[${item.date}] ` : '';
           results.push({
             title: normalizeWhitespace(item.title || normalizedUrl),
             url: normalizedUrl,
-            snippet: normalizeWhitespace(item.snippet || '').slice(0, 320),
+            snippet: normalizeWhitespace(`${datePrefix}${item.snippet || ''}`).slice(0, 320),
           });
         }
         if (results.length > 0) {
@@ -511,7 +1025,7 @@ export async function searchWebSources(
             tool_name: 'searchWebSources',
             input: cleanQuery,
             url: endpoint,
-            summary: `Serper returned ${results.length} safe results`,
+            summary: `Serper (${mode}${tbs ? `, ${tbs}` : ''}) returned ${results.length} safe results`,
             ok: true,
           });
           return results;
@@ -533,7 +1047,15 @@ export async function searchWebSources(
   }
 
   // 2. DuckDuckGo HTML fallback
-  const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(cleanQuery)}`;
+  const dfSuffix =
+    freshness === 'day'
+      ? '&df=d'
+      : freshness === 'week'
+        ? '&df=w'
+        : freshness === 'month'
+          ? '&df=m'
+          : '';
+  const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(cleanQuery)}${dfSuffix}`;
   try {
     const res = await safeFetch(ddgUrl, {
       headers: {
@@ -553,7 +1075,7 @@ export async function searchWebSources(
       tool_name: 'searchWebSources',
       input: cleanQuery,
       url: ddgUrl,
-      summary: `DuckDuckGo HTML returned ${results.length} safe results`,
+      summary: `DuckDuckGo HTML${dfSuffix ? ` (${freshness})` : ''} returned ${results.length} safe results`,
       ok: true,
     });
     return results;

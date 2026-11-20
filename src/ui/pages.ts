@@ -898,6 +898,7 @@ export function renderBlogPostPage(opts: {
   const baseUrl = normalizeBaseUrl(settings.base_url);
   const siteName = settings.site_name || 'Pyvren Research';
   const postUrl = `${baseUrl}/blog/${encodeURIComponent(post.slug)}`;
+  const postOgImageUrl = `${baseUrl}/og/${encodeURIComponent(post.slug)}.svg`;
   const combinedKeywords: string[] = [];
   const seenKeywords = new Set<string>();
   for (const raw of [...(post.keywords_json || []), ...(post.tags_json || [])]) {
@@ -914,6 +915,7 @@ export function renderBlogPostPage(opts: {
       '@type': 'TechArticle',
       headline: post.title,
       description: post.description,
+      image: postOgImageUrl,
       datePublished: publishedIso,
       dateModified: updatedIso || publishedIso,
       wordCount: post.word_count,
@@ -973,6 +975,7 @@ export function renderBlogPostPage(opts: {
     canonicalUrl: postUrl,
     settings,
     ogType: 'article',
+    ogImageUrl: postOgImageUrl,
     publishedAt: publishedIso,
     updatedAt: updatedIso,
     author: authorName,
@@ -1175,7 +1178,7 @@ export function renderNotFoundPage(opts: { settings: SiteSettings }): string {
     canonicalUrl: `${baseUrl}/404`,
     settings: opts.settings,
     ogType: 'website',
-    extraHead: '<meta name="robots" content="noindex, follow">',
+    robotsMeta: 'noindex, follow',
     bodyHtml: notFoundBody,
   });
 }

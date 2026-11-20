@@ -18,6 +18,7 @@ import {
   type AgentContext,
   type DraftArticlePayload,
   type PrimarySourceDoc,
+  type TopicHuntDecision,
 } from '../lib/agent';
 import { createDatabase } from '../lib/db';
 import type { FeedItem } from '../lib/tools';
@@ -37,10 +38,14 @@ interface LoadContextStepOutput {
 }
 
 interface HuntTopicsStepOutput {
+  decision: TopicHuntDecision;
+  noveltyScore: number;
+  skipReason?: string;
   topic: string;
   angle: string;
   searchQueries: string[];
   feedItems: FeedItem[];
+  resolvedModel?: string;
   trace: TraceEntry[];
   usage: TokenUsage;
 }
@@ -65,11 +70,12 @@ interface QualityAssessmentStepOutput {
   usage: TokenUsage;
 }
 
-interface PersistStepOutput {
-  postId: number;
+export interface PersistStepOutput {
+  postId: number | null;
   slug: string;
   status: string;
   qualityScore: number;
+  decisionReason?: string;
 }
 
 /**
@@ -145,22 +151,58 @@ export class EditorialAgentWorkflow extends WorkflowEntrypoint<WorkerEnv, AgentD
           const result = await stageHuntTopics(this.env, ctx, payload.topic, trace, usage);
 
           await db.updateAgentRun(loaded.runId, {
-            current_stage: 'deep_research',
+            current_stage:
+              result.decision === 'publish_worthy' ? 'deep_research' : result.decision,
             topic: result.topic,
+            model_used: result.resolvedModel || ctx.model,
             trace_json: trace,
             token_usage_json: usage,
           });
 
           return {
+            decision: result.decision,
+            noveltyScore: result.noveltyScore,
+            ...(result.skipReason ? { skipReason: result.skipReason } : {}),
             topic: result.topic,
             angle: result.angle,
             searchQueries: result.searchQueries,
             feedItems: result.feedItems,
+            ...(result.resolvedModel ? { resolvedModel: result.resolvedModel } : {}),
             trace,
             usage,
           };
         },
       );
+
+      // Short-circuit cleanly when editorial novelty / duplicate / daily-cap gate skips the run
+      if (hunted.decision !== 'publish_worthy') {
+        const decisionReason = hunted.skipReason || 'Skipped by editorial gate';
+        await step.do('finalize-skipped-run', STAGE_STEP_CONFIG, async () => {
+          const db = createDatabase(this.env);
+          await db.updateAgentRun(loaded.runId, {
+            status: 'skipped',
+            current_stage: hunted.decision,
+            topic: hunted.topic,
+            model_used: hunted.resolvedModel || ctx.model,
+            decision_reason: decisionReason,
+            trace_json: hunted.trace,
+            token_usage_json: hunted.usage,
+            completed_at: new Date().toISOString(),
+          });
+        });
+
+        return {
+          postId: null,
+          slug: '',
+          status: 'skipped',
+          qualityScore: 0,
+          decisionReason: hunted.skipReason,
+        };
+      }
+
+      if (hunted.resolvedModel) {
+        ctx.model = hunted.resolvedModel;
+      }
 
       // Stage 3: Deep primary-source web search & webpage extraction
       const researched = await step.do<DeepResearchStepOutput>(
@@ -265,7 +307,7 @@ export class EditorialAgentWorkflow extends WorkflowEntrypoint<WorkerEnv, AgentD
           const trace: TraceEntry[] = [...assessed.trace];
           const usage: TokenUsage = { ...assessed.usage };
 
-          const { post } = await stagePersistWithGate(
+          const { post, run } = await stagePersistWithGate(
             db,
             ctx,
             drafted.draft,
@@ -282,6 +324,7 @@ export class EditorialAgentWorkflow extends WorkflowEntrypoint<WorkerEnv, AgentD
             slug: post.slug,
             status: post.status,
             qualityScore: post.quality_score,
+            ...(run?.decision_reason ? { decisionReason: run.decision_reason } : {}),
           };
         },
       );

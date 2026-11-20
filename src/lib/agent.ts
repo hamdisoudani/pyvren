@@ -14,8 +14,14 @@ import type {
   SiteSettings,
   TokenUsage,
   TraceEntry,
+  TriggerSource,
 } from '../types';
 import { ensureUniqueSlug } from './db';
+import {
+  filterUncoveredCandidates,
+  findDuplicatePost,
+  normalizeCanonicalUrl,
+} from './dedup';
 import { lintPostPayload } from './linter';
 import { compileMarkdown } from './markdown';
 import {
@@ -31,6 +37,7 @@ import {
   readPrimaryWebpage,
   searchWebSources,
   type FeedItem,
+  type SearchSourceItem,
 } from './tools';
 
 export interface AgentContext {
@@ -41,9 +48,23 @@ export interface AgentContext {
   judgeModel: string;
   recentTitles: string[];
   recentSlugs: string[];
+  recentPosts: PostRecord[];
+  recentRunTopics: string[];
+  postsCreatedLast24h: number;
+  forceWrite: boolean;
+  triggerSource: TriggerSource;
 }
 
+export type TopicHuntDecision =
+  | 'publish_worthy'
+  | 'skip_no_news'
+  | 'skip_already_covered'
+  | 'skip_daily_cap';
+
 export interface TopicHuntOutput {
+  decision: TopicHuntDecision;
+  noveltyScore: number;
+  skipReason?: string;
   topic: string;
   angle: string;
   searchQueries: string[];
@@ -330,17 +351,45 @@ function normalizeDraftPayload(
 }
 
 /**
- * Stage 1: Load site settings, select category skill & archetype, and fetch recent titles for dedupe.
+ * Stage 1: Load site settings, select category skill & archetype, and load recent posts + runs for editorial memory & dedup.
  */
 export async function stageLoadContext(
   db: DatabaseAdapter,
   payload: AgentDispatchPayload,
 ): Promise<AgentContext> {
-  const [settings, skills, recentPosts] = await Promise.all([
+  const [settings, skills, rawRecentPosts, recentRuns] = await Promise.all([
     db.getSettings(),
     db.listSkills(false),
-    db.listPosts({ limit: 30 }),
+    db.listPosts({ limit: 50, excludeHeavyHtml: true }),
+    db.listAgentRuns(50),
   ]);
+
+  const recentPosts: PostRecord[] = rawRecentPosts.map((p) => ({
+    ...p,
+    body_markdown: '',
+    body_html: '',
+  }));
+
+  const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+  const postsCreatedLast24h = rawRecentPosts.filter((p) => {
+    const ts = Date.parse(p.created_at);
+    return Number.isFinite(ts) && ts >= cutoff24h;
+  }).length;
+
+  const recentRunTopics = Array.from(
+    new Set(
+      recentRuns
+        .filter((r) => r.status === 'completed' && typeof r.topic === 'string')
+        .map((r) => r.topic.trim())
+        .filter(
+          (t) =>
+            t.length > 0 &&
+            t.toLowerCase() !== 'auto' &&
+            t.toLowerCase() !== 'scheduled autonomous briefing' &&
+            !t.toLowerCase().startsWith('skipped'),
+        ),
+    ),
+  ).slice(0, 30);
 
   const skill = selectSkillForRun(skills, payload.category_slug, recentPosts);
   const lastArchetype = recentPosts[0]?.archetype;
@@ -360,14 +409,19 @@ export async function stageLoadContext(
     archetype,
     model,
     judgeModel,
-    recentTitles: recentPosts.map((p) => p.title).slice(0, 20),
-    recentSlugs: recentPosts.map((p) => p.slug).slice(0, 20),
+    recentTitles: recentPosts.map((p) => p.title).slice(0, 25),
+    recentSlugs: recentPosts.map((p) => p.slug).slice(0, 25),
+    recentPosts,
+    recentRunTopics,
+    postsCreatedLast24h,
+    forceWrite: Boolean(payload.force),
+    triggerSource: payload.trigger_source || 'manual',
   };
 }
 
 /**
- * Stage 2: Query skill feeds + seed web search, then ask OpenRouter to pick the highest-value,
- * freshest, non-duplicate topic plus 3-5 primary-source search queries.
+ * Stage 2: Enforce daily post cap, query real-time category feeds + recency-filtered news search,
+ * filter uncovered candidates, and run skeptical Editor-in-Chief LLM triage + deterministic duplicate gates.
  */
 export async function stageHuntTopics(
   env: WorkerEnv,
@@ -376,25 +430,118 @@ export async function stageHuntTopics(
   trace: TraceEntry[],
   usage: TokenUsage,
 ): Promise<TopicHuntOutput> {
-  const feedNames = (ctx.skill.research_feeds_json || []).slice(0, 3);
+  const cleanRequested = (requestedTopic || '').trim();
+  const lowerRequested = cleanRequested.toLowerCase();
+  const hasExplicitTopic = Boolean(
+    cleanRequested.length > 0 &&
+      lowerRequested !== 'scheduled autonomous briefing' &&
+      lowerRequested !== 'auto',
+  );
+  const mustEnforceNewsGate = !ctx.forceWrite && !hasExplicitTopic;
+
+  // Guard 1 (Daily Cap on Scheduled Runs)
+  const maxPostsPerDay = ctx.settings.max_posts_per_day || 2;
+  if (
+    ctx.triggerSource === 'scheduled' &&
+    !ctx.forceWrite &&
+    ctx.postsCreatedLast24h >= maxPostsPerDay
+  ) {
+    const skipReason = `Daily post cap (${maxPostsPerDay}) already reached in the last 24 hours.`;
+    pushTrace(trace, {
+      stage: 'hunt_topics',
+      tool_name: 'editorial_daily_cap_gate',
+      input: `${ctx.postsCreatedLast24h}/${maxPostsPerDay}`,
+      summary: skipReason,
+      ok: true,
+    });
+    return {
+      decision: 'skip_daily_cap',
+      noveltyScore: 0,
+      skipReason,
+      topic: 'Skipped (Daily Cap)',
+      angle: '',
+      searchQueries: [],
+      feedItems: [],
+    };
+  }
+
+  const feedNames = (ctx.skill.research_feeds_json || []).slice(0, 5);
   const feedResults = await Promise.all(
     feedNames.map((feed) => fetchAuthoritativeFeed(feed, trace)),
   );
-  const feedItems: FeedItem[] = feedResults.flat().slice(0, 24);
-
-  const cleanRequested = (requestedTopic || '').trim();
-  const hasExplicitTopic =
-    cleanRequested.length > 0 && cleanRequested.toLowerCase() !== 'auto';
+  const rawFeedItems: FeedItem[] = feedResults.flat().slice(0, 32);
 
   const seedQueries = hasExplicitTopic
     ? [cleanRequested]
     : (ctx.skill.search_queries_json || []).slice(0, 2);
 
-  const seedSearchHits = (
-    await Promise.all(seedQueries.map((q) => searchWebSources(q, env, trace)))
+  const rawSearchHits: SearchSourceItem[] = (
+    await Promise.all(
+      seedQueries.map((q) =>
+        searchWebSources(q, env, trace, { freshness: 'week', mode: 'news' }),
+      ),
+    )
   ).flat();
 
-  const feedDigest = feedItems
+  type TaggedCandidate =
+    | ({ _sourceKind: 'feed' } & FeedItem)
+    | ({ _sourceKind: 'search' } & SearchSourceItem);
+
+  const allCandidates: TaggedCandidate[] = [
+    ...rawFeedItems.map((item) => ({ ...item, _sourceKind: 'feed' as const })),
+    ...rawSearchHits.map((hit) => ({ ...hit, _sourceKind: 'search' as const })),
+  ];
+
+  const { fresh: uncoveredCandidates, filteredOutCount } = filterUncoveredCandidates(
+    allCandidates,
+    ctx.recentPosts,
+    ctx.recentRunTopics,
+  );
+
+  const uncoveredFeedItems: FeedItem[] = uncoveredCandidates
+    .filter((c): c is { _sourceKind: 'feed' } & FeedItem => c._sourceKind === 'feed')
+    .map(({ _sourceKind: _ignore, ...rest }) => rest);
+
+  const uncoveredSearchHits: SearchSourceItem[] = uncoveredCandidates
+    .filter((c): c is { _sourceKind: 'search' } & SearchSourceItem => c._sourceKind === 'search')
+    .map(({ _sourceKind: _ignore, ...rest }) => rest);
+
+  pushTrace(trace, {
+    stage: 'hunt_topics',
+    tool_name: 'filterUncoveredCandidates',
+    input: `${allCandidates.length} candidates (${rawFeedItems.length} feed, ${rawSearchHits.length} search)`,
+    summary: `Filtered out ${filteredOutCount} already-covered/duplicate item(s); ${uncoveredFeedItems.length} fresh feed items and ${uncoveredSearchHits.length} fresh search hits remain`,
+    ok: true,
+  });
+
+  // Guard 2 (Zero Uncovered News Fast Skip — 0 LLM tokens burned!)
+  if (
+    mustEnforceNewsGate &&
+    uncoveredFeedItems.length === 0 &&
+    uncoveredSearchHits.length === 0
+  ) {
+    const skipReason = `No fresh uncovered news or primary releases found for category "${ctx.skill.slug}".`;
+    pushTrace(trace, {
+      stage: 'hunt_topics',
+      tool_name: 'editorial_news_gate',
+      input: ctx.skill.slug,
+      summary: skipReason,
+      ok: true,
+    });
+    return {
+      decision: 'skip_no_news',
+      noveltyScore: 0,
+      skipReason,
+      topic: 'Skipped (No Fresh News)',
+      angle: '',
+      searchQueries: [],
+      feedItems: [],
+    };
+  }
+
+  const feedItems = uncoveredFeedItems.length > 0 ? uncoveredFeedItems : rawFeedItems.slice(0, 10);
+
+  const feedDigest = uncoveredFeedItems
     .slice(0, 16)
     .map(
       (item, i) =>
@@ -402,21 +549,45 @@ export async function stageHuntTopics(
     )
     .join('\n\n');
 
-  const searchDigest = seedSearchHits
+  const searchDigest = uncoveredSearchHits
     .slice(0, 10)
     .map((hit, i) => `[S${i + 1}] ${hit.title}\nURL: ${hit.url}\nSnippet: ${hit.snippet}`)
     .join('\n\n');
 
-  const existingDigest =
-    ctx.recentTitles.length > 0
-      ? ctx.recentTitles.map((t) => `- ${t}`).join('\n')
+  const editorialMemoryLedger =
+    ctx.recentPosts.length > 0
+      ? ctx.recentPosts
+          .slice(0, 25)
+          .map((p) => {
+            const kws =
+              Array.isArray(p.keywords_json) && p.keywords_json.length > 0
+                ? p.keywords_json.slice(0, 6).join(', ')
+                : (p.tags_json || []).slice(0, 5).join(', ') || 'none';
+            return `- [${p.category_slug}] ${p.title} — Keywords: ${kws}`;
+          })
+          .join('\n')
       : '(none yet)';
 
-  const systemPrompt = `You are the Chief Research Strategist for ${ctx.settings.site_name}.
-Your job is to pick ONE concrete, timely, primary-source-verifiable engineering topic for category "${ctx.skill.name}" (${ctx.skill.slug}) using archetype "${ctx.archetype}".
-Never pick a topic that duplicates recent published articles.
-Return ONLY valid JSON:
+  // Guard 3 (Skeptical Editor-in-Chief LLM Triage + Post Memory)
+  const gateDirective = mustEnforceNewsGate
+    ? `STRICT NEWS & NOVELTY GATE (MANDATORY):
+- Act as a skeptical Principal Editor-in-Chief. Only approve "publish_worthy" when the uncovered feed/search items contain a concrete, timely release, benchmark, security advisory, paper, or architectural change worth a dedicated staff-engineer briefing.
+- If the uncovered items are trivial, stale, rumor-only, marketing fluff without verifiable technical substance, or lack concrete news, you MUST return "decision": "skip_no_news".
+- If every promising candidate overlaps in topic, thesis, or angle with ANY entry in the EDITORIAL MEMORY LEDGER, you MUST return "decision": "skip_already_covered".`
+    : ctx.forceWrite
+      ? `FORCE-WRITE MODE ACTIVE: Select the strongest, most concrete primary-source engineering angle and return "decision": "publish_worthy".`
+      : `EXPLICIT TOPIC MODE: Shape the requested topic into a focused, primary-source-verifiable thesis ("decision": "publish_worthy"), unless it directly duplicates an existing post in the EDITORIAL MEMORY LEDGER ("decision": "skip_already_covered").`;
+
+  const systemPrompt = `You are the skeptical Principal Editor-in-Chief and Chief Research Strategist for ${ctx.settings.site_name}.
+Your job is to triage candidate signals for category "${ctx.skill.name}" (${ctx.skill.slug}) using archetype "${ctx.archetype}".
+
+${gateDirective}
+
+Return ONLY valid JSON matching this schema:
 {
+  "decision": "publish_worthy" | "skip_no_news" | "skip_already_covered",
+  "novelty_score": 0-100,
+  "skip_reason": "Concise explanation if skipping, or empty string when publish_worthy",
   "topic": "Specific technical topic headline or working thesis (no fluff)",
   "angle": "1-2 sentences describing the concrete engineering angle, metrics, or remediation focus",
   "search_queries": ["3 to 5 targeted web search queries to find primary documentation, benchmarks, papers, or vendor advisories"]
@@ -426,14 +597,15 @@ Return ONLY valid JSON:
     ? `EXPLICIT REQUESTED TOPIC: ${cleanRequested}
 CATEGORY INSTRUCTIONS: ${ctx.skill.system_instructions}
 ARCHETYPE: ${ctx.archetype}
-RECENT ARTICLES (avoid duplicating angle):
-${existingDigest}
 
-RECENT FEED CONTEXT:
-${feedDigest || '(no feed items)'}
+EDITORIAL MEMORY LEDGER (DO NOT REPEAT ANY OF THESE TOPICS OR ANGLES):
+${editorialMemoryLedger}
 
-SEED SEARCH HITS:
-${searchDigest || '(no seed search hits)'}
+UNCOVERED FEED CONTEXT:
+${feedDigest || '(no uncovered feed items)'}
+
+UNCOVERED NEWS/WEB SEARCH HITS:
+${searchDigest || '(no uncovered seed search hits)'}
 
 Keep the requested topic focused, factual, and verifiable, and produce 3 to 5 targeted search queries for primary documentation, benchmarks, papers, or advisories.`
     : `CATEGORY: ${ctx.skill.name} — ${ctx.skill.description}
@@ -442,16 +614,18 @@ TARGET AUDIENCE: ${ctx.skill.target_audience}
 ARCHETYPE: ${ctx.archetype}
 DEFAULT EDITORIAL FOCUS: ${ctx.settings.default_topic_feed}
 
-RECENT ARTICLES (DO NOT DUPLICATE):
-${existingDigest}
+EDITORIAL MEMORY LEDGER (DO NOT REPEAT ANY OF THESE TOPICS OR ANGLES):
+${editorialMemoryLedger}
 
-AUTHORITATIVE FEED CANDIDATES:
-${feedDigest || '(no feed items returned)'}
+UNCOVERED AUTHORITATIVE FEED CANDIDATES:
+${feedDigest || '(no uncovered feed items)'}
 
-SEED WEB SEARCH HITS:
-${searchDigest || '(no seed search hits)'}
+UNCOVERED NEWS/WEB SEARCH HITS:
+${searchDigest || '(no uncovered search hits)'}
 
-Select the single highest-value, freshest, non-duplicate technical topic supported by primary sources and return 3 to 5 targeted primary-source search queries.`;
+Evaluate novelty rigorously against the Editorial Memory Ledger. If nothing genuinely fresh and substantive is present, choose "skip_no_news" or "skip_already_covered"; otherwise select the single highest-value non-duplicate topic and return 3 to 5 targeted primary-source search queries.`;
+
+  const minNoveltyThreshold = ctx.settings.min_novelty_score ?? 68;
 
   try {
     const completion = await callOpenRouter(env, {
@@ -460,7 +634,7 @@ Select the single highest-value, freshest, non-duplicate technical topic support
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-      temperature: 0.3,
+      temperature: 0.25,
       maxTokens: 900,
       jsonMode: true,
       freeModelsOnly: ctx.settings.free_models_only !== false,
@@ -470,14 +644,42 @@ Select the single highest-value, freshest, non-duplicate technical topic support
     ctx.model = resolvedModel;
 
     const parsed = extractJsonObject<{
+      decision?: string;
+      novelty_score?: number | string;
+      skip_reason?: string;
       topic?: string;
       angle?: string;
       search_queries?: string[];
     }>(completion.content);
 
+    const rawDecision = typeof parsed.decision === 'string' ? parsed.decision.trim().toLowerCase() : '';
+    let decision: TopicHuntDecision =
+      rawDecision === 'skip_no_news' || rawDecision === 'skip_already_covered'
+        ? rawDecision
+        : 'publish_worthy';
+
+    const rawNovelty =
+      typeof parsed.novelty_score === 'number'
+        ? parsed.novelty_score
+        : typeof parsed.novelty_score === 'string' && parsed.novelty_score.trim() !== ''
+          ? Number(parsed.novelty_score)
+          : NaN;
+    const noveltyScore = Number.isFinite(rawNovelty)
+      ? clampScore(rawNovelty)
+      : decision === 'publish_worthy'
+        ? 82
+        : 20;
+
+    let skipReason =
+      typeof parsed.skip_reason === 'string' && parsed.skip_reason.trim()
+        ? parsed.skip_reason.trim()
+        : undefined;
+
     const selectedTopic =
       (parsed.topic || '').trim() ||
-      (hasExplicitTopic ? cleanRequested : feedItems[0]?.title || ctx.skill.name);
+      (hasExplicitTopic
+        ? cleanRequested
+        : uncoveredFeedItems[0]?.title || uncoveredSearchHits[0]?.title || ctx.skill.name);
     const angle = (parsed.angle || '').trim() || ctx.skill.description;
     const rawQueries = Array.isArray(parsed.search_queries)
       ? parsed.search_queries.filter((q): q is string => typeof q === 'string' && q.trim().length > 2)
@@ -491,15 +693,54 @@ Select the single highest-value, freshest, non-duplicate technical topic support
       ]),
     ).slice(0, 5);
 
+    // Guard 4 (Deterministic Novelty & Duplicate Override)
+    if (mustEnforceNewsGate) {
+      const dup = findDuplicatePost({ title: selectedTopic }, ctx.recentPosts, 0.48);
+      if (dup.isDuplicate) {
+        decision = 'skip_already_covered';
+        skipReason = dup.reason;
+      } else if (noveltyScore < minNoveltyThreshold && decision !== 'skip_already_covered') {
+        decision = 'skip_no_news';
+        skipReason =
+          skipReason ||
+          `Novelty score (${noveltyScore}/100) below editorial threshold (${minNoveltyThreshold}/100).`;
+      } else if (decision !== 'publish_worthy' && !skipReason) {
+        skipReason =
+          decision === 'skip_already_covered'
+            ? 'Topic overlaps with recent editorial coverage.'
+            : `Novelty score (${noveltyScore}/100) below editorial threshold (${minNoveltyThreshold}/100).`;
+      }
+    } else if (hasExplicitTopic && !ctx.forceWrite) {
+      const dupSelected = findDuplicatePost({ title: selectedTopic }, ctx.recentPosts, 0.62);
+      const dupRequested = findDuplicatePost({ title: cleanRequested }, ctx.recentPosts, 0.62);
+      const dup = dupSelected.isDuplicate ? dupSelected : dupRequested;
+      if (dup.isDuplicate) {
+        decision = 'skip_already_covered';
+        skipReason = dup.reason;
+      } else {
+        decision = 'publish_worthy';
+        skipReason = undefined;
+      }
+    } else if (ctx.forceWrite) {
+      decision = 'publish_worthy';
+      skipReason = undefined;
+    }
+
     pushTrace(trace, {
       stage: 'hunt_topics',
       tool_name: 'openrouter_topic_selection',
       input: resolvedModel,
-      summary: `Selected topic "${selectedTopic}" via ${resolvedModel} with ${searchQueries.length} search queries`,
+      summary:
+        decision === 'publish_worthy'
+          ? `Approved topic "${selectedTopic}" (novelty=${noveltyScore}/100) via ${resolvedModel} with ${searchQueries.length} search queries`
+          : `Editorial gate skipped (${decision}, novelty=${noveltyScore}/100): ${skipReason || 'below editorial bar'}`,
       ok: true,
     });
 
     return {
+      decision,
+      noveltyScore,
+      ...(skipReason ? { skipReason } : {}),
       topic: selectedTopic,
       angle,
       searchQueries,
@@ -510,13 +751,57 @@ Select the single highest-value, freshest, non-duplicate technical topic support
     const message = err instanceof Error ? err.message : String(err);
     const fallbackTopic = hasExplicitTopic
       ? cleanRequested
-      : feedItems[0]?.title || `${ctx.skill.name} Engineering Analysis`;
+      : uncoveredFeedItems[0]?.title ||
+        uncoveredSearchHits[0]?.title ||
+        `${ctx.skill.name} Engineering Analysis`;
     const fallbackQueries = Array.from(
       new Set([
         fallbackTopic,
         ...(ctx.skill.search_queries_json || []),
       ]),
     ).slice(0, 4);
+
+    if (mustEnforceNewsGate) {
+      const dup = findDuplicatePost({ title: fallbackTopic }, ctx.recentPosts, 0.48);
+      if (dup.isDuplicate) {
+        pushTrace(trace, {
+          stage: 'hunt_topics',
+          tool_name: 'openrouter_topic_selection',
+          input: ctx.skill.slug,
+          summary: `Topic selection LLM failed (${message}) and fallback duplicated existing post: ${dup.reason}`,
+          ok: false,
+        });
+        return {
+          decision: 'skip_already_covered',
+          noveltyScore: 0,
+          skipReason: dup.reason,
+          topic: fallbackTopic,
+          angle: '',
+          searchQueries: [],
+          feedItems,
+        };
+      }
+    } else if (hasExplicitTopic && !ctx.forceWrite) {
+      const dup = findDuplicatePost({ title: fallbackTopic }, ctx.recentPosts, 0.62);
+      if (dup.isDuplicate) {
+        pushTrace(trace, {
+          stage: 'hunt_topics',
+          tool_name: 'openrouter_topic_selection',
+          input: ctx.skill.slug,
+          summary: `Explicit topic duplicated existing post: ${dup.reason}`,
+          ok: true,
+        });
+        return {
+          decision: 'skip_already_covered',
+          noveltyScore: 0,
+          skipReason: dup.reason,
+          topic: fallbackTopic,
+          angle: '',
+          searchQueries: [],
+          feedItems,
+        };
+      }
+    }
 
     pushTrace(trace, {
       stage: 'hunt_topics',
@@ -527,6 +812,8 @@ Select the single highest-value, freshest, non-duplicate technical topic support
     });
 
     return {
+      decision: 'publish_worthy',
+      noveltyScore: 75,
       topic: fallbackTopic,
       angle: ctx.skill.description,
       searchQueries: fallbackQueries,
@@ -596,8 +883,9 @@ export async function stageDeepResearch(
   };
 
   for (const hit of searchResults) {
-    if (!isDeepUrl(hit.url) || seenUrls.has(hit.url)) continue;
-    seenUrls.add(hit.url);
+    const canon = normalizeCanonicalUrl(hit.url);
+    if (!isDeepUrl(hit.url) || !canon || seenUrls.has(canon)) continue;
+    seenUrls.add(canon);
     candidates.push({
       url: hit.url,
       title: hit.title,
@@ -607,8 +895,9 @@ export async function stageDeepResearch(
   }
 
   for (const item of feedItems) {
-    if (!isDeepUrl(item.url) || seenUrls.has(item.url)) continue;
-    seenUrls.add(item.url);
+    const canon = normalizeCanonicalUrl(item.url);
+    if (!isDeepUrl(item.url) || !canon || seenUrls.has(canon)) continue;
+    seenUrls.add(canon);
     candidates.push({
       url: item.url,
       title: item.title,
@@ -1083,17 +1372,35 @@ export async function stagePersistWithGate(
   const desiredSlug = slugify(draft.slug || draft.title, 80) || 'technical-briefing';
   const uniqueSlug = await ensureUniqueSlug(db, desiredSlug);
 
+  // Final safety duplicate check (never allow an overlapping post to auto-publish unless forceWrite=true)
+  const dupCheck = findDuplicatePost(
+    {
+      title: draft.title,
+      keywords: draft.keywords,
+      urls: draft.sources,
+    },
+    ctx.recentPosts,
+    0.58,
+  );
+  const heldForDuplicate = dupCheck.isDuplicate && !ctx.forceWrite;
+
   // HARD PUBLISHING GATE
   const shouldPublish =
     ctx.settings.publishing_mode === 'auto_publish' &&
     lintResult.passed &&
-    finalScore >= ctx.settings.min_publish_score;
+    finalScore >= ctx.settings.min_publish_score &&
+    !heldForDuplicate;
 
-  const status: PostStatus = shouldPublish ? 'published' : 'draft';
-  const publishedAt = status === 'published' ? new Date().toISOString() : null;
+  const resolvedStatus: PostStatus = shouldPublish ? 'published' : 'draft';
+  const publishedAt = resolvedStatus === 'published' ? new Date().toISOString() : null;
 
   const reviewNotes = [...draft.review_notes];
-  if (status === 'draft') {
+  if (heldForDuplicate) {
+    reviewNotes.push(
+      `Warning — Held in draft by duplicate safety gate: ${dupCheck.reason || 'overlaps with an existing post'}.`,
+    );
+  }
+  if (resolvedStatus === 'draft' && !heldForDuplicate) {
     if (ctx.settings.publishing_mode !== 'auto_publish') {
       reviewNotes.push('Held in draft: publishing_mode is draft_review.');
     } else if (!lintResult.passed) {
@@ -1128,7 +1435,7 @@ export async function stagePersistWithGate(
     quality_breakdown_json: finalBreakdown,
     reading_time_minutes: compiled.readingTimeMinutes,
     word_count: compiled.wordCount,
-    status,
+    status: resolvedStatus,
     admin_locked: false,
     last_edited_by: null,
     published_at: publishedAt,
@@ -1141,10 +1448,17 @@ export async function stagePersistWithGate(
       stage: 'persist_with_gate',
       tool_name: 'stagePersistWithGate',
       input: uniqueSlug,
-      summary: `Persisted post #${post.id} (${uniqueSlug}) as "${status}" via ${resolvedModelUsed} (score=${finalScore}, lint_passed=${lintResult.passed})`,
+      summary: `Persisted post #${post.id} (${uniqueSlug}) as "${resolvedStatus}" via ${resolvedModelUsed} (score=${finalScore}, lint_passed=${lintResult.passed}${heldForDuplicate ? ', duplicate_guard=held' : ''})`,
       ok: true,
     });
   }
+
+  const decisionReason =
+    resolvedStatus === 'published'
+      ? `Auto-published (quality_score=${finalScore}, lint_passed=true).`
+      : heldForDuplicate
+        ? `Held in draft by duplicate safety gate: ${dupCheck.reason || 'overlaps existing post'}`
+        : `Saved as draft (publishing_mode=${ctx.settings.publishing_mode}, score=${finalScore}, lint_passed=${lintResult.passed}).`;
 
   let run: AgentRunRecord | null = null;
   if (typeof runId === 'number' && runId > 0) {
@@ -1158,6 +1472,7 @@ export async function stagePersistWithGate(
       model_used: resolvedModelUsed,
       post_id: post.id,
       quality_score: finalScore,
+      decision_reason: decisionReason,
       ...(trace ? { trace_json: trace } : {}),
       ...(usage ? { token_usage_json: usage } : {}),
       error_message: null,
@@ -1218,8 +1533,39 @@ export async function runEditorialAgentDirect(
       model_used: ctx.model,
     });
 
-    // Stage 2: Hunt topics
+    // Stage 2: Hunt topics + novelty/dedup/daily-cap gates
     const hunted = await stageHuntTopics(env, ctx, payload.topic, trace, usage);
+    if (hunted.decision !== 'publish_worthy') {
+      const completedAt = new Date().toISOString();
+      const decisionReason = hunted.skipReason || 'Skipped by editorial gate';
+      const updatedRun = await db.updateAgentRun(runId, {
+        status: 'skipped',
+        current_stage: hunted.decision,
+        topic: hunted.topic,
+        model_used: hunted.resolvedModel || ctx.model,
+        decision_reason: decisionReason,
+        trace_json: trace,
+        token_usage_json: usage,
+        completed_at: completedAt,
+      });
+      return {
+        run:
+          updatedRun ||
+          (await db.getAgentRunById(runId)) || {
+            ...runRecord,
+            status: 'skipped',
+            current_stage: hunted.decision,
+            topic: hunted.topic,
+            model_used: hunted.resolvedModel || ctx.model,
+            decision_reason: decisionReason,
+            trace_json: trace,
+            token_usage_json: usage,
+            completed_at: completedAt,
+          },
+        post: null,
+      };
+    }
+
     await db.updateAgentRun(runId, {
       current_stage: 'deep_research',
       topic: hunted.topic,

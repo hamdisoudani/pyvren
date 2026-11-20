@@ -6,7 +6,7 @@ export type Archetype =
   | 'migration-fix-log'
   | 'architecture-analysis';
 
-export type AgentRunStatus = 'queued' | 'running' | 'completed' | 'failed';
+export type AgentRunStatus = 'queued' | 'running' | 'completed' | 'skipped' | 'failed';
 export type TriggerSource = 'manual' | 'scheduled' | 'api';
 
 export interface AdminUser {
@@ -29,6 +29,9 @@ export interface SiteSettings {
   free_models_only: boolean;
   schedule_enabled: boolean;
   runs_per_day: number;
+  preferred_hours_utc_json: number[];
+  max_posts_per_day: number;
+  min_novelty_score: number;
   openrouter_model: string;
   judge_model: string;
   default_topic_feed: string;
@@ -163,6 +166,7 @@ export interface AgentRunRecord {
   quality_score: number | null;
   post_id: number | null;
   token_usage_json: Partial<TokenUsage>;
+  decision_reason: string | null;
   error_message: string | null;
   created_at: string;
   completed_at: string | null;
@@ -206,6 +210,7 @@ export interface AgentDispatchPayload {
   archetype?: Archetype | 'auto';
   trigger_source?: TriggerSource;
   model_override?: string;
+  force?: boolean;
   run_id?: number;
 }
 
@@ -231,7 +236,14 @@ export interface DatabaseAdapter {
   deleteSkill(slug: string): Promise<boolean>;
 
   // Posts
-  listPosts(opts?: { status?: PostStatus; category_slug?: string; limit?: number; offset?: number; search?: string }): Promise<PostRecord[]>;
+  listPosts(opts?: {
+    status?: PostStatus;
+    category_slug?: string;
+    limit?: number;
+    offset?: number;
+    search?: string;
+    excludeHeavyHtml?: boolean;
+  }): Promise<PostRecord[]>;
   countPosts(opts?: { status?: PostStatus; category_slug?: string }): Promise<number>;
   getPostById(id: number): Promise<PostRecord | null>;
   getPostBySlug(slug: string, onlyPublished?: boolean): Promise<PostRecord | null>;
@@ -252,6 +264,7 @@ export interface DatabaseAdapter {
     model_used: string;
     status?: AgentRunStatus;
     current_stage?: string;
+    decision_reason?: string | null;
   }): Promise<AgentRunRecord>;
   updateAgentRun(id: number, patch: Partial<AgentRunRecord>): Promise<AgentRunRecord | null>;
 }

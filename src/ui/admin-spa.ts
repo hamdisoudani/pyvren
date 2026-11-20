@@ -14,9 +14,12 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
   <title>${escapeHtml(siteName)} — Editorial Control Panel</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="${GOOGLE_FONTS_HREF}">
+  <link rel="preload" as="style" href="${GOOGLE_FONTS_HREF}">
+  <link rel="stylesheet" href="${GOOGLE_FONTS_HREF}" media="print" onload="this.media='all'">
+  <noscript><link rel="stylesheet" href="${GOOGLE_FONTS_HREF}"></noscript>
   <link rel="stylesheet" href="/assets/app.css">
   <script>(function(){try{var s=localStorage.getItem('pyvren-theme');var t=(s==='dark'||s==='light')?s:(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}}catch(e){}})();</script>
 </head>
@@ -52,6 +55,37 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       { label: 'Cloudflare Edge & GPU Economics', topic: 'Production limits and break-even economics of Cloudflare Workers & Workflows, serverless Postgres pooling, and spot H100/B200 inference', category: 'cloud-gpu-infra', archetype: 'architecture-analysis' },
       { label: 'Live Web Data & GEO', topic: 'Benchmark of AI agent web-grounding pipelines, Firecrawl/Jina/Playwright Markdown extraction fidelity, and llms.txt + JSON-LD GEO citation readiness', category: 'agentic-browser-web-data', archetype: 'benchmark-index' },
       { label: 'CISA KEV Advisory', topic: 'Rapid technical teardown of newly exploited CISA KEV vulnerabilities and critical GitHub Security Advisories with zero-downtime patch verification', category: 'dev-tooling-benchmarks', archetype: 'advisory-teardown' }
+    ];
+
+    var SCHEDULE_PRESETS = [
+      {
+        label: 'Recommended: 3×/day Editorial Pulse (08, 14, 20 UTC)',
+        runs_per_day: 3,
+        preferred_hours_utc_json: [8, 14, 20],
+        max_posts_per_day: 2,
+        min_novelty_score: 68
+      },
+      {
+        label: 'Conservative: 2×/day Deep Dossiers (09, 18 UTC)',
+        runs_per_day: 2,
+        preferred_hours_utc_json: [9, 18],
+        max_posts_per_day: 1,
+        min_novelty_score: 72
+      },
+      {
+        label: 'Active Newsroom: 4×/day (06, 12, 18, 00 UTC)',
+        runs_per_day: 4,
+        preferred_hours_utc_json: [0, 6, 12, 18],
+        max_posts_per_day: 3,
+        min_novelty_score: 65
+      },
+      {
+        label: 'Daily Flagship: 1×/day (13 UTC)',
+        runs_per_day: 1,
+        preferred_hours_utc_json: [13],
+        max_posts_per_day: 1,
+        min_novelty_score: 75
+      }
     ];
 
     var state = {
@@ -181,7 +215,11 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
     }
 
     async function apiFetch(url, opts) {
-      var init = Object.assign({ credentials: 'same-origin', headers: {} }, opts || {});
+      var init = Object.assign({ credentials: 'same-origin' }, opts || {});
+      init.headers = Object.assign(
+        { 'X-Requested-With': 'PyvrenAdmin' },
+        (opts && opts.headers) || {}
+      );
       if (init.body && typeof init.body === 'object' && !(init.body instanceof FormData)) {
         init.headers = Object.assign({ 'Content-Type': 'application/json' }, init.headers);
         init.body = JSON.stringify(init.body);
@@ -199,6 +237,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       }
       return data;
     }
+    var api = apiFetch;
 
     function toggleTheme() {
       var root = document.documentElement;
@@ -215,7 +254,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
 
     async function checkAuthStatus() {
       try {
-        var res = await apiFetch('/api/admin/auth/status');
+        var res = await api('/api/admin/auth/status');
         state.auth = {
           loading: false,
           initialized: Boolean(res && res.initialized),
@@ -285,10 +324,14 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         state.runs = Array.isArray(res) ? res : ((res && res.runs) || []);
         var stillActive = hasActiveRuns(state.runs);
         if (prevActive && !stillActive) {
-          // A run just finished; also refresh posts so the newly drafted/published briefing appears immediately
           var postsRes = await apiFetch('/api/admin/posts');
           state.posts = Array.isArray(postsRes) ? postsRes : ((postsRes && postsRes.posts) || []);
-          toast('Agent run finished — briefings updated', 'success');
+          var latestRun = state.runs && state.runs[0];
+          if (latestRun && latestRun.status === 'skipped') {
+            toast('Agent triage skipped writing — ' + (latestRun.decision_reason || 'no qualifying breaking news'), 'info');
+          } else {
+            toast('Agent run finished — briefings updated', 'success');
+          }
         }
         syncPolling();
         if (state.activeTab === 'agent' || state.activeTab === 'posts') {
@@ -717,6 +760,10 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
             '<div class="md:col-span-3">' +
               '<button type="submit" ' + (state.dispatching ? 'disabled' : '') + ' class="btn-accent w-full py-2.5">' + (state.dispatching ? 'Dispatching...' : 'Run Agent') + '</button>' +
             '</div>' +
+            '<div class="md:col-span-12 pt-1 flex items-center gap-2.5">' +
+              '<input id="ag-force" name="force" type="checkbox" class="h-4 w-4 accent-[var(--accent)]">' +
+              '<label for="ag-force" class="text-xs font-medium text-ink-secondary cursor-pointer">Force Write (Bypass No-News / Duplicate Skip Gate)</label>' +
+            '</div>' +
           '</form>' +
         '</div>' +
 
@@ -738,11 +785,15 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
 
     function renderRunRow(run) {
       var expanded = Boolean(state.expandedRunIds[run.id]);
+      var isSkipped = run.status === 'skipped';
       var statusClass = run.status === 'completed'
         ? 'badge-success'
         : run.status === 'failed'
           ? 'badge-danger'
-          : 'badge-accent';
+          : isSkipped
+            ? 'badge-warning'
+            : 'badge-accent';
+      var statusLabel = isSkipped ? 'SKIPPED' : run.status;
       var trace = Array.isArray(run.trace_json) ? run.trace_json : [];
       var usage = run.token_usage_json || {};
       var totalTokens = usage.total_tokens || ((usage.prompt_tokens || 0) + (usage.completion_tokens || 0));
@@ -751,7 +802,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         '<div class="p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">' +
           '<div class="space-y-2 min-w-0 flex-1">' +
             '<div class="flex flex-wrap items-center gap-1.5">' +
-              '<span class="badge-editorial ' + statusClass + '">' + esc(run.status) + '</span>' +
+              '<span class="badge-editorial ' + statusClass + '">' + esc(statusLabel) + '</span>' +
               '<span class="badge-editorial">Stage: ' + esc(run.current_stage || 'init') + '</span>' +
               '<span class="badge-editorial badge-accent">' + esc(run.category_slug || 'auto') + '</span>' +
               '<span class="badge-editorial">' + esc(run.trigger_source || 'manual') + '</span>' +
@@ -768,6 +819,14 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
               '<span>Started ' + esc(fmtDate(run.created_at)) + '</span>' +
               (run.completed_at ? '<span>&middot;</span><span>Finished ' + esc(fmtDate(run.completed_at)) + '</span>' : '') +
             '</div>' +
+            (run.decision_reason
+              ? '<div class="rounded-[4px] border ' + (isSkipped ? 'border-[var(--border-strong)] bg-subtle' : 'border-hairline bg-subtle/60') + ' px-3 py-2 text-xs text-ink-secondary">' +
+                  '<strong class="font-tabular uppercase tracking-wider text-[10px] ' + (isSkipped ? 'text-[var(--warning)]' : 'text-ink-muted') + ' mr-1.5">' +
+                    (isSkipped ? 'SKIPPED — Editorial Triage:' : 'Editorial Decision:') +
+                  '</strong>' +
+                  esc(run.decision_reason) +
+                '</div>'
+              : '') +
             (run.error_message ? '<p class="text-xs text-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 rounded-[4px]">' + esc(run.error_message) + '</p>' : '') +
           '</div>' +
 
@@ -867,6 +926,10 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
 
     function renderSettingsTab() {
       var s = state.settings || {};
+      var prefHoursVal = Array.isArray(s.preferred_hours_utc_json) && s.preferred_hours_utc_json.length > 0
+        ? s.preferred_hours_utc_json.join(', ')
+        : '8, 14, 20';
+
       return '<section class="space-y-6">' +
         '<div class="pb-4 border-b border-strong">' +
           '<h1 class="font-editorial text-2xl sm:text-3xl font-semibold text-ink">Settings &amp; Autonomous Schedule</h1>' +
@@ -876,6 +939,21 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         '<form id="settings-form" class="space-y-6">' +
           '<div class="editorial-card p-6 space-y-4">' +
             '<h2 class="font-tabular text-xs uppercase tracking-[0.14em] text-accent font-semibold">Publishing Gate &amp; Schedule</h2>' +
+
+            '<div class="rounded-[5px] border border-hairline bg-subtle/60 p-4 space-y-2.5">' +
+              '<p class="font-tabular text-[11px] uppercase tracking-wider text-ink-muted font-semibold">Recommended Editorial Schedule Presets</p>' +
+              '<div class="flex flex-wrap items-center gap-2">' +
+                SCHEDULE_PRESETS.map(function (sp, idx) {
+                  return '<button type="button" data-action="apply-schedule-preset" data-schedule-preset="' + idx + '" class="' +
+                    (idx === 0
+                      ? 'px-3 py-1.5 rounded-[4px] border border-[var(--accent)] bg-surface text-xs font-semibold text-accent hover:bg-subtle cursor-pointer transition-colors'
+                      : 'px-3 py-1.5 rounded-[4px] border border-hairline bg-surface hover:border-strong text-xs text-ink-secondary cursor-pointer transition-colors') +
+                  '">' + esc(sp.label) + '</button>';
+                }).join('') +
+              '</div>' +
+              '<p class="text-xs text-ink-muted leading-relaxed">Scheduled runs act as an Editorial Triage Desk—if there is no genuine breaking news or all items overlap with past posts, the agent logs a clean SKIPPED run without generating filler.</p>' +
+            '</div>' +
+
             '<div class="grid grid-cols-1 md:grid-cols-2 gap-4">' +
               '<div class="space-y-1.5">' +
                 '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-mode">Publishing Mode</label>' +
@@ -890,11 +968,23 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
               '</div>' +
               '<div class="space-y-1.5">' +
                 '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-rpd">Scheduled Runs Per Day (1–24)</label>' +
-                '<input id="st-rpd" name="runs_per_day" type="number" min="1" max="24" value="' + esc(s.runs_per_day != null ? s.runs_per_day : 2) + '" class="admin-input">' +
+                '<input id="st-rpd" name="runs_per_day" type="number" min="1" max="24" value="' + esc(s.runs_per_day != null ? s.runs_per_day : 3) + '" class="admin-input">' +
               '</div>' +
-              '<div class="flex items-center gap-3 pt-6">' +
+              '<div class="space-y-1.5">' +
+                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-hours">Preferred UTC Hours <span class="normal-case text-ink-faint">(comma-separated 0-23, e.g. 8, 14, 20)</span></label>' +
+                '<input id="st-hours" name="preferred_hours_utc" type="text" value="' + esc(prefHoursVal) + '" placeholder="8, 14, 20" class="admin-input font-tabular">' +
+              '</div>' +
+              '<div class="space-y-1.5">' +
+                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-max-posts">Max Posts Per Day (1–24)</label>' +
+                '<input id="st-max-posts" name="max_posts_per_day" type="number" min="1" max="24" value="' + esc(s.max_posts_per_day != null ? s.max_posts_per_day : 2) + '" class="admin-input">' +
+              '</div>' +
+              '<div class="space-y-1.5">' +
+                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-novelty">Min News Novelty Score <span class="normal-case text-ink-faint">(0-100, skips writing below threshold)</span></label>' +
+                '<input id="st-novelty" name="min_novelty_score" type="number" min="0" max="100" value="' + esc(s.min_novelty_score != null ? s.min_novelty_score : 68) + '" class="admin-input">' +
+              '</div>' +
+              '<div class="flex items-center gap-3 pt-2 md:col-span-2">' +
                 '<input id="st-sched" name="schedule_enabled" type="checkbox"' + (s.schedule_enabled ? ' checked' : '') + ' class="h-4 w-4 accent-[var(--accent)]">' +
-                '<label for="st-sched" class="text-sm font-medium text-ink">Enable Autonomous Cron Schedule</label>' +
+                '<label for="st-sched" class="text-sm font-medium text-ink cursor-pointer">Enable Autonomous Cron Schedule</label>' +
               '</div>' +
             '</div>' +
             '<div class="space-y-1.5">' +
@@ -1472,6 +1562,21 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
             if (cEl) cEl.value = preset.category;
             if (aEl) aEl.value = preset.archetype;
           }
+        } else if (action === 'apply-schedule-preset') {
+          var sp = SCHEDULE_PRESETS[Number(target.getAttribute('data-schedule-preset'))];
+          if (sp) {
+            var rpdEl = document.getElementById('st-rpd');
+            var hrsEl = document.getElementById('st-hours');
+            var maxEl = document.getElementById('st-max-posts');
+            var novEl = document.getElementById('st-novelty');
+            var schEl = document.getElementById('st-sched');
+            if (rpdEl) rpdEl.value = String(sp.runs_per_day);
+            if (hrsEl) hrsEl.value = sp.preferred_hours_utc_json.join(', ');
+            if (maxEl) maxEl.value = String(sp.max_posts_per_day);
+            if (novEl) novEl.value = String(sp.min_novelty_score);
+            if (schEl) schEl.checked = true;
+            toast('Schedule preset applied — click Save Settings to persist', 'success');
+          }
         } else if (action === 'new-skill') {
           openSkillEditorModal(null);
         } else if (action === 'edit-skill') {
@@ -1594,6 +1699,8 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
           await loadAllWorkspaceData();
         } else if (form.id === 'agent-run-form') {
           var afd = new FormData(form);
+          var forceCheckbox = form.querySelector('[name="force"]');
+          var forceEnabled = Boolean(forceCheckbox && forceCheckbox.checked);
           state.dispatching = true;
           render();
           try {
@@ -1601,10 +1708,11 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
               topic: String(afd.get('topic') || '').trim() || undefined,
               category_slug: String(afd.get('category_slug') || '').trim() || undefined,
               archetype: String(afd.get('archetype') || 'auto'),
-              model_override: String(afd.get('model_override') || '').trim() || undefined
+              model_override: String(afd.get('model_override') || '').trim() || undefined,
+              force: forceEnabled || undefined
             };
             await apiFetch('/api/admin/agent/run', { method: 'POST', body: dispatchBody });
-            toast('Research agent dispatched', 'success');
+            toast(forceEnabled ? 'Research agent force-dispatched' : 'Research agent dispatched', 'success');
             await refreshRunsOnly();
           } finally {
             state.dispatching = false;
@@ -1655,12 +1763,39 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
           await loadAllWorkspaceData();
         } else if (form.id === 'settings-form') {
           var stfd = new FormData(form);
+          var rawHoursStr = String(stfd.get('preferred_hours_utc') || '').trim();
+          var parsedHours = [];
+          if (rawHoursStr) {
+            var hourSeen = {};
+            rawHoursStr.split(',').forEach(function (part) {
+              var trimmed = part.trim();
+              if (!trimmed) return;
+              var hr = Number(trimmed);
+              if (!Number.isInteger(hr) || hr < 0 || hr > 23) {
+                throw new Error('Preferred UTC Hours must be integers between 0 and 23 (e.g. 8, 14, 20).');
+              }
+              if (!hourSeen[hr]) {
+                hourSeen[hr] = true;
+                parsedHours.push(hr);
+              }
+            });
+            parsedHours.sort(function (a, b) { return a - b; });
+          }
+
+          var rawNovelty = stfd.get('min_novelty_score');
+          var parsedNovelty = (rawNovelty == null || String(rawNovelty).trim() === '')
+            ? 68
+            : Math.max(0, Math.min(100, Math.round(Number(rawNovelty))));
+
           var patch = {
             publishing_mode: String(stfd.get('publishing_mode') || 'draft_review'),
             min_publish_score: Math.max(50, Math.min(100, Math.round(Number(stfd.get('min_publish_score') || 80)))),
             free_models_only: form.querySelector('[name="free_models_only"]').checked,
             schedule_enabled: form.querySelector('[name="schedule_enabled"]').checked,
-            runs_per_day: Math.max(1, Math.min(24, Math.round(Number(stfd.get('runs_per_day') || 2)))),
+            runs_per_day: Math.max(1, Math.min(24, Math.round(Number(stfd.get('runs_per_day') || 3)))),
+            preferred_hours_utc_json: parsedHours,
+            max_posts_per_day: Math.max(1, Math.min(24, Math.round(Number(stfd.get('max_posts_per_day') || 2)))),
+            min_novelty_score: parsedNovelty,
             adsense_client_id: String(stfd.get('adsense_client_id') || '').trim() || null
           };
           var optStrings = [

@@ -946,3 +946,165 @@ export async function computeEtag(parts: string[]): Promise<string> {
   }
   return `"${hex}"`;
 }
+
+// ---------------------------------------------------------------------------
+// Bounded Edge Rate Limiting, Client IP, CSRF Origin Guard & Security Headers
+// ---------------------------------------------------------------------------
+
+export interface RateLimitResult {
+  allowed: boolean;
+  remaining: number;
+  retryAfterSeconds: number;
+}
+
+interface RateLimitBucket {
+  count: number;
+  resetAt: number;
+}
+
+const MAX_RATE_LIMIT_KEYS = 4_000;
+const rateLimitBuckets = new Map<string, RateLimitBucket>();
+
+function evictRateLimitBucketsIfNeeded(now: number): void {
+  if (rateLimitBuckets.size < MAX_RATE_LIMIT_KEYS) {
+    return;
+  }
+
+  for (const [k, bucket] of rateLimitBuckets) {
+    if (bucket.resetAt <= now) {
+      rateLimitBuckets.delete(k);
+    }
+  }
+
+  while (rateLimitBuckets.size >= MAX_RATE_LIMIT_KEYS) {
+    const oldestKey = rateLimitBuckets.keys().next().value;
+    if (oldestKey === undefined) break;
+    rateLimitBuckets.delete(oldestKey);
+  }
+}
+
+export function checkRateLimit(
+  key: string,
+  limit: number,
+  windowMs: number,
+): RateLimitResult {
+  const safeLimit = Math.max(1, Math.floor(limit));
+  const safeWindowMs = Math.max(100, Math.floor(windowMs));
+  const now = Date.now();
+
+  const existing = rateLimitBuckets.get(key);
+  if (existing && existing.resetAt > now) {
+    if (existing.count >= safeLimit) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((existing.resetAt - now) / 1000));
+      return {
+        allowed: false,
+        remaining: 0,
+        retryAfterSeconds,
+      };
+    }
+
+    existing.count += 1;
+    return {
+      allowed: true,
+      remaining: Math.max(0, safeLimit - existing.count),
+      retryAfterSeconds: 0,
+    };
+  }
+
+  if (existing) {
+    rateLimitBuckets.delete(key);
+  }
+
+  evictRateLimitBucketsIfNeeded(now);
+  rateLimitBuckets.set(key, {
+    count: 1,
+    resetAt: now + safeWindowMs,
+  });
+
+  return {
+    allowed: true,
+    remaining: Math.max(0, safeLimit - 1),
+    retryAfterSeconds: 0,
+  };
+}
+
+export function resetRateLimitsForTests(): void {
+  rateLimitBuckets.clear();
+}
+
+export function extractClientIp(req: Request): string {
+  const cfIp = req.headers.get('cf-connecting-ip')?.trim();
+  if (cfIp) {
+    return cfIp;
+  }
+
+  const forwardedFor = req.headers.get('x-forwarded-for');
+  if (forwardedFor) {
+    const firstIp = forwardedFor.split(',')[0]?.trim();
+    if (firstIp) {
+      return firstIp;
+    }
+  }
+
+  return '127.0.0.1';
+}
+
+export interface CsrfOriginResult {
+  ok: boolean;
+  reason?: string;
+}
+
+const CSRF_SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+export function verifyCsrfOrigin(req: Request): CsrfOriginResult {
+  const method = (req.method || 'GET').toUpperCase();
+  if (CSRF_SAFE_METHODS.has(method)) {
+    return { ok: true };
+  }
+
+  const secFetchSite = req.headers.get('sec-fetch-site')?.trim().toLowerCase();
+  if (secFetchSite === 'cross-site') {
+    return { ok: false, reason: 'Cross-site request blocked by Sec-Fetch-Site.' };
+  }
+
+  const originHeader = req.headers.get('origin')?.trim();
+  const refererHeader = req.headers.get('referer')?.trim();
+  const candidate = originHeader || refererHeader;
+
+  if (!candidate) {
+    return { ok: true };
+  }
+
+  let targetHost: string;
+  let sourceHost: string;
+  try {
+    targetHost = new URL(req.url).host.toLowerCase();
+    sourceHost = new URL(candidate).host.toLowerCase();
+  } catch {
+    return { ok: false, reason: 'Origin mismatch (CSRF guard).' };
+  }
+
+  if (!sourceHost || sourceHost !== targetHost) {
+    return { ok: false, reason: 'Origin mismatch (CSRF guard).' };
+  }
+
+  return { ok: true };
+}
+
+export interface SecurityHeadersOptions {
+  allowSameOriginFrame?: boolean;
+}
+
+export function buildSecurityHeaders(opts?: SecurityHeadersOptions): Record<string, string> {
+  const allowSameOrigin = Boolean(opts?.allowSameOriginFrame);
+  return {
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+    'X-Frame-Options': allowSameOrigin ? 'SAMEORIGIN' : 'DENY',
+    'Content-Security-Policy': allowSameOrigin
+      ? "frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
+      : "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
+    'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+  };
+}

@@ -24,6 +24,9 @@ export const DEFAULT_SEEDED_SETTINGS: SiteSettings = {
   free_models_only: true,
   schedule_enabled: false,
   runs_per_day: 3,
+  preferred_hours_utc_json: [8, 14, 20],
+  max_posts_per_day: 2,
+  min_novelty_score: 68,
   openrouter_model: 'openrouter/free',
   judge_model: 'openrouter/free',
   default_topic_feed:
@@ -58,7 +61,7 @@ export const DEFAULT_SEEDED_SKILLS: CategorySkill[] = [
       'Staff software engineers, developer-platform leads, and teams adopting autonomous coding workflows',
     system_instructions:
       'Write like a staff engineer who actually runs terminal agents and MCP servers in CI. Ground claims in concrete numbers: SWE-bench Pro / Terminal-Bench 2.0 pass rates, exact token overhead (CLI vs MCP schema loading), exit-code feedback loops, OAuth/multi-tenant boundaries, and real config snippets (JSON/TOML/CLI). Always include an explicit "When NOT to use this" engineering tradeoff section. Mix short 6-10 word verdicts with deeper architectural explanations. Never use filler transitions like Furthermore/Moreover/Additionally or walls of bold-colon bullets.',
-    research_feeds_json: ['hn_top_infra', 'github_advisories', 'arxiv_ai'],
+    research_feeds_json: ['github_trending_ai_agents', 'hn_ai_coding', 'arxiv_ai'],
     search_queries_json: [
       'CLI coding agents vs IDE Terminal-Bench SWE-bench Pro 2026 benchmark',
       'MCP Model Context Protocol token overhead security OAuth production',
@@ -100,7 +103,7 @@ export const DEFAULT_SEEDED_SKILLS: CategorySkill[] = [
       'Application security engineers, AI red-teamers, CISOs, and developers shipping tool-calling agents',
     system_instructions:
       'Write strictly from a defensive security engineering perspective (100% AdSense and safety compliant). Analyze real failure mechanics—indirect prompt injection via fetched web/tool outputs, multi-turn guardrail drift, unauthenticated MCP servers, data exfiltration channels, and privilege escalation in autonomous agents—citing OWASP LLM Top 10, NIST AI RMF, Anthropic/Google threat intelligence, and arXiv security papers. NEVER publish weaponized exploit strings or bypass recipes. Always deliver: (1) an explicit threat model table mapping attack surface -> blast radius -> concrete control, (2) runnable defensive code/policy/sandbox config, and (3) latency/false-positive overhead numbers for guardrails.',
-    research_feeds_json: ['arxiv_ai_sec', 'github_advisories', 'cisa_kev'],
+    research_feeds_json: ['arxiv_ai_sec', 'github_advisories_ai', 'hn_ai_security', 'cisa_kev'],
     search_queries_json: [
       'OWASP LLM Top 10 indirect prompt injection tool calling defense',
       'MCP server authentication vulnerability security audit mitigation',
@@ -141,7 +144,12 @@ export const DEFAULT_SEEDED_SKILLS: CategorySkill[] = [
     target_audience: 'ML infrastructure engineers, AI architects, and cost-conscious product teams',
     system_instructions:
       'Lead with hard numbers: tokens/second, TTFT, $/1M input & output tokens, VRAM footprint at FP8/Q4_K_M, effective context accuracy before context rot (~32K+ tokens), and real latency tradeoffs across vLLM, SGLang, llama.cpp, or OpenRouter routing. Compare at least 3 models or runtimes in a crisp Markdown table. Explain exact failure modes (context poisoning, distraction, KV-cache OOM) rather than repeating vendor press releases. Vary sentence length naturally like a real benchmark engineer.',
-    research_feeds_json: ['huggingface_trending', 'arxiv_ai', 'hn_top_infra'],
+    research_feeds_json: [
+      'openrouter_newest_models',
+      'huggingface_trending',
+      'github_llm_releases',
+      'arxiv_ai',
+    ],
     search_queries_json: [
       'open weights local LLM coding benchmark quantization VRAM tokens per second',
       'context engineering context rot long context benchmark LLM',
@@ -181,7 +189,7 @@ export const DEFAULT_SEEDED_SKILLS: CategorySkill[] = [
     target_audience: 'Platform engineers, SREs, staff backend engineers, and FinOps architects',
     system_instructions:
       'Anchor every paragraph in verified platform limits, cold-start milliseconds, egress math, and hourly $/GPU or $/million-request pricing tables. Include real copy-pasteable configs (`wrangler.jsonc`, SQL RLS/indexes, Terraform, or curl benchmarks). Explicitly expose hidden billing traps (idle compute wakeups, egress fees, per-step workflow retries, connection pool exhaustion) and state exact thresholds where containers or bare-metal beat serverless.',
-    research_feeds_json: ['hn_top_infra', 'github_advisories'],
+    research_feeds_json: ['cloudflare_changelog_rss', 'hn_cloud_gpu', 'hn_top_infra'],
     search_queries_json: [
       'Cloudflare Workers Workflows CPU limits durable execution pricing benchmark',
       'cloud GPU H100 B200 hourly spot pricing comparison 2026',
@@ -215,7 +223,7 @@ export const DEFAULT_SEEDED_SKILLS: CategorySkill[] = [
     target_audience: 'AI search engineers, data pipeline architects, and technical SEO/GEO leads',
     system_instructions:
       'Focus on measurable retrieval quality: extraction fidelity on tables and code blocks, token savings vs raw HTML, anti-bot / SSRF boundaries, latency per URL, and how ChatGPT Search, Gemini, and Perplexity parse structured JSON-LD, Markdown mirrors, and llms.txt. Provide real curl/TypeScript/Python snippets and comparative extraction tables. Avoid marketing fluff or SEO folklore without primary documentation.',
-    research_feeds_json: ['hn_top_infra', 'arxiv_ai'],
+    research_feeds_json: ['github_trending_web_agents', 'arxiv_ir_rag', 'hn_top_infra'],
     search_queries_json: [
       'AI agent live web data retrieval benchmark Firecrawl Jina Playwright',
       'llms.txt structured data GEO AI search citation study 2026',
@@ -381,6 +389,55 @@ function normalizeAdminRow(row: AdminUser): AdminUser {
   };
 }
 
+function normalizePreferredHoursUtc(raw: unknown): number[] {
+  let candidate: unknown = raw;
+  if (typeof candidate === 'string') {
+    const trimmed = candidate.trim();
+    if (!trimmed) {
+      return [...DEFAULT_SEEDED_SETTINGS.preferred_hours_utc_json];
+    }
+    try {
+      candidate = JSON.parse(trimmed);
+    } catch {
+      return [...DEFAULT_SEEDED_SETTINGS.preferred_hours_utc_json];
+    }
+  }
+
+  if (!Array.isArray(candidate)) {
+    return [...DEFAULT_SEEDED_SETTINGS.preferred_hours_utc_json];
+  }
+
+  // Preserve explicit empty array [] so interval-based scheduling remains selectable
+  if (candidate.length === 0) {
+    return [];
+  }
+
+  const validHours = new Set<number>();
+  for (const item of candidate) {
+    const num = typeof item === 'number' ? item : Number(item);
+    if (Number.isInteger(num) && num >= 0 && num <= 23) {
+      validHours.add(num);
+    }
+  }
+
+  if (validHours.size === 0) {
+    return [...DEFAULT_SEEDED_SETTINGS.preferred_hours_utc_json];
+  }
+
+  return Array.from(validHours).sort((a, b) => a - b);
+}
+
+function clampInteger(raw: unknown, fallback: number, min: number, max: number): number {
+  if (raw === undefined || raw === null || raw === '') {
+    return fallback;
+  }
+  const num = Number(raw);
+  if (!Number.isFinite(num)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, Math.round(num)));
+}
+
 function normalizeSettingsRow(row: Partial<SiteSettings>): SiteSettings {
   return {
     ...DEFAULT_SEEDED_SETTINGS,
@@ -391,7 +448,20 @@ function normalizeSettingsRow(row: Partial<SiteSettings>): SiteSettings {
       row.free_models_only === undefined || row.free_models_only === null
         ? DEFAULT_SEEDED_SETTINGS.free_models_only
         : Boolean(row.free_models_only),
-    runs_per_day: Number(row.runs_per_day ?? DEFAULT_SEEDED_SETTINGS.runs_per_day),
+    runs_per_day: clampInteger(row.runs_per_day, DEFAULT_SEEDED_SETTINGS.runs_per_day, 1, 24),
+    preferred_hours_utc_json: normalizePreferredHoursUtc(row.preferred_hours_utc_json),
+    max_posts_per_day: clampInteger(
+      row.max_posts_per_day,
+      DEFAULT_SEEDED_SETTINGS.max_posts_per_day,
+      1,
+      24,
+    ),
+    min_novelty_score: clampInteger(
+      row.min_novelty_score,
+      DEFAULT_SEEDED_SETTINGS.min_novelty_score,
+      0,
+      100,
+    ),
     schedule_enabled: Boolean(row.schedule_enabled ?? DEFAULT_SEEDED_SETTINGS.schedule_enabled),
     adsense_client_id: row.adsense_client_id ?? null,
     last_scheduled_run_at: row.last_scheduled_run_at ?? null,
@@ -427,6 +497,8 @@ function normalizePostRow(row: PostRecord): PostRecord {
     tldr_summary: row.tldr_summary ?? '',
     key_facts_json: Array.isArray(row.key_facts_json) ? row.key_facts_json : [],
     faq_json: Array.isArray(row.faq_json) ? row.faq_json : [],
+    body_markdown: row.body_markdown ?? '',
+    body_html: row.body_html ?? '',
     tags_json: Array.isArray(row.tags_json) ? row.tags_json : [],
     keywords_json: Array.isArray(row.keywords_json) ? row.keywords_json : [],
     sources_json: Array.isArray(row.sources_json) ? row.sources_json : [],
@@ -452,18 +524,30 @@ function normalizePostRow(row: PostRecord): PostRecord {
   };
 }
 
+const VALID_AGENT_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
+  'queued',
+  'running',
+  'completed',
+  'skipped',
+  'failed',
+]);
+
 function normalizeAgentRunRow(row: AgentRunRecord): AgentRunRecord {
+  const status: AgentRunStatus = VALID_AGENT_RUN_STATUSES.has(row.status) ? row.status : 'running';
   return {
     ...row,
     id: Number(row.id),
     workflow_instance_id: row.workflow_instance_id ?? null,
+    status,
     trace_json: Array.isArray(row.trace_json) ? row.trace_json : [],
-    quality_score: row.quality_score === null || row.quality_score === undefined
-      ? null
-      : Number(row.quality_score),
+    quality_score:
+      row.quality_score === null || row.quality_score === undefined
+        ? null
+        : Number(row.quality_score),
     post_id: row.post_id === null || row.post_id === undefined ? null : Number(row.post_id),
     token_usage_json:
       row.token_usage_json && typeof row.token_usage_json === 'object' ? row.token_usage_json : {},
+    decision_reason: row.decision_reason ?? null,
     error_message: row.error_message ?? null,
     completed_at: row.completed_at ?? null,
   };
@@ -472,6 +556,79 @@ function normalizeAgentRunRow(row: AgentRunRecord): AgentRunRecord {
 function sanitizePostgrestSearchToken(input: string): string {
   // Strip PostgREST filter syntax delimiters to prevent filter injection
   return input.replace(/[(),*"'\\]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// ---------------------------------------------------------------------------
+// 25s Isolate Read Cache & Lightweight Projection Constants
+// ---------------------------------------------------------------------------
+
+const SUPABASE_READ_CACHE_TTL_MS = 25_000;
+const MAX_SUPABASE_CACHE_ENTRIES = 64;
+
+const LIGHTWEIGHT_POST_COLUMNS =
+  'id,slug,title,description,tldr_summary,key_facts_json,faq_json,body_markdown,author,category_slug,archetype,tags_json,keywords_json,sources_json,review_notes_json,lint_passed,lint_errors_json,quality_score,quality_breakdown_json,reading_time_minutes,word_count,status,admin_locked,last_edited_by,published_at,created_at,updated_at';
+
+interface CacheEntry<T> {
+  value: T;
+  expiresAt: number;
+}
+
+const settingsReadCache = new Map<string, CacheEntry<SiteSettings>>();
+const skillsReadCache = new Map<string, CacheEntry<CategorySkill[]>>();
+
+function cloneSettings(s: SiteSettings): SiteSettings {
+  return {
+    ...s,
+    preferred_hours_utc_json: [...s.preferred_hours_utc_json],
+  };
+}
+
+function cloneSkill(s: CategorySkill): CategorySkill {
+  return {
+    ...s,
+    research_feeds_json: [...s.research_feeds_json],
+    search_queries_json: [...s.search_queries_json],
+    preferred_archetypes_json: [...s.preferred_archetypes_json],
+    required_sections_json: [...s.required_sections_json],
+    quality_rubric_json: { ...s.quality_rubric_json },
+    banned_patterns_json: [...s.banned_patterns_json],
+  };
+}
+
+function setBoundedCacheEntry<T>(
+  map: Map<string, CacheEntry<T>>,
+  key: string,
+  value: T,
+  ttlMs: number,
+): void {
+  const now = Date.now();
+  if (map.size >= MAX_SUPABASE_CACHE_ENTRIES && !map.has(key)) {
+    for (const [k, entry] of map) {
+      if (entry.expiresAt <= now) {
+        map.delete(k);
+      }
+    }
+    while (map.size >= MAX_SUPABASE_CACHE_ENTRIES) {
+      const oldest = map.keys().next().value;
+      if (oldest === undefined) break;
+      map.delete(oldest);
+    }
+  }
+  map.set(key, { value, expiresAt: now + ttlMs });
+}
+
+function invalidateSettingsCache(restBaseUrl: string): void {
+  settingsReadCache.delete(restBaseUrl);
+}
+
+function invalidateSkillsCache(restBaseUrl: string): void {
+  skillsReadCache.delete(`${restBaseUrl}::enabled`);
+  skillsReadCache.delete(`${restBaseUrl}::all`);
+}
+
+export function clearSupabaseReadCache(): void {
+  settingsReadCache.clear();
+  skillsReadCache.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -610,23 +767,49 @@ export class SupabaseRestDatabase implements DatabaseAdapter {
 
   // Settings
   async getSettings(): Promise<SiteSettings> {
+    const cached = settingsReadCache.get(this.restBaseUrl);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cloneSettings(cached.value);
+    }
+
     const { data } = await this.requestJson<SiteSettings[]>(
       '/site_settings?id=eq.1&select=*&limit=1',
     );
     if (data && data.length > 0) {
-      return normalizeSettingsRow(data[0]);
+      const normalized = normalizeSettingsRow(data[0]);
+      setBoundedCacheEntry(
+        settingsReadCache,
+        this.restBaseUrl,
+        cloneSettings(normalized),
+        SUPABASE_READ_CACHE_TTL_MS,
+      );
+      return cloneSettings(normalized);
     }
-    const { data: seeded } = await this.requestJson<SiteSettings[]>('/site_settings?on_conflict=id', {
-      method: 'POST',
-      prefer: 'resolution=merge-duplicates,return=representation',
-      body: { id: 1 },
-    });
-    return seeded && seeded.length > 0
-      ? normalizeSettingsRow(seeded[0])
-      : structuredClone(DEFAULT_SEEDED_SETTINGS);
+
+    const { data: seeded } = await this.requestJson<SiteSettings[]>(
+      '/site_settings?on_conflict=id',
+      {
+        method: 'POST',
+        prefer: 'resolution=merge-duplicates,return=representation',
+        body: { id: 1 },
+      },
+    );
+    const resolved =
+      seeded && seeded.length > 0
+        ? normalizeSettingsRow(seeded[0])
+        : cloneSettings(DEFAULT_SEEDED_SETTINGS);
+
+    setBoundedCacheEntry(
+      settingsReadCache,
+      this.restBaseUrl,
+      cloneSettings(resolved),
+      SUPABASE_READ_CACHE_TTL_MS,
+    );
+    return cloneSettings(resolved);
   }
 
   async updateSettings(patch: Partial<SiteSettings>): Promise<SiteSettings> {
+    invalidateSettingsCache(this.restBaseUrl);
     const { id: _ignoreId, ...rest } = patch;
     const payload = {
       ...rest,
@@ -637,6 +820,7 @@ export class SupabaseRestDatabase implements DatabaseAdapter {
       prefer: 'return=representation',
       body: payload,
     });
+    invalidateSettingsCache(this.restBaseUrl);
     if (data && data.length > 0) {
       return normalizeSettingsRow(data[0]);
     }
@@ -648,6 +832,7 @@ export class SupabaseRestDatabase implements DatabaseAdapter {
         body: { ...DEFAULT_SEEDED_SETTINGS, ...payload, id: 1 },
       },
     );
+    invalidateSettingsCache(this.restBaseUrl);
     return upserted && upserted.length > 0
       ? normalizeSettingsRow(upserted[0])
       : normalizeSettingsRow(payload);
@@ -655,11 +840,24 @@ export class SupabaseRestDatabase implements DatabaseAdapter {
 
   // Skills
   async listSkills(onlyEnabled = false): Promise<CategorySkill[]> {
+    const cacheKey = `${this.restBaseUrl}::${onlyEnabled ? 'enabled' : 'all'}`;
+    const cached = skillsReadCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value.map(cloneSkill);
+    }
+
     const filter = onlyEnabled ? '&enabled=eq.true' : '';
     const { data } = await this.requestJson<CategorySkill[]>(
       `/category_skills?select=*${filter}&order=priority.desc,slug.asc`,
     );
-    return (data ?? []).map(normalizeSkillRow);
+    const normalized = (data ?? []).map(normalizeSkillRow);
+    setBoundedCacheEntry(
+      skillsReadCache,
+      cacheKey,
+      normalized.map(cloneSkill),
+      SUPABASE_READ_CACHE_TTL_MS,
+    );
+    return normalized.map(cloneSkill);
   }
 
   async getSkillBySlug(slug: string): Promise<CategorySkill | null> {
@@ -677,6 +875,7 @@ export class SupabaseRestDatabase implements DatabaseAdapter {
       system_instructions: string;
     },
   ): Promise<CategorySkill> {
+    invalidateSkillsCache(this.restBaseUrl);
     const { id: _ignoreId, created_at: _ignoreCreated, ...rest } = skill;
     const cleanSlug = slugify(skill.slug, 64) || skill.slug.trim().toLowerCase();
 
@@ -712,6 +911,7 @@ export class SupabaseRestDatabase implements DatabaseAdapter {
         body,
       },
     );
+    invalidateSkillsCache(this.restBaseUrl);
     if (!data || data.length === 0) {
       throw new Error(`Failed to upsert skill "${cleanSlug}"`);
     }
@@ -719,6 +919,7 @@ export class SupabaseRestDatabase implements DatabaseAdapter {
   }
 
   async deleteSkill(slug: string): Promise<boolean> {
+    invalidateSkillsCache(this.restBaseUrl);
     const { data } = await this.requestJson<CategorySkill[]>(
       `/category_skills?slug=eq.${encodeURIComponent(slug)}`,
       {
@@ -726,6 +927,7 @@ export class SupabaseRestDatabase implements DatabaseAdapter {
         prefer: 'return=representation',
       },
     );
+    invalidateSkillsCache(this.restBaseUrl);
     return Array.isArray(data) && data.length > 0;
   }
 
@@ -736,8 +938,12 @@ export class SupabaseRestDatabase implements DatabaseAdapter {
     limit?: number;
     offset?: number;
     search?: string;
+    excludeHeavyHtml?: boolean;
   }): Promise<PostRecord[]> {
-    const params: string[] = ['select=*'];
+    const selectParam = opts?.excludeHeavyHtml
+      ? `select=${LIGHTWEIGHT_POST_COLUMNS}`
+      : 'select=*';
+    const params: string[] = [selectParam];
     if (opts?.status) {
       params.push(`status=eq.${encodeURIComponent(opts.status)}`);
     }
@@ -902,7 +1108,10 @@ export class SupabaseRestDatabase implements DatabaseAdapter {
     model_used: string;
     status?: AgentRunStatus;
     current_stage?: string;
+    decision_reason?: string | null;
   }): Promise<AgentRunRecord> {
+    const status: AgentRunStatus =
+      run.status && VALID_AGENT_RUN_STATUSES.has(run.status) ? run.status : 'running';
     const { data } = await this.requestJson<AgentRunRecord[]>('/agent_runs', {
       method: 'POST',
       prefer: 'return=representation',
@@ -913,12 +1122,13 @@ export class SupabaseRestDatabase implements DatabaseAdapter {
         topic: run.topic,
         archetype: run.archetype,
         model_used: run.model_used,
-        status: run.status ?? 'running',
+        status,
         current_stage: run.current_stage ?? 'initializing',
         trace_json: [],
         quality_score: null,
         post_id: null,
         token_usage_json: {},
+        decision_reason: run.decision_reason ?? null,
         error_message: null,
         completed_at: null,
       },
@@ -1141,6 +1351,7 @@ export class InMemoryDatabase implements DatabaseAdapter {
     limit?: number;
     offset?: number;
     search?: string;
+    excludeHeavyHtml?: boolean;
   }): Promise<PostRecord[]> {
     const query = opts?.search?.trim().toLowerCase() ?? '';
     let items = Array.from(this.posts.values());
@@ -1183,7 +1394,13 @@ export class InMemoryDatabase implements DatabaseAdapter {
 
     const offset = Math.max(0, Math.floor(opts?.offset ?? 0));
     const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? 50)));
-    return items.slice(offset, offset + limit).map((p) => structuredClone(p));
+    return items.slice(offset, offset + limit).map((p) => {
+      const cloned = structuredClone(p);
+      if (opts?.excludeHeavyHtml) {
+        cloned.body_html = '';
+      }
+      return cloned;
+    });
   }
 
   async countPosts(opts?: { status?: PostStatus; category_slug?: string }): Promise<number> {
@@ -1303,8 +1520,11 @@ export class InMemoryDatabase implements DatabaseAdapter {
     model_used: string;
     status?: AgentRunStatus;
     current_stage?: string;
+    decision_reason?: string | null;
   }): Promise<AgentRunRecord> {
     const now = new Date().toISOString();
+    const status: AgentRunStatus =
+      run.status && VALID_AGENT_RUN_STATUSES.has(run.status) ? run.status : 'running';
     const created: AgentRunRecord = {
       id: this.nextRunId++,
       workflow_instance_id: run.workflow_instance_id ?? null,
@@ -1313,12 +1533,13 @@ export class InMemoryDatabase implements DatabaseAdapter {
       topic: run.topic,
       archetype: run.archetype,
       model_used: run.model_used,
-      status: run.status ?? 'running',
+      status,
       current_stage: run.current_stage ?? 'initializing',
       trace_json: [],
       quality_score: null,
       post_id: null,
       token_usage_json: {},
+      decision_reason: run.decision_reason ?? null,
       error_message: null,
       created_at: now,
       completed_at: null,
@@ -1344,6 +1565,57 @@ export class InMemoryDatabase implements DatabaseAdapter {
     this.agentRuns.set(id, updated);
     return structuredClone(updated);
   }
+}
+
+export async function recoverStaleAndFindActiveRun(
+  db: DatabaseAdapter,
+  staleMinutes = 20,
+): Promise<AgentRunRecord | null> {
+  const runs = await db.listAgentRuns(15);
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const staleThresholdMs = Math.max(1, staleMinutes) * 60 * 1000;
+
+  let activeRun: AgentRunRecord | null = null;
+
+  for (const run of runs) {
+    if (run.status !== 'running' && run.status !== 'queued') {
+      continue;
+    }
+
+    const createdMs = new Date(run.created_at).getTime();
+    const isStale = Number.isFinite(createdMs) && nowMs - createdMs > staleThresholdMs;
+
+    if (isStale) {
+      await db.updateAgentRun(run.id, {
+        status: 'failed',
+        current_stage: 'stale_timeout',
+        error_message: 'Recovered stale agent run exceeding 20-minute window',
+        completed_at: nowIso,
+      });
+    } else if (!activeRun) {
+      activeRun = run;
+    }
+  }
+
+  return activeRun;
+}
+
+export async function countPostsCreatedInLastHours(
+  db: DatabaseAdapter,
+  hours = 24,
+): Promise<number> {
+  const posts = await db.listPosts({ limit: 50, excludeHeavyHtml: true });
+  const cutoffMs = Date.now() - Math.max(0, hours) * 60 * 60 * 1000;
+
+  let count = 0;
+  for (const post of posts) {
+    const createdMs = new Date(post.created_at).getTime();
+    if (Number.isFinite(createdMs) && createdMs >= cutoffMs) {
+      count++;
+    }
+  }
+  return count;
 }
 
 export function createDatabase(env: WorkerEnv): DatabaseAdapter {

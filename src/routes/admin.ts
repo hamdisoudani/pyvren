@@ -11,11 +11,23 @@ import {
   validatePasswordStrength,
   verifyPassword,
 } from '../lib/auth';
-import { AdminAlreadyExistsError, createDatabase, ensureUniqueSlug } from '../lib/db';
+import {
+  AdminAlreadyExistsError,
+  createDatabase,
+  ensureUniqueSlug,
+  recoverStaleAndFindActiveRun,
+} from '../lib/db';
 import { lintPostPayload } from '../lib/linter';
 import { compileMarkdown } from '../lib/markdown';
 import { isFreeOpenRouterModel, listOpenRouterFreeModels } from '../lib/openrouter';
-import { constantTimeEqual, slugify } from '../lib/security';
+import {
+  buildSecurityHeaders,
+  checkRateLimit,
+  constantTimeEqual,
+  extractClientIp,
+  slugify,
+  verifyCsrfOrigin,
+} from '../lib/security';
 import type {
   AgentDispatchPayload,
   Archetype,
@@ -65,27 +77,29 @@ const LOGIN_SCHEMA = z.object({
   password: z.string().min(1),
 });
 
-const SETTINGS_PATCH_SCHEMA = z
-  .object({
-    publishing_mode: z.enum(['draft_review', 'auto_publish']).optional(),
-    min_publish_score: z.number().int().min(50).max(100).optional(),
-    free_models_only: z.boolean().optional(),
-    schedule_enabled: z.boolean().optional(),
-    runs_per_day: z.number().int().min(1).max(24).optional(),
-    openrouter_model: z.string().trim().min(1).max(200).optional(),
-    judge_model: z.string().trim().min(1).max(200).optional(),
-    default_topic_feed: z.string().trim().min(1).max(2000).optional(),
-    default_author: z.string().trim().min(1).max(120).optional(),
-    author_bio: z.string().trim().min(1).max(1000).optional(),
-    site_name: z.string().trim().min(1).max(120).optional(),
-    site_tagline: z.string().trim().min(1).max(500).optional(),
-    base_url: z.string().trim().min(1).max(300).optional(),
-    adsense_client_id: z.string().trim().max(100).nullable().optional(),
-    cta_headline: z.string().trim().min(1).max(240).optional(),
-    cta_body: z.string().trim().min(1).max(800).optional(),
-    cta_url: z.string().trim().min(1).max(300).optional(),
-    contact_email: z.string().trim().email().optional(),
-  });
+const SETTINGS_PATCH_SCHEMA = z.object({
+  publishing_mode: z.enum(['draft_review', 'auto_publish']).optional(),
+  min_publish_score: z.number().int().min(50).max(100).optional(),
+  free_models_only: z.boolean().optional(),
+  schedule_enabled: z.boolean().optional(),
+  runs_per_day: z.number().int().min(1).max(24).optional(),
+  preferred_hours_utc_json: z.array(z.number().int().min(0).max(23)).max(24).optional(),
+  max_posts_per_day: z.number().int().min(1).max(24).optional(),
+  min_novelty_score: z.number().int().min(0).max(100).optional(),
+  openrouter_model: z.string().trim().min(1).max(200).optional(),
+  judge_model: z.string().trim().min(1).max(200).optional(),
+  default_topic_feed: z.string().trim().min(1).max(2000).optional(),
+  default_author: z.string().trim().min(1).max(120).optional(),
+  author_bio: z.string().trim().min(1).max(1000).optional(),
+  site_name: z.string().trim().min(1).max(120).optional(),
+  site_tagline: z.string().trim().min(1).max(500).optional(),
+  base_url: z.string().trim().min(1).max(300).optional(),
+  adsense_client_id: z.string().trim().max(100).nullable().optional(),
+  cta_headline: z.string().trim().min(1).max(240).optional(),
+  cta_body: z.string().trim().min(1).max(800).optional(),
+  cta_url: z.string().trim().min(1).max(300).optional(),
+  contact_email: z.string().trim().email().optional(),
+});
 
 const SKILL_UPSERT_SCHEMA = z.object({
   slug: z.string().trim().min(1).max(80).optional(),
@@ -157,6 +171,7 @@ const AGENT_RUN_SCHEMA = z.object({
   archetype: z.union([ARCHETYPE_ENUM, z.literal('auto')]).optional(),
   model_override: z.string().trim().max(200).optional(),
   trigger_source: z.enum(['manual', 'scheduled', 'api']).optional(),
+  force: z.boolean().optional(),
 });
 
 const UNAUTHENTICATED_ADMIN_PATHS = new Set([
@@ -165,6 +180,8 @@ const UNAUTHENTICATED_ADMIN_PATHS = new Set([
   '/api/admin/auth/login',
   '/api/admin/auth/logout',
 ]);
+
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 const MAX_FAILED_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
@@ -250,6 +267,13 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
       return c.json({ error: 'Unauthorized' }, 401);
     }
 
+    if (auth.method === 'cookie' && MUTATING_METHODS.has(c.req.method.toUpperCase())) {
+      const csrf = verifyCsrfOrigin(c.req.raw);
+      if (!csrf.ok) {
+        return c.json({ error: csrf.reason || 'CSRF validation failed' }, 403);
+      }
+    }
+
     c.set('adminEmail', auth.email || 'admin');
     await next();
   });
@@ -274,6 +298,20 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
   });
 
   app.post('/api/admin/auth/bootstrap', async (c) => {
+    const csrf = verifyCsrfOrigin(c.req.raw);
+    if (!csrf.ok) {
+      return c.json({ error: csrf.reason || 'CSRF validation failed' }, 403);
+    }
+
+    const rl = checkRateLimit(`auth:${extractClientIp(c.req.raw)}`, 15, 60_000);
+    if (!rl.allowed) {
+      c.header('Retry-After', String(rl.retryAfterSeconds));
+      return c.json(
+        { error: 'Too many authentication attempts. Please try again later.' },
+        429,
+      );
+    }
+
     const db = createDatabase(c.env);
     const existing = await db.getAdminUser();
     if (existing) {
@@ -351,6 +389,20 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
   });
 
   app.post('/api/admin/auth/login', async (c) => {
+    const csrf = verifyCsrfOrigin(c.req.raw);
+    if (!csrf.ok) {
+      return c.json({ error: csrf.reason || 'CSRF validation failed' }, 403);
+    }
+
+    const rl = checkRateLimit(`auth:${extractClientIp(c.req.raw)}`, 15, 60_000);
+    if (!rl.allowed) {
+      c.header('Retry-After', String(rl.retryAfterSeconds));
+      return c.json(
+        { error: 'Too many authentication attempts. Please try again later.' },
+        429,
+      );
+    }
+
     const rawBody = await parseJsonBody(c.req.raw);
     if (!rawBody.ok) {
       return c.json({ error: 'Invalid JSON payload.' }, 400);
@@ -364,12 +416,15 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
     const db = createDatabase(c.env);
     const admin = await db.getAdminUser();
     if (!admin) {
+      await hashPassword(parsed.data.password);
       return c.json({ error: 'Admin account is not initialized.' }, 401);
     }
 
     if (admin.locked_until) {
       const lockedUntilMs = new Date(admin.locked_until).getTime();
       if (Number.isFinite(lockedUntilMs) && lockedUntilMs > Date.now()) {
+        const retrySecs = Math.max(1, Math.ceil((lockedUntilMs - Date.now()) / 1000));
+        c.header('Retry-After', String(retrySecs));
         return c.json(
           {
             error: 'Account temporarily locked due to repeated failed attempts. Try again later.',
@@ -382,23 +437,30 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
 
     const submittedEmail = parsed.data.email.toLowerCase();
     const emailMatches = constantTimeEqual(submittedEmail, admin.email.toLowerCase());
-    const passwordMatches = await verifyPassword(
-      parsed.data.password,
-      admin.password_salt,
-      admin.password_hash,
-    );
+    let passwordMatches = false;
+    if (!emailMatches) {
+      await hashPassword(parsed.data.password);
+    } else {
+      passwordMatches = await verifyPassword(
+        parsed.data.password,
+        admin.password_salt,
+        admin.password_hash,
+      );
+    }
 
     if (!emailMatches || !passwordMatches) {
-      const nextAttempts = (admin.failed_attempts || 0) + 1;
-      const lockedUntil =
-        nextAttempts >= MAX_FAILED_LOGIN_ATTEMPTS
-          ? new Date(Date.now() + LOCKOUT_DURATION_MS).toISOString()
-          : null;
+      if (emailMatches) {
+        const nextAttempts = (admin.failed_attempts || 0) + 1;
+        const lockedUntil =
+          nextAttempts >= MAX_FAILED_LOGIN_ATTEMPTS
+            ? new Date(Date.now() + LOCKOUT_DURATION_MS).toISOString()
+            : null;
 
-      await db.updateAdminLoginState({
-        failed_attempts: nextAttempts,
-        locked_until: lockedUntil,
-      });
+        await db.updateAdminLoginState({
+          failed_attempts: nextAttempts,
+          locked_until: lockedUntil,
+        });
+      }
 
       return c.json({ error: 'Invalid email or password.' }, 401);
     }
@@ -428,6 +490,10 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
   });
 
   app.post('/api/admin/auth/logout', (c) => {
+    const csrf = verifyCsrfOrigin(c.req.raw);
+    if (!csrf.ok) {
+      return c.json({ error: csrf.reason || 'CSRF validation failed' }, 403);
+    }
     c.header('Set-Cookie', buildClearSessionCookie(isSecureRequest(c.req.raw)));
     return c.json({ ok: true });
   });
@@ -894,7 +960,12 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
 
     const [skill, relatedCandidates] = await Promise.all([
       db.getSkillBySlug(post.category_slug),
-      db.listPosts({ status: 'published', category_slug: post.category_slug, limit: 4 }),
+      db.listPosts({
+        status: 'published',
+        category_slug: post.category_slug,
+        limit: 4,
+        excludeHeavyHtml: true,
+      }),
     ]);
 
     const relatedPosts = relatedCandidates
@@ -912,6 +983,7 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
     return new Response(html, {
       status: 200,
       headers: {
+        ...buildSecurityHeaders({ allowSameOriginFrame: true }),
         'Content-Type': 'text/html; charset=utf-8',
         'X-Robots-Tag': 'noindex, nofollow',
         'Cache-Control': 'no-store',
@@ -972,6 +1044,19 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
 
     const body = parsed.data;
     const db = createDatabase(c.env);
+
+    const active = await recoverStaleAndFindActiveRun(db);
+    if (active && !body.force) {
+      return c.json(
+        {
+          error:
+            'Another agent run is currently in progress. Wait for it to finish or enable Force Run.',
+          active_run_id: active.id,
+        },
+        409,
+      );
+    }
+
     const settings = await db.getSettings();
     const syncMode = c.req.query('sync') === 'true';
 
@@ -992,11 +1077,20 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
       archetype: body.archetype,
       model_override: body.model_override,
       trigger_source: triggerSource,
+      force: body.force,
       run_id: run.id,
     };
 
     if (syncMode) {
       const result = await runEditorialAgentDirect(db, c.env, dispatchPayload);
+      if (result.run.status === 'skipped') {
+        return c.json({
+          run: result.run,
+          post: null,
+          skipped: true,
+          execution_mode: 'sync',
+        });
+      }
       return c.json({
         run: result.run,
         post: result.post,
