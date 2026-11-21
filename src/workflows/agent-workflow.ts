@@ -233,7 +233,7 @@ export class EditorialAgentWorkflow extends WorkflowEntrypoint<WorkerEnv, AgentD
 
       // Reset Cloudflare Workers Free-plan 50-subrequest invocation budget before drafting
       if (typeof step.sleep === 'function') {
-        await step.sleep('yield-budget-draft', '1 second');
+        await step.sleep('yield-budget-draft', '10 seconds');
       }
 
       // Stage 4: Draft structured JSON & deterministic self-correction loop
@@ -272,7 +272,7 @@ export class EditorialAgentWorkflow extends WorkflowEntrypoint<WorkerEnv, AgentD
 
       // Reset Cloudflare Workers Free-plan 50-subrequest invocation budget before dual-critic + persist
       if (typeof step.sleep === 'function') {
-        await step.sleep('yield-budget-critic', '1 second');
+        await step.sleep('yield-budget-critic', '10 seconds');
       }
 
       // Stage 5: Cross-family dual-model critic review & revision loop

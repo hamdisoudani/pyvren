@@ -665,6 +665,15 @@ export async function callOpenRouter(
         }
 
         if (response.status === 429) {
+          const lowerRaw = rawText.toLowerCase();
+          if (
+            lowerRaw.includes('free-models-per-day') ||
+            lowerRaw.includes('free_daily_limit')
+          ) {
+            throw new Error(
+              'OpenRouter daily free-model quota reached (50/day on free tier; resets at 00:00 UTC or unlocks 1,000/day with $10 credits).',
+            );
+          }
           rateLimitedUntil.set(candidateModel, Date.now() + RATE_LIMIT_COOLDOWN_MS);
         }
 
