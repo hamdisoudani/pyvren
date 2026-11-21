@@ -10,31 +10,48 @@ import {
 } from '../src/lib/dedup';
 import { resetRateLimitsForTests } from '../src/lib/security';
 import { fetchAuthoritativeFeed, parseRssOrAtomXml } from '../src/lib/tools';
+import { resetAdminLoginLockoutsForTests } from '../src/routes/admin';
 import { EditorialAgentWorkflow } from '../src/workflows/agent-workflow';
 
 const ADMIN_TOKEN = 'security-audit-admin-token-987654321';
+const TEST_OWNER_EMAIL = 'owner@pyvren.com';
+const TEST_OWNER_PASSWORD = 'TestOwnerSecret!2026';
 
 describe('Principal Audit Suite: Security Hardening, Smart Schedule, Post Memory Dedup, No-News Skip Gate & Bot Crawling', () => {
   beforeEach(() => {
     resetRateLimitsForTests();
+    resetAdminLoginLockoutsForTests();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     resetRateLimitsForTests();
+    resetAdminLoginLockoutsForTests();
   });
 
-  it('1. Blocks cross-origin cookie CSRF mutations (403), enforces IP rate limit (429), and sets strict CSP/HSTS/Frame headers', async () => {
+  it('1. Enforces env-locked auth (bootstrap 403), blocks cross-origin cookie CSRF (403), enforces IP rate limit & owner lockout (429), and sets strict CSP/HSTS/Frame headers', async () => {
     const db = new InMemoryDatabase();
     const app = createApp();
     const env: WorkerEnv = {
       __TEST_DB__: db,
       ADMIN_TOKEN,
+      ADMIN_EMAIL: TEST_OWNER_EMAIL,
+      ADMIN_PASSWORD: TEST_OWNER_PASSWORD,
+      ADMIN_DISPLAY_NAME: 'Hamdi Soudani',
       SESSION_SECRET: 'csrf-and-csp-test-secret-0123456789abcdef',
       BASE_URL: 'https://pyvren.com',
     };
 
-    // Bootstrap owner to obtain session cookie
+    // Auth status ALWAYS reports initialized: true with env_locked mode
+    const statusRes = await app.request('https://pyvren.com/api/admin/auth/status', {}, env);
+    expect(statusRes.status).toBe(200);
+    expect(await statusRes.json()).toEqual({
+      initialized: true,
+      authenticated: false,
+      locked_mode: 'env_locked',
+    });
+
+    // Bootstrap registration endpoint MUST ALWAYS return 403
     const boot = await app.request(
       'https://pyvren.com/api/admin/auth/bootstrap',
       {
@@ -44,16 +61,50 @@ describe('Principal Audit Suite: Security Hardening, Smart Schedule, Post Memory
           Origin: 'https://pyvren.com',
         },
         body: JSON.stringify({
-          email: 'owner@pyvren.com',
-          password: 'SuperStrongOwner!2026',
+          email: TEST_OWNER_EMAIL,
+          password: TEST_OWNER_PASSWORD,
           display_name: 'Hamdi Soudani',
         }),
       },
       env,
     );
-    expect(boot.status).toBe(201);
-    const cookiePair = (boot.headers.get('set-cookie') || '').split(';')[0];
+    expect(boot.status).toBe(403);
+
+    // Sign in with env-locked owner credentials to obtain HttpOnly session cookie & JWT
+    const login = await app.request(
+      'https://pyvren.com/api/admin/auth/login',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: 'https://pyvren.com',
+        },
+        body: JSON.stringify({
+          email: TEST_OWNER_EMAIL,
+          password: TEST_OWNER_PASSWORD,
+        }),
+      },
+      env,
+    );
+    expect(login.status).toBe(200);
+    const setCookie = login.headers.get('set-cookie') || '';
+    expect(setCookie).toContain('HttpOnly');
+    const cookiePair = setCookie.split(';')[0];
     expect(cookiePair).toContain('pyvren_session=');
+    const loginData = (await login.json()) as { ok: boolean; email: string; token: string };
+    expect(loginData.ok).toBe(true);
+    expect(loginData.email).toBe(TEST_OWNER_EMAIL);
+    expect(loginData.token).toBeTruthy();
+
+    // JWT authenticates /api/admin/settings
+    const jwtSettings = await app.request(
+      'https://pyvren.com/api/admin/settings',
+      {
+        headers: { Authorization: `Bearer ${loginData.token}` },
+      },
+      env,
+    );
+    expect(jwtSettings.status).toBe(200);
 
     // Cross-origin POST/PUT using valid session cookie MUST be rejected with 403 CSRF guard!
     const csrfAttack = await app.request(
@@ -134,6 +185,43 @@ describe('Principal Audit Suite: Security Hardening, Smart Schedule, Post Memory
       }
     }
     expect(saw429).toBe(true);
+
+    // Per-owner brute-force lockout: 5 consecutive wrong passwords on owner email trigger 429 + Retry-After
+    for (let i = 0; i < 5; i++) {
+      const bad = await app.request(
+        'https://pyvren.com/api/admin/auth/login',
+        {
+          method: 'POST',
+          headers: {
+            'cf-connecting-ip': '198.51.100.42',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            email: TEST_OWNER_EMAIL,
+            password: 'WrongPassword!1234',
+          }),
+        },
+        env,
+      );
+      expect(bad.status).toBe(401);
+    }
+    const lockedRes = await app.request(
+      'https://pyvren.com/api/admin/auth/login',
+      {
+        method: 'POST',
+        headers: {
+          'cf-connecting-ip': '198.51.100.42',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: TEST_OWNER_EMAIL,
+          password: TEST_OWNER_PASSWORD,
+        }),
+      },
+      env,
+    );
+    expect(lockedRes.status).toBe(429);
+    expect(lockedRes.headers.get('retry-after')).toBeTruthy();
   });
 
   it('2. Governs scheduled discovery slots ([8, 14, 20] UTC), daily post caps, cooldowns, and active-run concurrency locks (409)', async () => {

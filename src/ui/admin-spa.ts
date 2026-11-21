@@ -89,7 +89,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
     ];
 
     var state = {
-      auth: { loading: true, initialized: false, authenticated: false, user: null },
+      auth: { loading: true, authenticated: false, user: null },
       activeTab: 'posts',
       settings: null,
       posts: [],
@@ -257,10 +257,8 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         var res = await api('/api/admin/auth/status');
         state.auth = {
           loading: false,
-          initialized: Boolean(res && res.initialized),
           authenticated: Boolean(res && res.authenticated),
-          user: (res && (res.user || res.admin || (res.email ? { email: res.email, display_name: res.display_name } : null))) || null,
-          bootstrapSecretRequired: Boolean(res && res.bootstrap_secret_required)
+          user: (res && (res.user || res.admin || (res.email ? { email: res.email, display_name: res.display_name } : null))) || null
         };
         if (state.auth.authenticated) {
           await loadAllWorkspaceData();
@@ -269,7 +267,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
           render();
         }
       } catch (err) {
-        state.auth = { loading: false, initialized: true, authenticated: false, user: null };
+        state.auth = { loading: false, authenticated: false, user: null };
         render();
         toast(err.message || 'Unable to check auth status', 'error');
       }
@@ -370,79 +368,62 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
     }
 
     /* ------------------------------------------------------------------
-       Auth Views (Bootstrap Single Owner / Owner Sign In)
+       Auth View (Locked Single-Owner Sign In)
        ------------------------------------------------------------------ */
 
     function renderBrandSvg() {
       return '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
         '<rect x="1.5" y="1.5" width="21" height="21" rx="3" stroke="currentColor" stroke-width="1.5"/>' +
         '<path d="M7.5 16.5V7.5H13.25C15.1 7.5 16.25 8.55 16.25 10.2C16.25 11.85 15.1 12.9 13.25 12.9H7.5" stroke="currentColor" stroke-width="1.65" stroke-linecap="square"/>' +
-        '<path d="M13.5 16.5L17 13" stroke="var(--accent)" stroke-width="1.75" stroke-linecap="square"/>' +
+        '<path d="M13.5 16.5L17 13" stroke="var(--accent)" stroke-width="1.9" stroke-linecap="square"/>' +
       '</svg>';
     }
 
     function renderAuthGate() {
-      var isBootstrap = !state.auth.initialized;
       var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
 
-      return '<div class="min-h-screen flex flex-col justify-between p-4 sm:p-8">' +
-        '<div class="max-w-md w-full mx-auto flex items-center justify-between">' +
-          '<a href="/" class="inline-flex items-center gap-2 text-ink">' + renderBrandSvg() + '<span class="font-editorial text-lg font-semibold">' + esc(SITE_NAME) + '</span></a>' +
+      return '<div class="min-h-screen flex flex-col justify-between bg-paper border-t-[3px] border-[var(--accent)] p-4 sm:p-8">' +
+        '<div class="max-w-md w-full mx-auto flex items-center justify-between pt-2">' +
+          '<a href="/" class="inline-flex items-center gap-2.5 text-ink">' +
+            renderBrandSvg() +
+            '<span class="font-masthead font-editorial text-xl font-semibold tracking-tight">' + esc(SITE_NAME) + '</span>' +
+          '</a>' +
           '<button type="button" data-action="toggle-theme" class="btn-ghost text-xs font-tabular">' + (isDark ? 'Light Mode' : 'Dark Mode') + '</button>' +
         '</div>' +
 
-        '<div class="max-w-md w-full mx-auto my-10 editorial-card p-7 sm:p-9 space-y-6">' +
-          '<div class="space-y-2 border-b border-hairline pb-5">' +
-            '<p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">' +
-              (isBootstrap ? 'One-Time Setup' : 'Single-Owner Access') +
+        '<div class="max-w-md w-full mx-auto my-10 editorial-card bg-surface border-t-[3px] border-t-[var(--accent)] p-7 sm:p-9 space-y-6">' +
+          '<div class="space-y-2.5 border-b border-hairline pb-5">' +
+            '<p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold inline-flex items-center gap-2">' +
+              '<span class="inline-block w-1.5 h-1.5 rounded-full bg-[var(--accent)]"></span>' +
+              '<span>Pyvren Editorial Desk &middot; Restricted Owner Access</span>' +
             '</p>' +
-            '<h1 class="font-editorial text-3xl font-semibold text-ink leading-tight">' +
-              (isBootstrap ? 'Initialize Owner Account' : 'Editorial Desk Sign In') +
-            '</h1>' +
+            '<h1 class="font-masthead font-editorial text-3xl font-semibold text-ink leading-tight">Owner Sign In</h1>' +
             '<p class="text-sm text-ink-muted leading-relaxed">' +
-              (isBootstrap
-                ? 'Create the sole administrator account for ' + esc(SITE_NAME) + '. Public registration permanently locks immediately after this account is initialized.'
-                : 'Sign in with your owner credentials to manage briefings, research agents, category skills, and publishing gates. New account registration is permanently disabled.') +
+              'Sign in with the configured owner credentials to manage briefings, autonomous research agents, category skills, and publishing gates.' +
             '</p>' +
           '</div>' +
 
-          (isBootstrap
-            ? '<form id="bootstrap-form" class="space-y-4">' +
-                '<div class="space-y-1.5">' +
-                  '<label class="block font-tabular text-xs text-ink-muted uppercase tracking-wider" for="bs-name">Display Name</label>' +
-                  '<input id="bs-name" name="display_name" type="text" required placeholder="Editorial Lead" class="admin-input">' +
-                '</div>' +
-                '<div class="space-y-1.5">' +
-                  '<label class="block font-tabular text-xs text-ink-muted uppercase tracking-wider" for="bs-email">Owner Email</label>' +
-                  '<input id="bs-email" name="email" type="email" required autocomplete="email" placeholder="owner@example.com" class="admin-input">' +
-                '</div>' +
-                '<div class="space-y-1.5">' +
-                  '<label class="block font-tabular text-xs text-ink-muted uppercase tracking-wider" for="bs-pass">Password (min 12 characters)</label>' +
-                  '<input id="bs-pass" name="password" type="password" required minlength="12" autocomplete="new-password" placeholder="Strong passphrase" class="admin-input">' +
-                '</div>' +
-                '<div class="space-y-1.5">' +
-                  '<label class="block font-tabular text-xs text-ink-muted uppercase tracking-wider" for="bs-secret">Bootstrap Secret <span class="normal-case text-ink-faint">(' + (state.auth.bootstrapSecretRequired ? 'required' : 'optional — if configured in env') + ')</span></label>' +
-                  '<input id="bs-secret" name="bootstrap_secret" type="password"' + (state.auth.bootstrapSecretRequired ? ' required' : '') + ' autocomplete="off" placeholder="ADMIN_BOOTSTRAP_SECRET" class="admin-input">' +
-                '</div>' +
-                '<div id="auth-error" class="hidden rounded-[5px] bg-[var(--danger-soft)] text-[var(--danger)] px-3 py-2 text-xs font-medium"></div>' +
-                '<button type="submit" class="btn-accent w-full py-2.5">Create Owner Account &amp; Lock Registration</button>' +
-              '</form>'
-            : '<form id="login-form" class="space-y-4">' +
-                '<div class="space-y-1.5">' +
-                  '<label class="block font-tabular text-xs text-ink-muted uppercase tracking-wider" for="lg-email">Email</label>' +
-                  '<input id="lg-email" name="email" type="email" required autocomplete="email" placeholder="owner@example.com" class="admin-input">' +
-                '</div>' +
-                '<div class="space-y-1.5">' +
-                  '<label class="block font-tabular text-xs text-ink-muted uppercase tracking-wider" for="lg-pass">Password</label>' +
-                  '<input id="lg-pass" name="password" type="password" required autocomplete="current-password" placeholder="••••••••••••" class="admin-input">' +
-                '</div>' +
-                '<div id="auth-error" class="hidden rounded-[5px] bg-[var(--danger-soft)] text-[var(--danger)] px-3 py-2 text-xs font-medium"></div>' +
-                '<button type="submit" class="btn-primary w-full py-2.5">Sign In to Control Panel</button>' +
-              '</form>') +
+          '<form id="login-form" class="space-y-4">' +
+            '<div class="space-y-1.5">' +
+              '<label class="block font-tabular text-xs text-ink-muted uppercase tracking-wider" for="lg-email">Email</label>' +
+              '<input id="lg-email" name="email" type="email" required autocomplete="email" placeholder="owner@pyvren.com" class="admin-input">' +
+            '</div>' +
+            '<div class="space-y-1.5">' +
+              '<label class="block font-tabular text-xs text-ink-muted uppercase tracking-wider" for="lg-pass">Password</label>' +
+              '<input id="lg-pass" name="password" type="password" required autocomplete="current-password" placeholder="••••••••••••" class="admin-input">' +
+            '</div>' +
+            '<div id="auth-error" class="hidden rounded-[5px] bg-[var(--danger-soft)] text-[var(--danger)] px-3 py-2 text-xs font-medium"></div>' +
+            '<button type="submit" class="btn-accent w-full py-2.5 font-semibold tracking-tight">Sign In</button>' +
+          '</form>' +
+
+          '<div class="pt-4 border-t border-hairline flex items-center justify-between gap-2 font-tabular text-[11px] text-ink-faint">' +
+            '<span>Single-Owner Locked Access</span>' +
+            '<span class="text-accent font-semibold">Private Desk</span>' +
+          '</div>' +
         '</div>' +
 
-        '<div class="max-w-md w-full mx-auto text-center font-tabular text-xs text-ink-faint">' +
-          '<a href="/" class="hover:text-accent">&larr; Return to public publication</a>' +
+        '<div class="max-w-md w-full mx-auto text-center font-tabular text-xs text-ink-faint pb-2">' +
+          '<a href="/" class="hover:text-accent transition-colors">&larr; Return to public publication</a>' +
         '</div>' +
       '</div>';
     }
@@ -456,31 +437,33 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       var isAuto = mode === 'auto_publish';
       var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
       var activeRunsCount = (state.runs || []).filter(function (r) { return r.status === 'queued' || r.status === 'running'; }).length;
+      var ownerEmail = state.auth && state.auth.user && state.auth.user.email ? String(state.auth.user.email) : '';
 
-      return '<header class="editorial-topbar sticky top-0 z-40">' +
+      return '<header class="editorial-topbar sticky top-0 z-40 border-t-[3px] border-t-[var(--accent)] bg-surface/95">' +
         '<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">' +
           '<div class="flex items-center gap-3 min-w-0">' +
             '<a href="/admin" class="inline-flex items-center gap-2.5 text-ink">' +
               renderBrandSvg() +
-              '<span class="font-editorial text-lg font-semibold tracking-tight">' + esc(SITE_NAME) + '</span>' +
+              '<span class="font-masthead font-editorial text-xl font-semibold tracking-tight">' + esc(SITE_NAME) + '</span>' +
             '</a>' +
-            '<span class="badge-editorial hidden sm:inline-flex">Control Panel</span>' +
+            '<span class="badge-editorial badge-accent hidden sm:inline-flex">Editorial Desk</span>' +
             (activeRunsCount > 0 ? '<span class="badge-editorial badge-accent">' + activeRunsCount + ' Agent Active</span>' : '') +
           '</div>' +
 
           '<div class="flex items-center gap-2 sm:gap-3">' +
-            '<div class="hidden md:flex items-center rounded-[5px] border border-hairline bg-surface p-0.5 font-tabular text-[11px]" role="group" aria-label="Publishing Mode">' +
+            '<div class="hidden md:flex items-center rounded-[5px] border border-hairline bg-paper p-0.5 font-tabular text-[11px]" role="group" aria-label="Publishing Mode">' +
               '<button type="button" data-action="set-mode" data-mode="draft_review" class="px-2.5 py-1 rounded-[4px] cursor-pointer transition-colors ' + (!isAuto ? 'bg-[var(--ink-primary)] text-[var(--bg-paper)] font-semibold' : 'text-ink-muted hover:text-ink') + '">Draft Review (Safe)</button>' +
               '<button type="button" data-action="set-mode" data-mode="auto_publish" class="px-2.5 py-1 rounded-[4px] cursor-pointer transition-colors ' + (isAuto ? 'bg-[var(--accent)] text-white font-semibold' : 'text-ink-muted hover:text-ink') + '">Auto-Publish (Gated)</button>' +
             '</div>' +
 
+            (ownerEmail ? '<span class="hidden xl:inline-flex font-tabular text-[11px] text-ink-faint px-1">' + esc(ownerEmail) + '</span>' : '') +
             '<button type="button" data-action="toggle-theme" class="btn-ghost text-xs font-tabular px-2.5 py-1.5" title="Toggle theme">' + (isDark ? 'Light' : 'Dark') + '</button>' +
             '<a href="/" target="_blank" rel="noopener noreferrer" class="btn-ghost text-xs font-tabular px-2.5 py-1.5">Live Site &nearr;</a>' +
             '<button type="button" data-action="logout" class="btn-ghost text-xs font-tabular px-2.5 py-1.5">Sign Out</button>' +
           '</div>' +
         '</div>' +
 
-        '<div class="border-t border-hairline bg-paper/90">' +
+        '<div class="border-t border-hairline bg-paper">' +
           '<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4 overflow-x-auto">' +
             '<nav class="flex items-center gap-1" role="tablist">' +
               renderTabButton('posts', 'Briefings (' + state.posts.length + ')') +
@@ -1643,29 +1626,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       e.preventDefault();
 
       try {
-        if (form.id === 'bootstrap-form') {
-          var bfd = new FormData(form);
-          var errBox = document.getElementById('auth-error');
-          if (errBox) errBox.classList.add('hidden');
-          try {
-            await apiFetch('/api/admin/auth/bootstrap', {
-              method: 'POST',
-              body: {
-                display_name: String(bfd.get('display_name') || '').trim(),
-                email: String(bfd.get('email') || '').trim(),
-                password: String(bfd.get('password') || ''),
-                bootstrap_secret: String(bfd.get('bootstrap_secret') || '').trim() || undefined
-              }
-            });
-            toast('Owner account initialized — registration locked', 'success');
-            await checkAuthStatus();
-          } catch (err) {
-            if (errBox) {
-              errBox.textContent = err.message || 'Bootstrap failed';
-              errBox.classList.remove('hidden');
-            }
-          }
-        } else if (form.id === 'login-form') {
+        if (form.id === 'login-form') {
           var lfd = new FormData(form);
           var lErr = document.getElementById('auth-error');
           if (lErr) lErr.classList.add('hidden');

@@ -1,6 +1,7 @@
 import { normalizeBaseUrl } from '../env';
 import { escapeHtml, safeJsonLd } from '../lib/security';
 import type { SiteSettings } from '../types';
+import { renderDoodleCrewFooter } from './doodle-footer';
 
 export interface PublicLayoutOptions {
   title: string;
@@ -22,14 +23,32 @@ export interface PublicLayoutOptions {
 }
 
 const GOOGLE_FONTS_HREF =
-  'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap';
+  'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;0,6..72,700&family=Oswald:wght@600;700&family=Playfair+Display:ital,wght@0,700;0,900;1,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap';
 
-function renderBrandMark(): string {
-  return `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true" class="shrink-0">
-  <rect x="1.5" y="1.5" width="21" height="21" rx="3" stroke="currentColor" stroke-width="1.5"/>
-  <path d="M7.5 16.5V7.5H13.25C15.1 7.5 16.25 8.55 16.25 10.2C16.25 11.85 15.1 12.9 13.25 12.9H7.5" stroke="currentColor" stroke-width="1.65" stroke-linecap="square"/>
-  <path d="M13.5 16.5L17 13" stroke="var(--accent)" stroke-width="1.75" stroke-linecap="square"/>
-</svg>`;
+const RIBBON_NAV_ITEMS = [
+  { href: '/blog', label: 'All Briefings' },
+  { href: '/category/ai-coding-agents-mcp', label: 'Coding & MCP' },
+  { href: '/category/ai-security-jailbreaks', label: 'AI Security' },
+  { href: '/category/ai-llms', label: 'Frontier LLMs' },
+  { href: '/category/cloud-gpu-infra', label: 'Cloud & GPU' },
+  { href: '/category/agentic-browser-web-data', label: 'Web Data & GEO' },
+  { href: '/category/dev-tooling-benchmarks', label: 'CVEs & Patches' },
+  { href: '/editorial-policy', label: 'Editorial Policy' },
+  { href: '/about', label: 'About' },
+];
+
+function formatMastheadUtcDate(date: Date = new Date()): string {
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      weekday: 'long',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      timeZone: 'UTC',
+    }).format(date);
+  } catch {
+    return date.toUTCString().slice(0, 16);
+  }
 }
 
 function isNavActive(currentPath: string | undefined, target: string): boolean {
@@ -64,8 +83,8 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
   const siteName = settings.site_name || 'Pyvren';
   const tagline = settings.site_tagline || 'Independent technical briefings and primary-source engineering analysis.';
   const adsenseClientId = (settings.adsense_client_id || '').trim();
-  const currentYear = new Date().getUTCFullYear();
   const resolvedOgImage = ogImageUrl || `${baseUrl}/og/default.svg`;
+  const mastheadDate = formatMastheadUtcDate();
 
   const organizationSchema: Record<string, unknown> = {
     '@context': 'https://schema.org',
@@ -121,26 +140,17 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
       ? `<div id="reading-progress" aria-hidden="true" style="position:fixed;top:0;left:0;z-index:60;height:2px;width:100%;background:var(--accent);transform:scaleX(0);transform-origin:left center;pointer-events:none;transition:transform 80ms linear"></div>`
       : '';
 
-  const navItems = [
-    { href: '/blog', label: 'Briefings' },
-    { href: '/#categories', label: 'Categories' },
-    { href: '/editorial-policy', label: 'Editorial Policy' },
-    { href: '/about', label: 'About' },
-  ];
+  const ribbonNavHtml = RIBBON_NAV_ITEMS.map((item) => {
+    const active = isNavActive(currentPath, item.href);
+    return `<a href="${item.href}" class="ribbon-link"${active ? ' aria-current="page"' : ''}>${escapeHtml(item.label)}</a>`;
+  }).join('\n          ');
 
-  const desktopNavHtml = navItems
-    .map((item) => {
-      const active = isNavActive(currentPath, item.href);
-      return `<a href="${item.href}" class="nav-link"${active ? ' aria-current="page"' : ''}>${escapeHtml(item.label)}</a>`;
-    })
-    .join('\n          ');
+  const mobileNavHtml = RIBBON_NAV_ITEMS.map(
+    (item) =>
+      `<a href="${item.href}" class="block px-4 py-2.5 text-sm font-medium text-ink hover:bg-subtle border-b border-hairline last:border-b-0">${escapeHtml(item.label)}</a>`,
+  ).join('\n            ');
 
-  const mobileNavHtml = navItems
-    .map(
-      (item) =>
-        `<a href="${item.href}" class="block px-4 py-2.5 text-sm font-medium text-ink hover:bg-subtle border-b border-hairline last:border-b-0">${escapeHtml(item.label)}</a>`,
-    )
-    .join('\n            ');
+  const footerHtml = renderDoodleCrewFooter(settings);
 
   return `<!doctype html>
 <html lang="en">
@@ -185,40 +195,71 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
   <a href="#main-content" class="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:px-3 focus:py-2 focus:rounded focus:bg-surface focus:text-ink focus:border focus:border-strong">Skip to main content</a>
 
   <header class="editorial-topbar sticky top-0 z-40">
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
-      <div class="flex items-center gap-6 min-w-0">
-        <a href="/" class="inline-flex items-center gap-2.5 text-ink hover:opacity-90 transition-opacity" aria-label="${escapeHtml(siteName)} home">
-          ${renderBrandMark()}
-          <span class="font-editorial text-xl font-semibold tracking-tight leading-none">${escapeHtml(siteName)}</span>
-        </a>
-        <span class="hidden xl:inline-block h-4 w-px bg-[var(--border-hairline)]" aria-hidden="true"></span>
-        <span class="hidden xl:inline-block font-tabular text-[11px] uppercase tracking-[0.12em] text-ink-faint truncate max-w-[260px]">Technical Briefings</span>
+    <!-- Row 1: Editorial Broadsheet Masthead Bar -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 sm:py-4">
+      <div class="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+        <!-- Left: Live UTC Date + Autonomous Tech Desk Tag -->
+        <div class="flex items-center gap-2.5 min-w-0">
+          <div class="hidden md:flex flex-col leading-tight min-w-0">
+            <time class="text-[11px] font-medium text-ink-secondary truncate">${escapeHtml(mastheadDate)}</time>
+            <span class="inline-flex items-center gap-1.5 mt-0.5 font-tabular text-[10px] uppercase tracking-[0.12em] text-ink-faint">
+              <span class="cat-dot" style="--cat-color:var(--accent)" aria-hidden="true"></span>
+              <span>Autonomous Tech Desk</span>
+            </span>
+          </div>
+          <span class="inline-flex md:hidden items-center gap-1.5 font-tabular text-[10px] uppercase tracking-[0.1em] text-ink-faint truncate">
+            <span class="cat-dot" style="--cat-color:var(--accent)" aria-hidden="true"></span>
+            <span class="hidden sm:inline">Tech Desk</span>
+          </span>
+        </div>
+
+        <!-- Center: Iconic Editorial Crimson Masthead -->
+        <div class="text-center">
+          <a href="/" class="inline-block font-masthead font-black text-3xl sm:text-4xl tracking-tight leading-none text-[var(--accent)] hover:opacity-90 transition-opacity" aria-label="${escapeHtml(siteName)} home">
+            ${escapeHtml(siteName)}
+          </a>
+        </div>
+
+        <!-- Right: Quick Search, Light/Dark Toggle, Crimson Pill CTA, Mobile Menu -->
+        <div class="flex items-center justify-end gap-2">
+          <a href="/blog#search" class="inline-flex items-center justify-center w-9 h-9 rounded-full border border-hairline bg-surface/70 text-ink-muted hover:text-ink hover:border-strong hover:bg-subtle transition-colors" aria-label="Search briefings" title="Search briefings">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+          </a>
+
+          <button type="button" id="theme-toggle" class="inline-flex items-center justify-center w-9 h-9 rounded-full border border-hairline bg-surface/70 text-ink-muted hover:text-ink hover:border-strong hover:bg-subtle transition-colors cursor-pointer" aria-label="Toggle color theme" title="Toggle light or dark appearance">
+            <svg data-theme-icon="sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="hidden" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32l1.41-1.41"/></svg>
+            <svg data-theme-icon="moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          </button>
+
+          <a href="/blog" class="hidden sm:inline-flex items-center justify-center h-9 px-4 rounded-full bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-xs font-semibold tracking-wide transition-colors shadow-xs">
+            Latest Briefings
+          </a>
+
+          <details class="relative lg:hidden">
+            <summary class="list-none inline-flex items-center justify-center w-9 h-9 rounded-full border border-hairline bg-surface/70 text-ink-muted hover:text-ink hover:border-strong hover:bg-subtle cursor-pointer" aria-label="Open menu">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+            </summary>
+            <nav aria-label="Mobile navigation" class="absolute right-0 mt-2 w-60 rounded-[12px] bg-surface border border-strong shadow-lg overflow-hidden z-50">
+              <div class="px-4 py-2.5 bg-subtle border-b border-hairline">
+                <p class="font-tabular text-[10px] uppercase tracking-[0.12em] text-ink-faint">${escapeHtml(mastheadDate)}</p>
+              </div>
+              ${mobileNavHtml}
+              <a href="/blog#search" class="block px-4 py-2.5 text-sm font-semibold text-accent hover:bg-subtle border-t border-hairline">Search Briefings</a>
+            </nav>
+          </details>
+        </div>
       </div>
+    </div>
 
-      <nav aria-label="Primary navigation" class="hidden md:flex items-center gap-7">
-        ${desktopNavHtml}
-      </nav>
-
-      <div class="flex items-center gap-2">
-        <a href="/blog#search" class="inline-flex items-center justify-center h-9 px-2.5 rounded-[5px] border border-hairline text-ink-muted hover:text-ink hover:bg-subtle transition-colors text-xs font-medium gap-1.5" aria-label="Search briefings">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
-          <span class="hidden sm:inline">Search</span>
+    <!-- Row 2: Double-Ruled Category Navigation Ribbon -->
+    <div class="border-t border-hairline double-rule-bottom">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4">
+        <nav aria-label="Primary sections" class="ribbon-scroll flex items-center lg:justify-center flex-1 gap-5 sm:gap-6 overflow-x-auto">
+          ${ribbonNavHtml}
+        </nav>
+        <a href="/blog#search" class="hidden sm:inline-flex items-center justify-center shrink-0 w-7 h-7 rounded-full text-ink-muted hover:text-accent transition-colors" aria-label="Search archive" title="Search archive">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
         </a>
-
-        <button type="button" id="theme-toggle" class="inline-flex items-center justify-center w-9 h-9 rounded-[5px] border border-hairline text-ink-muted hover:text-ink hover:bg-subtle transition-colors cursor-pointer" aria-label="Toggle color theme" title="Toggle light or dark appearance">
-          <svg data-theme-icon="sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" class="hidden" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32l1.41-1.41"/></svg>
-          <svg data-theme-icon="moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-        </button>
-
-        <details class="relative md:hidden">
-          <summary class="list-none inline-flex items-center justify-center w-9 h-9 rounded-[5px] border border-hairline text-ink-muted hover:text-ink hover:bg-subtle cursor-pointer" aria-label="Open menu">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
-          </summary>
-          <nav aria-label="Mobile navigation" class="absolute right-0 mt-2 w-56 rounded-[6px] bg-surface border border-strong shadow-lg overflow-hidden z-50">
-            ${mobileNavHtml}
-            <a href="/blog#search" class="block px-4 py-2.5 text-sm font-medium text-accent hover:bg-subtle border-t border-hairline">Search Briefings</a>
-          </nav>
-        </details>
       </div>
     </div>
   </header>
@@ -227,48 +268,7 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
     ${bodyHtml}
   </main>
 
-  <footer class="mt-20 border-t border-hairline bg-subtle/50">
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-14">
-      <div class="grid grid-cols-1 md:grid-cols-12 gap-10 pb-10 border-b border-hairline">
-        <div class="md:col-span-6 space-y-3">
-          <a href="/" class="inline-flex items-center gap-2.5 text-ink">
-            ${renderBrandMark()}
-            <span class="font-editorial text-lg font-semibold tracking-tight">${escapeHtml(siteName)}</span>
-          </a>
-          <p class="text-sm leading-relaxed text-ink-muted max-w-md">${escapeHtml(tagline)}</p>
-          <p class="font-tabular text-xs text-ink-faint">Edited by ${escapeHtml(settings.default_author || 'Editorial Desk')} · Primary-source verified technical journalism.</p>
-        </div>
-
-        <div class="md:col-span-3 space-y-3">
-          <h2 class="font-tabular text-[11px] uppercase tracking-[0.12em] text-ink-faint font-semibold">Publication</h2>
-          <ul class="space-y-2 text-sm">
-            <li><a href="/blog" class="text-ink-secondary hover:text-accent transition-colors">All Briefings</a></li>
-            <li><a href="/about" class="text-ink-secondary hover:text-accent transition-colors">About &amp; Masthead</a></li>
-            <li><a href="/editorial-policy" class="text-ink-secondary hover:text-accent transition-colors">Editorial &amp; Verification Policy</a></li>
-            <li><a href="/privacy" class="text-ink-secondary hover:text-accent transition-colors">Privacy &amp; Ad Policy</a></li>
-            <li><a href="/contact" class="text-ink-secondary hover:text-accent transition-colors">Contact Desk</a></li>
-          </ul>
-        </div>
-
-        <div class="md:col-span-3 space-y-3">
-          <h2 class="font-tabular text-[11px] uppercase tracking-[0.12em] text-ink-faint font-semibold">Machine-Readable</h2>
-          <ul class="space-y-2 text-sm font-tabular text-[13px]">
-            <li><a href="/rss.xml" class="text-ink-secondary hover:text-accent transition-colors">/rss.xml</a></li>
-            <li><a href="/feed.json" class="text-ink-secondary hover:text-accent transition-colors">/feed.json</a></li>
-            <li><a href="/sitemap.xml" class="text-ink-secondary hover:text-accent transition-colors">/sitemap.xml</a></li>
-            <li><a href="/news-sitemap.xml" class="text-ink-secondary hover:text-accent transition-colors">/news-sitemap.xml</a></li>
-            <li><a href="/llms.txt" class="text-ink-secondary hover:text-accent transition-colors">/llms.txt</a></li>
-            <li><a href="/api/v1/posts" class="text-ink-secondary hover:text-accent transition-colors">/api/v1/posts</a></li>
-          </ul>
-        </div>
-      </div>
-
-      <div class="pt-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-ink-faint">
-        <p>&copy; ${currentYear} ${escapeHtml(siteName)}. All rights reserved.</p>
-        <p class="font-tabular">Server-rendered HTML · Zero tracking bloat · Structured for humans &amp; retrieval engines</p>
-      </div>
-    </div>
-  </footer>
+  ${footerHtml}
 
   <script>(function(){
     var root=document.documentElement;
@@ -313,7 +313,7 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
               }
             }
           });
-        },{rootMargin:'-84px 0px -68% 0px',threshold:0.01});
+        },{rootMargin:'-96px 0px -68% 0px',threshold:0.01});
         targets.forEach(function(el){io.observe(el);});
       }
     }

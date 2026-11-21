@@ -2,10 +2,13 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { createApp } from '../src/index';
 import type { WorkerEnv } from '../src/env';
 import { InMemoryDatabase } from '../src/lib/db';
-import { isSafePublicUrl } from '../src/lib/security';
+import { isSafePublicUrl, resetRateLimitsForTests } from '../src/lib/security';
 import { readPrimaryWebpage } from '../src/lib/tools';
+import { resetAdminLoginLockoutsForTests } from '../src/routes/admin';
 
 const ADMIN_TOKEN = 'test-super-secret-admin-token-9876543210';
+const TEST_OWNER_EMAIL = 'owner@pyvren.com';
+const TEST_OWNER_PASSWORD = 'TestOwnerSecret!2026';
 
 const COMPLIANT_MARKDOWN = `
 Cloudflare Workers isolates execute V8 bytecode with sub-millisecond startup while offloading network I/O wait time from the CPU accounting window. According to the [Cloudflare Workers Limits Documentation](https://developers.cloudflare.com/workers/platform/limits/), paid invocations allow up to 30 seconds of default CPU time and configurable bursts up to 5 minutes, while time spent awaiting external HTTP calls to OpenRouter or Supabase does not burn the CPU budget.
@@ -108,11 +111,16 @@ describe('Pyvren Autonomous Editorial Platform — Full E2E Verification Suite',
   let env: WorkerEnv;
 
   beforeEach(() => {
+    resetRateLimitsForTests();
+    resetAdminLoginLockoutsForTests();
     db = new InMemoryDatabase();
     app = createApp();
     env = {
       __TEST_DB__: db,
       ADMIN_TOKEN,
+      ADMIN_EMAIL: TEST_OWNER_EMAIL,
+      ADMIN_PASSWORD: TEST_OWNER_PASSWORD,
+      ADMIN_DISPLAY_NAME: 'Hamdi Soudani',
       SESSION_SECRET: 'e2e-test-session-secret-with-plenty-of-entropy-123456',
       BASE_URL: 'https://pyvren.com',
       SITE_NAME: 'Pyvren Research',
@@ -142,68 +150,90 @@ describe('Pyvren Autonomous Editorial Platform — Full E2E Verification Suite',
     expect(data.publishing_mode).toBe('draft_review');
   });
 
-  it('2. Enforces single-admin bootstrap lock & permanently disables registration afterward', async () => {
+  it('2. Enforces env-locked single-owner auth, permanently disables bootstrap (403), and locks out after 5 failed passwords', async () => {
+    // Status ALWAYS reports initialized: true and locked_mode: 'env_locked'
     const statusBefore = await req('/api/admin/auth/status');
     expect(statusBefore.status).toBe(200);
-    expect(await statusBefore.json()).toMatchObject({
-      initialized: false,
+    expect(await statusBefore.json()).toEqual({
+      initialized: true,
       authenticated: false,
+      locked_mode: 'env_locked',
     });
 
-    // Reject weak password
-    const weakRes = await req('/api/admin/auth/bootstrap', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: 'owner@pyvren.com',
-        password: 'short',
-        display_name: 'Hamdi Soudani',
-      }),
-    });
-    expect(weakRes.status).toBe(400);
-
-    // Bootstrap single owner
+    // Bootstrap / registration endpoint MUST ALWAYS be permanently forbidden (403)
     const bootRes = await req('/api/admin/auth/bootstrap', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: 'owner@pyvren.com',
-        password: 'StrongOwnerPassword!2026',
-        display_name: 'Hamdi Soudani',
-      }),
-    });
-    expect(bootRes.status).toBe(201);
-    const setCookie = bootRes.headers.get('set-cookie') || '';
-    expect(setCookie).toContain('pyvren_session=');
-    expect(setCookie).toContain('HttpOnly');
-    const bootJson = (await bootRes.json()) as { token: string; email: string };
-    expect(bootJson.email).toBe('owner@pyvren.com');
-    expect(bootJson.token).toBeTruthy();
-
-    // Second registration attempt MUST be permanently forbidden (403)
-    const secondReg = await req('/api/admin/auth/bootstrap', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email: 'attacker@evil.com',
         password: 'AnotherStrongPassword!2026',
+        display_name: 'Attacker',
       }),
     });
-    expect(secondReg.status).toBe(403);
+    expect(bootRes.status).toBe(403);
+    const bootErr = (await bootRes.json()) as { error: string };
+    expect(bootErr.error.toLowerCase()).toContain('permanently disabled');
 
-    // JWT token from bootstrap authenticates admin endpoints
+    // Login with configured env credentials returns 200 + HttpOnly cookie + signed JWT
+    const loginRes = await req('/api/admin/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: TEST_OWNER_EMAIL,
+        password: TEST_OWNER_PASSWORD,
+      }),
+    });
+    expect(loginRes.status).toBe(200);
+    const setCookie = loginRes.headers.get('set-cookie') || '';
+    expect(setCookie).toContain('pyvren_session=');
+    expect(setCookie).toContain('HttpOnly');
+    const loginJson = (await loginRes.json()) as {
+      ok: boolean;
+      email: string;
+      display_name: string;
+      token: string;
+    };
+    expect(loginJson.ok).toBe(true);
+    expect(loginJson.email).toBe(TEST_OWNER_EMAIL);
+    expect(loginJson.display_name).toBe('Hamdi Soudani');
+    expect(loginJson.token).toBeTruthy();
+
+    // Authenticated status reports initialized: true, authenticated: true, email, locked_mode
+    const statusAfter = await req('/api/admin/auth/status', {
+      headers: { Authorization: `Bearer ${loginJson.token}` },
+    });
+    expect(statusAfter.status).toBe(200);
+    expect(await statusAfter.json()).toEqual({
+      initialized: true,
+      authenticated: true,
+      email: TEST_OWNER_EMAIL,
+      locked_mode: 'env_locked',
+    });
+
+    // JWT token from login authenticates protected admin endpoints
     const jwtCheck = await req('/api/admin/settings', {
-      headers: { Authorization: `Bearer ${bootJson.token}` },
+      headers: { Authorization: `Bearer ${loginJson.token}` },
     });
     expect(jwtCheck.status).toBe(200);
 
-    // Login brute-force protection: 5 bad passwords lock the account (429)
+    // Unknown emails failing login do NOT lock out the owner account
+    const unknownRes = await req('/api/admin/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: 'random-stranger@example.org',
+        password: 'WrongPassword!9999',
+      }),
+    });
+    expect(unknownRes.status).toBe(401);
+
+    // Login brute-force protection: 5 consecutive wrong passwords on owner email lock the account (429 + Retry-After)
     for (let i = 0; i < 5; i++) {
       const bad = await req('/api/admin/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: 'owner@pyvren.com',
+          email: TEST_OWNER_EMAIL,
           password: 'WrongPassword!9999',
         }),
       });
@@ -213,11 +243,12 @@ describe('Pyvren Autonomous Editorial Platform — Full E2E Verification Suite',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email: 'owner@pyvren.com',
-        password: 'StrongOwnerPassword!2026',
+        email: TEST_OWNER_EMAIL,
+        password: TEST_OWNER_PASSWORD,
       }),
     });
     expect(locked.status).toBe(429);
+    expect(locked.headers.get('retry-after')).toBeTruthy();
   });
 
   it('3-8. Full Draft -> Preview -> Publish -> ETag 304 -> SEO/GEO/Headless lifecycle', async () => {
@@ -471,11 +502,15 @@ describe('Pyvren Autonomous Editorial Platform — Full E2E Verification Suite',
       }
     }
 
-    // Admin SPA serves 200 with X-Robots-Tag: noindex, nofollow
+    // Admin SPA serves 200 with X-Robots-Tag: noindex, nofollow and zero bootstrap/registration UI
     const adminRes = await req('/admin/');
     expect(adminRes.status).toBe(200);
     expect(adminRes.headers.get('x-robots-tag')).toBe('noindex, nofollow');
-    expect(await adminRes.text()).toContain('noindex, nofollow');
+    const adminHtml = await adminRes.text();
+    expect(adminHtml).toContain('noindex, nofollow');
+    expect(adminHtml).toContain('login-form');
+    expect(adminHtml).not.toContain('bootstrap-form');
+    expect(adminHtml).not.toContain('/api/admin/auth/bootstrap');
 
     // robots.txt allows AI search bots & blocks /admin and /api/admin
     const robotsRes = await req('/robots.txt');

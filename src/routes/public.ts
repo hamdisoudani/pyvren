@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { normalizeBaseUrl, type WorkerEnv } from '../env';
 import { createDatabase } from '../lib/db';
 import { compileMarkdown } from '../lib/markdown';
+import { computePostRelationships } from '../lib/relations';
 import { computeEtag } from '../lib/security';
 import type { PostRecord } from '../types';
 import {
@@ -50,12 +51,12 @@ export function createPublicRoutes(): Hono<{ Bindings: WorkerEnv }> {
     const [settings, skills, rawPosts] = await Promise.all([
       db.getSettings(),
       db.listSkills(true),
-      db.listPosts({ status: 'published', limit: 7, excludeHeavyHtml: true }),
+      db.listPosts({ status: 'published', limit: 18, excludeHeavyHtml: true }),
     ]);
 
     const publishedPosts = rawPosts.filter((p) => p.status === 'published');
     const featuredPost = publishedPosts[0] ?? null;
-    const recentPosts = publishedPosts.slice(0, 7);
+    const recentPosts = publishedPosts;
 
     const html = renderLandingPage({
       settings,
@@ -271,35 +272,17 @@ export function createPublicRoutes(): Hono<{ Bindings: WorkerEnv }> {
       });
     }
 
-    const [skill, sameCategoryPosts] = await Promise.all([
+    const [skill, allPublishedRaw] = await Promise.all([
       db.getSkillBySlug(post.category_slug),
       db.listPosts({
         status: 'published',
-        category_slug: post.category_slug,
-        limit: 4,
+        limit: 20,
         excludeHeavyHtml: true,
       }),
     ]);
 
-    let relatedPosts = sameCategoryPosts
-      .filter((candidate) => candidate.status === 'published' && candidate.id !== post.id)
-      .slice(0, 3);
-
-    if (relatedPosts.length < 3) {
-      const fallbackPosts = await db.listPosts({
-        status: 'published',
-        limit: 6,
-        excludeHeavyHtml: true,
-      });
-      const seenIds = new Set<number>([post.id, ...relatedPosts.map((p) => p.id)]);
-      for (const candidate of fallbackPosts) {
-        if (candidate.status === 'published' && !seenIds.has(candidate.id)) {
-          relatedPosts.push(candidate);
-          seenIds.add(candidate.id);
-          if (relatedPosts.length >= 3) break;
-        }
-      }
-    }
+    const allPublished = allPublishedRaw.filter((candidate) => candidate.status === 'published');
+    const relatedPosts = computePostRelationships(post, allPublished, 4).map((rel) => rel.post);
 
     const { headings } = compileMarkdown(post.body_markdown);
     const html = renderBlogPostPage({

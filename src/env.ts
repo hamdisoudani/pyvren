@@ -19,9 +19,11 @@ export interface WorkerEnv {
   SERPER_API_KEY?: string;
   JINA_API_KEY?: string;
 
-  // Security & Auth
+  // Security & Single-Owner Locked Admin Auth (configured via Wrangler secrets / env)
   SESSION_SECRET?: string;
-  ADMIN_BOOTSTRAP_SECRET?: string;
+  ADMIN_EMAIL?: string;
+  ADMIN_PASSWORD?: string;
+  ADMIN_DISPLAY_NAME?: string;
   ADMIN_TOKEN?: string;
 
   // Site metadata
@@ -41,7 +43,6 @@ export function normalizeBaseUrl(url?: string | null): string {
 export function getSessionSecret(env: WorkerEnv): string {
   const secret = (env.SESSION_SECRET || env.SUPABASE_SECRET_KEY || env.ADMIN_TOKEN || '').trim();
   if (!secret || secret.length < 16) {
-    // Fallback deterministic dev-only key when running unconfigured tests
     return 'pyvren-dev-session-secret-change-in-production-32chars';
   }
   return secret;

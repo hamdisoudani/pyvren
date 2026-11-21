@@ -1,4 +1,11 @@
 import { normalizeBaseUrl } from '../env';
+import {
+  buildTopicClusters,
+  computePostRelationships,
+  getCategoryMeta,
+  type PostRelationship,
+  type TopicCluster,
+} from '../lib/relations';
 import { escapeHtml } from '../lib/security';
 import type { Archetype, CategorySkill, PostRecord, SiteSettings } from '../types';
 import { renderPublicLayout } from './layout';
@@ -49,6 +56,35 @@ function extractDomain(url: string): string {
   }
 }
 
+function truncateText(text: string, maxLen: number): string {
+  const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
+  if (cleaned.length <= maxLen) return cleaned;
+  return `${cleaned.slice(0, Math.max(1, maxLen - 1)).trimEnd()}…`;
+}
+
+function extractKeySignals(post: PostRecord, maxCount = 3): Array<{ label?: string; text: string }> {
+  const signals: Array<{ label?: string; text: string }> = [];
+  if (Array.isArray(post.key_facts_json) && post.key_facts_json.length > 0) {
+    for (const fact of post.key_facts_json.slice(0, maxCount)) {
+      if (fact.label && fact.value) {
+        signals.push({ label: fact.label, text: fact.value });
+      }
+    }
+  }
+  if (signals.length < maxCount) {
+    const raw = (post.tldr_summary || post.description || '').trim();
+    const sentences = raw
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 18);
+    for (const s of sentences) {
+      if (signals.length >= maxCount) break;
+      signals.push({ text: s });
+    }
+  }
+  return signals.slice(0, maxCount);
+}
+
 function scoreToneColor(score: number): string {
   if (score >= 85) return 'var(--success)';
   if (score >= 70) return 'var(--warning)';
@@ -70,10 +106,22 @@ function renderScoreRing(score: number): string {
 </div>`;
 }
 
+function renderCategoryTag(slug: string, customLabel?: string, asLink = true): string {
+  const meta = getCategoryMeta(slug);
+  const label = customLabel || meta.shortLabel;
+  const inner = `<span class="cat-dot" style="--cat-color:${meta.color}" aria-hidden="true"></span><span>${escapeHtml(label)}</span>`;
+  const classes =
+    'inline-flex items-center gap-1.5 font-tabular text-[11px] font-semibold uppercase tracking-[0.09em] text-ink-secondary hover:text-accent transition-colors';
+  if (asLink) {
+    return `<a href="/category/${encodeURIComponent(slug)}" class="${classes}">${inner}</a>`;
+  }
+  return `<span class="${classes}">${inner}</span>`;
+}
+
 function renderAdSlot(settings: SiteSettings, slotLabel = 'Advertisement'): string {
   const clientId = (settings.adsense_client_id || '').trim();
   if (!clientId) return '';
-  return `<aside class="ad-slot" aria-label="${escapeHtml(slotLabel)}">
+  return `<aside class="ad-slot rounded-[10px]" aria-label="${escapeHtml(slotLabel)}">
   <span class="ad-slot-label">${escapeHtml(slotLabel)}</span>
   <ins class="adsbygoogle block w-full text-center"
        style="display:block;min-height:90px"
@@ -93,31 +141,108 @@ function renderCtaStrip(settings: SiteSettings): string {
   const isExternal = ctaUrl.startsWith('http://') || ctaUrl.startsWith('https://');
 
   return `<section class="mt-16 border-t border-b border-hairline bg-subtle/60">
-  <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-8">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-8">
     <div class="max-w-2xl space-y-2.5">
-      <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Dispatch &amp; Syndication</p>
-      <h2 class="font-editorial text-2xl sm:text-3xl font-semibold text-ink leading-tight">${escapeHtml(headline)}</h2>
+      <p class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">
+        <span class="cat-dot" style="--cat-color:var(--accent)" aria-hidden="true"></span>
+        <span>Dispatch &amp; Syndication</span>
+      </p>
+      <h2 class="font-masthead text-2xl sm:text-3xl font-bold text-ink leading-tight">${escapeHtml(headline)}</h2>
       <p class="text-sm sm:text-base text-ink-muted leading-relaxed">${escapeHtml(body)}</p>
     </div>
     <div class="flex flex-wrap items-center gap-3 shrink-0">
-      <a href="${escapeHtml(ctaUrl)}"${isExternal ? ' target="_blank" rel="noopener noreferrer"' : ''} class="btn-primary">
+      <a href="${escapeHtml(ctaUrl)}"${isExternal ? ' target="_blank" rel="noopener noreferrer"' : ''} class="btn-accent rounded-full px-5">
         <span>Explore Dispatch</span>
         <span aria-hidden="true">&rarr;</span>
       </a>
-      <a href="/rss.xml" class="btn-ghost font-tabular text-xs">RSS Feed</a>
-      <a href="/llms.txt" class="btn-ghost font-tabular text-xs">llms.txt</a>
+      <a href="/rss.xml" class="btn-ghost rounded-full font-tabular text-xs">RSS Feed</a>
+      <a href="/llms.txt" class="btn-ghost rounded-full font-tabular text-xs">llms.txt</a>
     </div>
   </div>
 </section>`;
 }
 
-function findSkillName(skills: CategorySkill[], slug: string): string {
-  const match = skills.find((s) => s.slug === slug);
-  return match ? match.name : slug.replace(/-/g, ' ');
+function renderTopicClusterChips(clusters: TopicCluster[], limit = 10): string {
+  if (clusters.length === 0) return '';
+  return clusters
+    .slice(0, limit)
+    .map(
+      (cluster) => `<a href="/blog?q=${encodeURIComponent(cluster.query)}" class="rel-chip">
+      <span class="cat-dot" style="--cat-color:${cluster.color}" aria-hidden="true"></span>
+      <span>${escapeHtml(cluster.label)}</span>
+      <span class="font-tabular text-[10px] text-ink-faint">${cluster.count}</span>
+    </a>`,
+    )
+    .join('\n');
+}
+
+function renderVisualStoryCard(opts: {
+  post: PostRecord;
+  skills?: CategorySkill[];
+  topRelation?: PostRelationship | null;
+  reasonBadge?: string;
+  loading?: 'lazy' | 'eager';
+}): string {
+  const { post, topRelation, reasonBadge, loading = 'lazy' } = opts;
+  const meta = getCategoryMeta(post.category_slug);
+  const postHref = `/blog/${encodeURIComponent(post.slug)}`;
+  const ogSrc = `/og/${encodeURIComponent(post.slug)}.svg`;
+  const sourceCount = Array.isArray(post.sources_json) ? post.sources_json.length : 0;
+
+  const relationFooterHtml = reasonBadge
+    ? `<div class="pt-2">
+        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-subtle text-ink-secondary border border-hairline max-w-full truncate">
+          <span class="cat-dot" style="--cat-color:${meta.color}" aria-hidden="true"></span>
+          <span class="truncate">${escapeHtml(reasonBadge)}</span>
+        </span>
+      </div>`
+    : topRelation && topRelation.score > 0
+      ? `<div class="pt-2">
+          <a href="/blog/${encodeURIComponent(topRelation.post.slug)}" class="inline-flex items-center gap-1.5 text-[11px] font-medium text-ink-muted hover:text-accent transition-colors max-w-full truncate" title="${escapeHtml(topRelation.reasonLabel)}">
+            <span class="text-accent shrink-0" aria-hidden="true">&nearr;</span>
+            <span class="truncate">Linked: ${escapeHtml(truncateText(topRelation.post.title, 38))}</span>
+          </a>
+        </div>`
+      : `<div class="pt-2 font-tabular text-[11px] text-ink-faint">
+          <span>${sourceCount} verified primary ${sourceCount === 1 ? 'source' : 'sources'}</span>
+        </div>`;
+
+  return `<article class="story-card group flex flex-col overflow-hidden">
+  <a href="${postHref}" class="block relative overflow-hidden bg-subtle border-b border-hairline">
+    <img src="${ogSrc}" alt="${escapeHtml(post.title)}" width="1200" height="630" loading="${loading}" class="w-full aspect-[1200/630] object-cover block transition-transform duration-300 group-hover:scale-[1.03]">
+  </a>
+
+  <div class="p-5 flex-1 flex flex-col justify-between gap-4">
+    <div class="space-y-2.5">
+      <div class="flex items-center justify-between gap-2">
+        ${renderCategoryTag(post.category_slug)}
+        ${renderScoreBadge(post.quality_score)}
+      </div>
+
+      <h3 class="font-editorial text-[1.22rem] font-semibold leading-[1.25] text-ink">
+        <a href="${postHref}" class="hover:text-accent transition-colors">${escapeHtml(post.title)}</a>
+      </h3>
+
+      <p class="text-sm text-ink-muted leading-relaxed line-clamp-2">${escapeHtml(post.description)}</p>
+      ${relationFooterHtml}
+    </div>
+
+    <div class="pt-3.5 border-t border-hairline flex items-center justify-between gap-3">
+      <div class="flex items-center gap-2 font-tabular text-[11px] text-ink-faint min-w-0 truncate">
+        <time datetime="${escapeHtml(post.published_at || post.created_at)}">${escapeHtml(formatDate(post.published_at || post.created_at))}</time>
+        <span aria-hidden="true">&middot;</span>
+        <span>${post.reading_time_minutes || 1} min read</span>
+      </div>
+      <a href="${postHref}" class="inline-flex items-center justify-center w-8 h-8 rounded-full border border-hairline bg-paper text-ink-secondary group-hover:bg-[var(--accent)] group-hover:border-[var(--accent)] group-hover:text-white transition-colors shrink-0" aria-label="Read ${escapeHtml(post.title)}">
+        <span aria-hidden="true">&rarr;</span>
+      </a>
+    </div>
+  </div>
+</article>`;
 }
 
 /* ==========================================================================
-   1. Landing Page
+   1. Landing Page — Editorial Broadsheet + Smart AI Tech Publication
    ========================================================================== */
 
 export function renderLandingPage(opts: {
@@ -133,229 +258,473 @@ export function renderLandingPage(opts: {
     settings.site_tagline ||
     'Primary-source technical briefings, security teardowns, and benchmark dossiers built for engineers and citation-grade retrieval.';
 
-  const primaryCtaHref = featuredPost
-    ? `/blog/${encodeURIComponent(featuredPost.slug)}`
-    : '/blog';
-  const primaryCtaLabel = featuredPost ? 'Read Featured Dossier' : 'Browse All Briefings';
+  // Build deduplicated published pool
+  const pool: PostRecord[] = [];
+  const seenIds = new Set<number>();
+  const addToPool = (p: PostRecord | null | undefined) => {
+    if (!p || p.status !== 'published' || seenIds.has(p.id)) return;
+    seenIds.add(p.id);
+    pool.push(p);
+  };
+  addToPool(featuredPost);
+  for (const p of recentPosts) addToPool(p);
 
-  const featuredHtml = featuredPost
-    ? `<section aria-labelledby="featured-heading" class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-12 pb-6">
-    <div class="flex items-center justify-between gap-4 pb-3 border-b border-strong">
-      <h2 id="featured-heading" class="font-tabular text-[11px] uppercase tracking-[0.14em] text-ink-muted font-semibold">Featured Research Dossier</h2>
-      <span class="font-tabular text-xs text-ink-faint">${escapeHtml(formatDate(featuredPost.published_at || featuredPost.created_at))}</span>
+  const leadPost = featuredPost || pool[0] || null;
+  const otherPosts = leadPost ? pool.filter((p) => p.id !== leadPost.id) : [];
+  const secondaryPost = otherPosts[0] || null;
+
+  // Pick spotlight post (highest quality_score, defaulting to leadPost)
+  const spotlightPost =
+    pool.length > 0
+      ? pool.reduce((best, curr) => ((curr.quality_score || 0) > (best.quality_score || 0) ? curr : best), pool[0])
+      : null;
+
+  // Grid posts for 3-column visual story cards
+  const gridCandidates =
+    otherPosts.length >= 4
+      ? otherPosts.slice(1, 10)
+      : otherPosts.length > 0
+        ? otherPosts.slice(0, 9)
+        : pool.slice(0, 3);
+
+  const topicClusters = buildTopicClusters(pool, skills);
+  const leadRelations = leadPost ? computePostRelationships(leadPost, pool, 3) : [];
+
+  // 1. Smart Command Search & Category Strip (PinVpn inspired)
+  const categoryPillsHtml = enabledSkills
+    .map((skill) => {
+      const meta = getCategoryMeta(skill.slug);
+      return `<a href="/category/${encodeURIComponent(skill.slug)}" class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-surface border border-hairline hover:border-strong hover:text-accent text-xs font-medium text-ink-secondary transition-all">
+        <span class="cat-dot" style="--cat-color:${meta.color}" aria-hidden="true"></span>
+        <span>${escapeHtml(meta.shortLabel)}</span>
+      </a>`;
+    })
+    .join('\n');
+
+  const commandHeroHtml = `<section class="border-b border-hairline bg-paper">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-10 sm:pt-10 sm:pb-12">
+    <div class="max-w-3xl mx-auto text-center space-y-4">
+      <p class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.14em] text-ink-muted font-semibold">
+        <span class="cat-dot" style="--cat-color:var(--accent)" aria-hidden="true"></span>
+        <span>Automated AI-Tech Intelligence Desk</span>
+      </p>
+      <h1 class="font-masthead text-3xl sm:text-5xl font-bold leading-[1.08] text-ink">
+        Latest Briefings &amp; <span class="text-accent">Technical Guides</span>
+      </h1>
+      <p class="text-sm sm:text-base text-ink-secondary leading-relaxed max-w-2xl mx-auto">
+        ${escapeHtml(tagline)}
+      </p>
+
+      <!-- Elevated Command Search Bar Card -->
+      <div class="pt-2">
+        <form method="GET" action="/blog" role="search" class="max-w-2xl mx-auto p-1.5 sm:p-2 rounded-full bg-surface border border-hairline shadow-[var(--shadow-subtle)] focus-within:border-[var(--accent)] focus-within:shadow-[var(--shadow-lift)] transition-all flex items-center gap-2">
+          <span class="pl-3.5 text-ink-faint shrink-0" aria-hidden="true">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+          </span>
+          <label for="home-search-input" class="sr-only">Search briefings, CVEs, benchmarks, or protocols</label>
+          <input id="home-search-input" type="search" name="q" placeholder="Search briefings, MCP benchmarks, CVEs, GPU math..." class="w-full bg-transparent border-0 text-sm text-ink placeholder:text-ink-faint focus:outline-none py-2">
+          <button type="submit" class="btn-accent rounded-full px-5 py-2 text-xs sm:text-sm shrink-0">Search</button>
+        </form>
+      </div>
+
+      <!-- Category Filter Pills with 6px Colored Micro-Squares -->
+      <div class="pt-2 flex flex-wrap items-center justify-center gap-2" role="navigation" aria-label="Research tracks">
+        <a href="/blog" class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[var(--ink-primary)] text-[var(--bg-paper)] text-xs font-semibold transition-colors hover:bg-[var(--accent)] hover:text-white">
+          All Briefings
+        </a>
+        ${categoryPillsHtml}
+      </div>
+
+      <!-- Live Publication Telemetry Strip -->
+      <div class="pt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 font-tabular text-[11px] uppercase tracking-[0.1em] text-ink-faint">
+        <span>${pool.length} Published ${pool.length === 1 ? 'Briefing' : 'Briefings'}</span>
+        <span aria-hidden="true">&middot;</span>
+        <span>${enabledSkills.length} Automated Tracks</span>
+        <span aria-hidden="true">&middot;</span>
+        <span>Primary-Source Verified</span>
+      </div>
     </div>
+  </div>
+</section>`;
 
-    <article class="mt-6 editorial-card p-6 sm:p-8 lg:p-10">
-      <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-        <div class="lg:col-span-7 space-y-4">
+  // 2. Front-Page Broadsheet Lead Spread (Featured Times inspired)
+  let leadSpreadHtml = '';
+  if (leadPost) {
+    const leadMeta = getCategoryMeta(leadPost.category_slug);
+    const leadSignals = extractKeySignals(leadPost, 3);
+    const leadHref = `/blog/${encodeURIComponent(leadPost.slug)}`;
+
+    const secondaryCardHtml = secondaryPost
+      ? `<article class="editorial-card overflow-hidden flex flex-col">
+        <a href="/blog/${encodeURIComponent(secondaryPost.slug)}" class="block overflow-hidden border-b border-hairline bg-subtle group">
+          <img src="/og/${encodeURIComponent(secondaryPost.slug)}.svg" alt="${escapeHtml(secondaryPost.title)}" width="1200" height="630" loading="eager" class="w-full aspect-[1200/630] object-cover block transition-transform duration-300 group-hover:scale-[1.03]">
+        </a>
+        <div class="p-4 space-y-2">
+          <div class="flex items-center justify-between gap-2">
+            ${renderCategoryTag(secondaryPost.category_slug)}
+            ${renderScoreBadge(secondaryPost.quality_score)}
+          </div>
+          <h3 class="font-editorial text-lg font-semibold leading-snug text-ink">
+            <a href="/blog/${encodeURIComponent(secondaryPost.slug)}" class="hover:text-accent transition-colors">${escapeHtml(secondaryPost.title)}</a>
+          </h3>
+          <p class="text-xs text-ink-muted leading-relaxed line-clamp-2">${escapeHtml(secondaryPost.description)}</p>
+          <div class="pt-2 border-t border-hairline flex items-center justify-between font-tabular text-[11px] text-ink-faint">
+            <span>${escapeHtml(formatDate(secondaryPost.published_at || secondaryPost.created_at))}</span>
+            <span>${secondaryPost.reading_time_minutes || 1} min read</span>
+          </div>
+        </div>
+      </article>`
+      : '';
+
+    const wireItemsHtml =
+      leadRelations.length > 0
+        ? `<ul class="divide-y divide-[var(--border-hairline)]">
+          ${leadRelations
+            .map((rel) => {
+              const relMeta = getCategoryMeta(rel.post.category_slug);
+              return `<li class="py-3 first:pt-0 last:pb-0 space-y-1">
+              <div class="flex items-center justify-between gap-2 font-tabular text-[10px] uppercase tracking-[0.08em]">
+                <span class="inline-flex items-center gap-1.5 text-ink-muted">
+                  <span class="cat-dot" style="--cat-color:${relMeta.color}" aria-hidden="true"></span>
+                  <span>${escapeHtml(relMeta.shortLabel)}</span>
+                </span>
+                <span class="text-accent font-semibold truncate max-w-[58%]">${escapeHtml(rel.reasonLabel)}</span>
+              </div>
+              <a href="/blog/${encodeURIComponent(rel.post.slug)}" class="block font-editorial text-[0.98rem] font-semibold leading-snug text-ink hover:text-accent transition-colors">
+                ${escapeHtml(rel.post.title)}
+              </a>
+            </li>`;
+            })
+            .join('')}
+        </ul>`
+        : `<p class="text-xs text-ink-muted leading-relaxed">Cross-track signal links populate automatically as new verified dossiers enter the archive.</p>`;
+
+    leadSpreadHtml = `<section aria-labelledby="frontpage-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10 pb-4">
+  <div class="double-rule-top pt-3 pb-4 flex flex-wrap items-center justify-between gap-3">
+    <div class="flex items-center gap-2.5">
+      <span class="cat-dot" style="--cat-color:var(--accent)" aria-hidden="true"></span>
+      <h2 id="frontpage-heading" class="font-tabular text-[11px] uppercase tracking-[0.14em] text-ink font-bold">Front Page &middot; Lead Dispatch</h2>
+    </div>
+    <span class="font-tabular text-xs text-ink-faint">${escapeHtml(formatDate(leadPost.published_at || leadPost.created_at))} &middot; ${leadPost.sources_json.length} Primary Sources</span>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-7 items-start">
+    <!-- Left 8 Columns: Lead Dossier (2-col internal split) -->
+    <article class="lg:col-span-8 editorial-card p-5 sm:p-7">
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
+        <div class="md:col-span-6 space-y-4">
+          <a href="${leadHref}" class="block rounded-[10px] overflow-hidden border border-hairline bg-subtle group">
+            <img src="/og/${encodeURIComponent(leadPost.slug)}.svg" alt="${escapeHtml(leadPost.title)}" width="1200" height="630" loading="eager" class="w-full aspect-[1200/630] object-cover block transition-transform duration-300 group-hover:scale-[1.02]">
+          </a>
+          <div class="p-3.5 rounded-[8px] bg-subtle/80 border border-hairline flex items-center justify-between gap-3">
+            <div class="min-w-0">
+              <p class="font-tabular text-[10px] uppercase tracking-[0.12em] text-ink-faint">Editorial Audit</p>
+              <p class="text-xs font-medium text-ink truncate">By ${escapeHtml(leadPost.author || settings.default_author)}</p>
+            </div>
+            <div class="flex items-center gap-2.5 shrink-0">
+              ${renderScoreRing(leadPost.quality_score)}
+              <a href="/blog/${encodeURIComponent(leadPost.slug)}.md" class="font-tabular text-[11px] text-ink-secondary hover:text-accent underline underline-offset-2">.md</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="md:col-span-6 space-y-4">
           <div class="flex flex-wrap items-center gap-2">
-            <a href="/blog?category=${encodeURIComponent(featuredPost.category_slug)}" class="badge-editorial badge-accent">${escapeHtml(findSkillName(skills, featuredPost.category_slug))}</a>
-            <span class="badge-editorial">${escapeHtml(formatArchetype(featuredPost.archetype))}</span>
-            ${renderScoreBadge(featuredPost.quality_score)}
+            ${renderCategoryTag(leadPost.category_slug)}
+            <span class="badge-editorial">${escapeHtml(formatArchetype(leadPost.archetype))}</span>
+            ${renderScoreBadge(leadPost.quality_score)}
           </div>
 
-          <h3 class="font-editorial text-2xl sm:text-3xl lg:text-[2.15rem] font-semibold leading-[1.15] text-ink">
-            <a href="/blog/${encodeURIComponent(featuredPost.slug)}" class="hover:text-accent transition-colors">${escapeHtml(featuredPost.title)}</a>
+          <h3 class="font-masthead text-2xl sm:text-[1.85rem] font-bold leading-[1.14] text-ink">
+            <a href="${leadHref}" class="hover:text-accent transition-colors">${escapeHtml(leadPost.title)}</a>
           </h3>
 
-          <p class="text-base text-ink-secondary leading-relaxed">${escapeHtml(featuredPost.description)}</p>
+          <p class="text-sm text-ink-secondary leading-relaxed">${escapeHtml(leadPost.description)}</p>
 
           ${
-            featuredPost.tldr_summary
-              ? `<div class="pl-4 border-l-2 border-[var(--accent)] py-1">
-            <p class="font-tabular text-[10px] uppercase tracking-[0.12em] text-ink-faint mb-1">Key Takeaway</p>
-            <p class="text-sm text-ink-muted leading-relaxed">${escapeHtml(featuredPost.tldr_summary)}</p>
+            leadSignals.length > 0
+              ? `<div class="pt-1 space-y-2 border-t border-hairline">
+            <p class="font-tabular text-[10px] uppercase tracking-[0.12em] text-ink-faint font-semibold pt-2">Key Signals</p>
+            <ul class="space-y-1.5 text-[13px] text-ink-secondary leading-snug">
+              ${leadSignals
+                .map(
+                  (sig) => `<li class="flex items-start gap-2">
+                <span class="cat-dot mt-1.5" style="--cat-color:${leadMeta.color}" aria-hidden="true"></span>
+                <span>${sig.label ? `<strong class="text-ink font-semibold">${escapeHtml(sig.label)}:</strong> ` : ''}${escapeHtml(sig.text)}</span>
+              </li>`,
+                )
+                .join('')}
+            </ul>
           </div>`
               : ''
           }
 
-          <div class="pt-2 flex flex-wrap items-center justify-between gap-4 border-t border-hairline">
-            <div class="flex flex-wrap items-center gap-3 font-tabular text-xs text-ink-faint">
-              <span>By ${escapeHtml(featuredPost.author || settings.default_author)}</span>
-              <span aria-hidden="true">&middot;</span>
-              <span>${featuredPost.reading_time_minutes} min read</span>
-              <span aria-hidden="true">&middot;</span>
-              <span>${featuredPost.sources_json.length} primary sources</span>
-            </div>
-            <a href="/blog/${encodeURIComponent(featuredPost.slug)}" class="inline-flex items-center gap-1.5 text-sm font-semibold text-accent hover:text-[var(--accent-hover)] transition-colors">
-              <span>Read full dossier</span>
+          <div class="pt-3 border-t border-hairline flex flex-wrap items-center justify-between gap-3">
+            <span class="font-tabular text-xs text-ink-faint">${leadPost.reading_time_minutes || 1} min read &middot; ${leadPost.word_count.toLocaleString('en-US')} words</span>
+            <a href="${leadHref}" class="btn-accent rounded-full px-4 py-2 text-xs sm:text-sm">
+              <span>Read Full Briefing</span>
               <span aria-hidden="true">&rarr;</span>
             </a>
           </div>
         </div>
-
-        <div class="lg:col-span-5 lg:border-l lg:border-hairline lg:pl-8 space-y-4">
-          <div class="flex items-center justify-between">
-            <span class="font-tabular text-[11px] uppercase tracking-[0.12em] text-ink-faint font-semibold">Verified Key Facts</span>
-            ${renderScoreRing(featuredPost.quality_score)}
-          </div>
-          ${
-            featuredPost.key_facts_json.length > 0
-              ? `<dl class="divide-y divide-[var(--border-hairline)] border-t border-b border-hairline">
-            ${featuredPost.key_facts_json
-              .slice(0, 4)
-              .map(
-                (fact) => `<div class="py-3 grid grid-cols-12 gap-2 text-sm">
-              <dt class="col-span-5 font-tabular text-xs text-ink-muted">${escapeHtml(fact.label)}</dt>
-              <dd class="col-span-7 font-medium text-ink">${escapeHtml(fact.value)}</dd>
-            </div>`,
-              )
-              .join('')}
-          </dl>`
-              : `<p class="text-sm text-ink-muted leading-relaxed border-t border-hairline pt-3">Full primary-source analysis, structured citations, and technical implementation findings inside the complete briefing.</p>`
-          }
-          <div class="flex items-center justify-between text-xs font-tabular text-ink-faint">
-            <span>Machine-readable edition</span>
-            <a href="/blog/${encodeURIComponent(featuredPost.slug)}.md" class="text-ink-secondary hover:text-accent underline underline-offset-2">.md export</a>
-          </div>
-        </div>
       </div>
     </article>
-  </section>`
-    : '';
 
-  const listPosts = featuredPost
-    ? recentPosts.filter((p) => p.id !== featuredPost.id)
-    : recentPosts;
+    <!-- Right 4 Columns: Secondary Lead + Live Relationship Wire -->
+    <div class="lg:col-span-4 space-y-5 broadsheet-divider">
+      ${secondaryCardHtml}
 
-  const recentListHtml =
-    listPosts.length > 0
-      ? `<div class="divide-y divide-[var(--border-hairline)] border-t border-b border-hairline">
-        ${listPosts
-          .map((post, idx) => {
-            const indexLabel = String(idx + 1).padStart(2, '0');
-            return `<article class="editorial-row py-6 px-2 -mx-2 rounded-[4px] grid grid-cols-1 md:grid-cols-12 gap-4 items-baseline">
-          <div class="md:col-span-3 flex flex-wrap md:flex-col gap-x-3 gap-y-1.5">
-            <span class="font-tabular text-xs text-ink-faint">${indexLabel} &middot; ${escapeHtml(formatDate(post.published_at || post.created_at))}</span>
-            <div class="flex flex-wrap items-center gap-1.5">
-              <a href="/blog?category=${encodeURIComponent(post.category_slug)}" class="badge-editorial badge-accent">${escapeHtml(findSkillName(skills, post.category_slug))}</a>
-              <span class="badge-editorial">${escapeHtml(formatArchetype(post.archetype))}</span>
-            </div>
+      <aside class="editorial-card p-5 space-y-4" aria-label="Connected Intelligence Wire">
+        <div class="flex items-center justify-between gap-2 pb-2.5 border-b border-hairline">
+          <div class="flex items-center gap-2">
+            <span class="cat-dot" style="--cat-color:var(--accent)" aria-hidden="true"></span>
+            <h3 class="font-tabular text-[11px] uppercase tracking-[0.13em] font-bold text-ink">Connected Intelligence</h3>
           </div>
-
-          <div class="md:col-span-7 space-y-1.5">
-            <h3 class="font-editorial text-xl sm:text-2xl font-semibold leading-snug text-ink">
-              <a href="/blog/${encodeURIComponent(post.slug)}" class="hover:text-accent transition-colors">${escapeHtml(post.title)}</a>
-            </h3>
-            <p class="text-sm text-ink-muted leading-relaxed line-clamp-2">${escapeHtml(post.description)}</p>
-          </div>
-
-          <div class="md:col-span-2 flex md:flex-col items-center md:items-end justify-between gap-2">
-            ${renderScoreBadge(post.quality_score)}
-            <span class="font-tabular text-xs text-ink-faint">${post.reading_time_minutes} min &middot; ${post.sources_json.length} src</span>
-          </div>
-        </article>`;
-          })
-          .join('')}
-      </div>`
-      : `<div class="border border-hairline rounded-[6px] bg-surface p-8 text-center space-y-2">
-        <p class="font-editorial text-xl text-ink">New research dossiers are currently in editorial review.</p>
-        <p class="text-sm text-ink-muted">Explore our <a href="/editorial-policy" class="text-accent underline underline-offset-2">verification methodology</a> or subscribe via <a href="/rss.xml" class="text-accent underline underline-offset-2">RSS</a>.</p>
-      </div>`;
-
-  const tracksHtml =
-    enabledSkills.length > 0
-      ? `<section id="categories" aria-labelledby="tracks-heading" class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 scroll-mt-20">
-    <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-3 pb-3 border-b border-strong">
-      <div>
-        <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Coverage Index</p>
-        <h2 id="tracks-heading" class="font-editorial text-2xl sm:text-3xl font-semibold text-ink mt-1">Category Research Tracks</h2>
-      </div>
-      <a href="/blog" class="font-tabular text-xs text-ink-muted hover:text-accent transition-colors">View complete archive &rarr;</a>
-    </div>
-
-    <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-5">
-      ${enabledSkills
-        .map(
-          (skill, idx) => `<a href="/blog?category=${encodeURIComponent(skill.slug)}" class="editorial-card p-6 flex flex-col justify-between gap-4 group">
-        <div class="space-y-2.5">
-          <div class="flex items-center justify-between gap-2">
-            <span class="font-tabular text-[11px] text-ink-faint uppercase tracking-[0.12em]">Track ${String(idx + 1).padStart(2, '0')}</span>
-            <span class="font-tabular text-xs text-accent group-hover:translate-x-0.5 transition-transform">Inspect &rarr;</span>
-          </div>
-          <h3 class="font-editorial text-xl font-semibold text-ink group-hover:text-accent transition-colors">${escapeHtml(skill.name)}</h3>
-          <p class="text-sm text-ink-muted leading-relaxed">${escapeHtml(skill.description)}</p>
+          <span class="font-tabular text-[10px] text-ink-faint">LIVE GRAPH</span>
         </div>
-        <div class="pt-3 border-t border-hairline flex flex-wrap items-center justify-between gap-2">
-          <span class="text-xs text-ink-faint truncate max-w-[65%]">For: ${escapeHtml(skill.target_audience)}</span>
+
+        ${wireItemsHtml}
+
+        ${
+          topicClusters.length > 0
+            ? `<div class="pt-3 border-t border-hairline space-y-2">
+          <p class="font-tabular text-[10px] uppercase tracking-[0.12em] text-ink-faint font-semibold">Trending Concepts</p>
           <div class="flex flex-wrap gap-1.5">
-            ${skill.preferred_archetypes_json
-              .slice(0, 2)
-              .map((a) => `<span class="badge-editorial">${escapeHtml(formatArchetype(a))}</span>`)
-              .join('')}
+            ${renderTopicClusterChips(topicClusters, 6)}
           </div>
-        </div>
-      </a>`,
-        )
-        .join('')}
+        </div>`
+            : ''
+        }
+      </aside>
     </div>
-  </section>`
-      : '';
-
-  const landingBody = `<section class="border-b border-hairline">
-  <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-14 sm:py-20">
-    <div class="flex flex-wrap items-center justify-between gap-3 pb-6 mb-8 border-b border-hairline font-tabular text-[11px] uppercase tracking-[0.14em] text-ink-faint">
-      <span>Independent Technical Intelligence</span>
-      <span>Primary-Source Verified &middot; Human-Edited</span>
-    </div>
-
-    <div class="grid grid-cols-1 lg:grid-cols-12 gap-10 items-end">
-      <div class="lg:col-span-8 space-y-5">
-        <h1 class="font-editorial text-4xl sm:text-5xl lg:text-[3.4rem] font-semibold leading-[1.06] text-ink">
-          Signal-dense engineering briefings, verified at the source.
-        </h1>
-        <p class="text-base sm:text-lg text-ink-secondary leading-relaxed max-w-2xl">
-          ${escapeHtml(tagline)}
+  </div>
+</section>`;
+  } else {
+    leadSpreadHtml = `<section aria-labelledby="frontpage-empty-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10 pb-4">
+  <div class="double-rule-top pt-6">
+    <div class="editorial-card p-8 sm:p-10 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+      <div class="lg:col-span-7 space-y-4">
+        <span class="badge-editorial badge-accent">Autonomous Desk Ready</span>
+        <h2 id="frontpage-empty-heading" class="font-masthead text-3xl sm:text-4xl font-bold text-ink leading-tight">
+          Six primary-source intelligence tracks on standby.
+        </h2>
+        <p class="text-base text-ink-secondary leading-relaxed">
+          ${escapeHtml(siteName)} monitors official advisories, arXiv papers, cloud changelogs, and reproducible benchmarks—publishing only high-signal briefings that pass our deterministic audit gate.
         </p>
         <div class="pt-2 flex flex-wrap items-center gap-3">
-          <a href="${primaryCtaHref}" class="btn-primary">
-            <span>${escapeHtml(primaryCtaLabel)}</span>
-            <span aria-hidden="true">&rarr;</span>
-          </a>
-          <a href="#categories" class="btn-ghost">Research Tracks</a>
-          <a href="/editorial-policy" class="btn-ghost">Verification Standard</a>
+          <a href="#categories" class="btn-accent rounded-full px-5">Explore 6 Research Tracks &rarr;</a>
+          <a href="/editorial-policy" class="btn-ghost rounded-full">Editorial Verification Standard</a>
         </div>
       </div>
-
-      <div class="lg:col-span-4 border-t lg:border-t-0 lg:border-l border-hairline pt-6 lg:pt-0 lg:pl-8 space-y-4">
-        <div class="flex items-baseline justify-between border-b border-hairline pb-3">
-          <span class="font-tabular text-xs uppercase tracking-[0.08em] text-ink-faint">Tracks Active</span>
-          <span class="font-tabular text-xl font-semibold text-ink">${String(enabledSkills.length).padStart(2, '0')}</span>
-        </div>
-        <div class="flex items-baseline justify-between border-b border-hairline pb-3">
-          <span class="font-tabular text-xs uppercase tracking-[0.08em] text-ink-faint">Citation Standard</span>
-          <span class="font-tabular text-sm font-medium text-ink">Primary URLs Only</span>
-        </div>
-        <div class="flex items-baseline justify-between">
-          <span class="font-tabular text-xs uppercase tracking-[0.08em] text-ink-faint">Formats</span>
-          <span class="font-tabular text-sm font-medium text-ink">HTML &middot; MD &middot; JSON &middot; RSS</span>
-        </div>
+      <div class="lg:col-span-5 grid grid-cols-2 gap-3">
+        ${enabledSkills
+          .slice(0, 6)
+          .map((skill) => {
+            const meta = getCategoryMeta(skill.slug);
+            return `<a href="/category/${encodeURIComponent(skill.slug)}" class="p-3.5 rounded-[10px] bg-subtle/80 border border-hairline hover:border-strong transition-colors space-y-1">
+              <div class="flex items-center gap-1.5 font-tabular text-[10px] font-bold tracking-[0.08em]" style="color:${meta.color}">
+                <span class="cat-dot" style="--cat-color:${meta.color}" aria-hidden="true"></span>
+                <span>${escapeHtml(meta.shortLabel)}</span>
+              </div>
+              <p class="font-editorial text-sm font-semibold text-ink line-clamp-1">${escapeHtml(skill.name)}</p>
+            </a>`;
+          })
+          .join('')}
       </div>
     </div>
   </div>
-</section>
+</section>`;
+  }
 
-${featuredHtml}
-
-<section aria-labelledby="latest-heading" class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-14">
-  <div class="flex items-end justify-between gap-4 pb-3 border-b border-strong mb-2">
+  // 3. 3-Column Visual Story Cards Grid (PinVpn + Featured Times)
+  const recentGridHtml =
+    gridCandidates.length > 0
+      ? `<section aria-labelledby="recent-briefings-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-12">
+  <div class="double-rule-top pt-4 pb-5 flex flex-wrap items-end justify-between gap-4">
     <div>
-      <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Briefing Ledger</p>
-      <h2 id="latest-heading" class="font-editorial text-2xl sm:text-3xl font-semibold text-ink mt-1">Latest Verified Briefings</h2>
+      <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Briefing Archive</p>
+      <h2 id="recent-briefings-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1">Recent Briefings</h2>
     </div>
-    <a href="/blog" class="font-tabular text-xs text-ink-muted hover:text-accent transition-colors">All briefings &rarr;</a>
+    <a href="/blog" class="font-tabular text-xs font-semibold text-ink-secondary hover:text-accent transition-colors">View full archive &rarr;</a>
   </div>
-  ${recentListHtml}
-</section>
 
-${tracksHtml}
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+    ${gridCandidates
+      .map((post) => {
+        const topRel = computePostRelationships(post, pool, 1)[0] || null;
+        return renderVisualStoryCard({ post, skills, topRelation: topRel, loading: 'lazy' });
+      })
+      .join('\n')}
+  </div>
+</section>`
+      : '';
 
-<section aria-labelledby="rigor-heading" class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-16">
-  <div class="border border-hairline rounded-[6px] bg-surface p-7 sm:p-10">
+  // 4. Bold Broadsheet Editorial Spotlight Band ("THIS WEEK'S SIGNAL REPORT")
+  const spotlightBandHtml = `<section aria-labelledby="spotlight-heading" class="mt-16 bg-subtle/75 border-y border-hairline">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16">
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
+      <!-- Left: Giant Stacked Condensed Display Typography -->
+      <div class="lg:col-span-3 flex flex-col justify-between gap-6">
+        <div class="space-y-4">
+          <span class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--accent)] text-white font-tabular text-[10px] font-bold uppercase tracking-[0.14em]">
+            Verified Edition
+          </span>
+          <h2 id="spotlight-heading" class="font-condensed uppercase font-bold text-5xl sm:text-6xl leading-[0.9] tracking-tight text-ink">
+            THIS WEEK&rsquo;S<br>
+            <span class="text-accent">SIGNAL</span><br>
+            REPORT
+          </h2>
+          <p class="text-sm text-ink-muted leading-relaxed">
+            Our highest-scoring primary-source dossier, selected deterministically by citation density, concrete metrics, and zero-filler cleanliness.
+          </p>
+        </div>
+
+        <div class="pt-4 border-t border-strong/20 font-tabular text-[11px] text-ink-faint space-y-1">
+          <p class="uppercase tracking-[0.12em] text-ink-secondary font-semibold">Formats Available</p>
+          <p>SSR HTML &middot; Raw .md &middot; JSON Feed 1.1 &middot; RSS 2.0</p>
+        </div>
+      </div>
+
+      <!-- Middle: High-Contrast Highlight Card for Highest-Quality Briefing -->
+      <div class="lg:col-span-5">
+        ${
+          spotlightPost
+            ? `<article class="h-full rounded-[14px] bg-surface border-2 border-strong p-6 sm:p-7 flex flex-col justify-between gap-5 shadow-[var(--shadow-lift)]">
+          <div class="space-y-4">
+            <div class="flex items-center justify-between gap-3">
+              ${renderCategoryTag(spotlightPost.category_slug)}
+              ${renderScoreBadge(spotlightPost.quality_score)}
+            </div>
+
+            <h3 class="font-masthead text-2xl sm:text-[1.75rem] font-bold leading-[1.15] text-ink">
+              <a href="/blog/${encodeURIComponent(spotlightPost.slug)}" class="hover:text-accent transition-colors">${escapeHtml(spotlightPost.title)}</a>
+            </h3>
+
+            ${
+              spotlightPost.tldr_summary
+                ? `<blockquote class="pl-4 border-l-2 border-[var(--accent)] text-sm text-ink-secondary leading-relaxed">
+              ${escapeHtml(spotlightPost.tldr_summary)}
+            </blockquote>`
+                : `<p class="text-sm text-ink-secondary leading-relaxed">${escapeHtml(spotlightPost.description)}</p>`
+            }
+
+            ${
+              spotlightPost.key_facts_json.length > 0
+                ? `<dl class="divide-y divide-[var(--border-hairline)] border-t border-b border-hairline">
+              ${spotlightPost.key_facts_json
+                .slice(0, 3)
+                .map(
+                  (fact) => `<div class="py-2.5 grid grid-cols-12 gap-2 text-xs">
+                <dt class="col-span-5 font-tabular text-ink-muted">${escapeHtml(fact.label)}</dt>
+                <dd class="col-span-7 font-semibold text-ink">${escapeHtml(fact.value)}</dd>
+              </div>`,
+                )
+                .join('')}
+            </dl>`
+                : ''
+            }
+          </div>
+
+          <div class="pt-3 border-t border-hairline flex flex-wrap items-center justify-between gap-3">
+            <span class="font-tabular text-xs text-ink-faint">${spotlightPost.sources_json.length} citations &middot; ${spotlightPost.reading_time_minutes || 1} min read</span>
+            <a href="/blog/${encodeURIComponent(spotlightPost.slug)}" class="btn-primary rounded-full px-4 py-2 text-xs">
+              <span>Read Full Dossier</span>
+              <span aria-hidden="true">&rarr;</span>
+            </a>
+          </div>
+        </article>`
+            : `<div class="h-full rounded-[14px] bg-surface border border-hairline p-6 flex flex-col justify-center gap-3">
+          <p class="font-masthead text-2xl font-bold text-ink">Next Signal Report In Preparation</p>
+          <p class="text-sm text-ink-muted leading-relaxed">Once the autonomous research desk completes primary-source verification, the highest-scoring briefing is spotlighted here.</p>
+          <div class="pt-2">
+            <a href="/editorial-policy" class="btn-ghost rounded-full text-xs">Inspect Quality Rubric &rarr;</a>
+          </div>
+        </div>`
+        }
+      </div>
+
+      <!-- Right: Research Desk & Topic Clusters Sidebar + Conditional AdSense -->
+      <div class="lg:col-span-4 flex flex-col gap-5">
+        <div class="editorial-card p-5 space-y-3">
+          <div class="flex items-center justify-between gap-2">
+            <p class="font-tabular text-[10px] uppercase tracking-[0.14em] text-accent font-bold">Research Desk</p>
+            <a href="/about" class="font-tabular text-[11px] text-ink-muted hover:text-accent underline underline-offset-2">Masthead</a>
+          </div>
+          <h3 class="font-masthead text-xl font-bold text-ink">${escapeHtml(settings.default_author || 'Editorial Desk')}</h3>
+          <p class="text-xs sm:text-sm text-ink-muted leading-relaxed">
+            ${escapeHtml(settings.author_bio || 'Independent technical researcher and editor focusing on primary-source engineering analysis, software security, and AI infrastructure.')}
+          </p>
+        </div>
+
+        <div class="editorial-card p-5 space-y-3 flex-1">
+          <div class="flex items-center justify-between gap-2">
+            <p class="font-tabular text-[10px] uppercase tracking-[0.14em] text-ink font-bold">Intelligence Graph &middot; Trending Concepts</p>
+          </div>
+          ${
+            topicClusters.length > 0
+              ? `<div class="flex flex-wrap gap-2">${renderTopicClusterChips(topicClusters, 10)}</div>`
+              : `<div class="flex flex-wrap gap-2">
+            ${enabledSkills
+              .map((s) => {
+                const meta = getCategoryMeta(s.slug);
+                return `<a href="/category/${encodeURIComponent(s.slug)}" class="rel-chip"><span class="cat-dot" style="--cat-color:${meta.color}" aria-hidden="true"></span><span>${escapeHtml(meta.shortLabel)}</span></a>`;
+              })
+              .join('')}
+          </div>`
+          }
+        </div>
+
+        ${renderAdSlot(settings, 'Sponsored')}
+      </div>
+    </div>
+  </div>
+</section>`;
+
+  // 5. 6 Autonomous Research Tracks + Editorial Rigor Strip
+  const tracksHtml =
+    enabledSkills.length > 0
+      ? `<section id="categories" aria-labelledby="tracks-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 scroll-mt-24">
+  <div class="double-rule-top pt-4 pb-5 flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+    <div>
+      <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Coverage Index</p>
+      <h2 id="tracks-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1">Autonomous Research Tracks</h2>
+    </div>
+    <a href="/blog" class="font-tabular text-xs font-semibold text-ink-muted hover:text-accent transition-colors">View complete archive &rarr;</a>
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+    ${enabledSkills
+      .map((skill, idx) => {
+        const meta = getCategoryMeta(skill.slug);
+        return `<a href="/category/${encodeURIComponent(skill.slug)}" class="editorial-card p-6 flex flex-col justify-between gap-4 group">
+        <div class="space-y-2.5">
+          <div class="flex items-center justify-between gap-2">
+            <span class="inline-flex items-center gap-2 font-tabular text-[11px] font-bold uppercase tracking-[0.1em]" style="color:${meta.color}">
+              <span class="cat-dot" style="--cat-color:${meta.color}" aria-hidden="true"></span>
+              <span>${escapeHtml(meta.shortLabel)}</span>
+            </span>
+            <span class="font-tabular text-[11px] text-ink-faint">0${idx + 1}</span>
+          </div>
+          <h3 class="font-editorial text-xl font-semibold text-ink group-hover:text-accent transition-colors">${escapeHtml(skill.name)}</h3>
+          <p class="text-sm text-ink-muted leading-relaxed line-clamp-3">${escapeHtml(skill.description)}</p>
+        </div>
+        <div class="pt-3 border-t border-hairline flex items-center justify-between gap-2">
+          <span class="text-xs text-ink-faint truncate max-w-[75%]">For: ${escapeHtml(skill.target_audience)}</span>
+          <span class="font-tabular text-xs font-semibold text-accent group-hover:translate-x-0.5 transition-transform shrink-0">Track &rarr;</span>
+        </div>
+      </a>`;
+      })
+      .join('\n')}
+  </div>
+</section>`
+      : '';
+
+  const rigorHtml = `<section aria-labelledby="rigor-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-16">
+  <div class="editorial-card p-7 sm:p-10">
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
       <div class="lg:col-span-4 space-y-3">
         <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Editorial Rigor</p>
-        <h2 id="rigor-heading" class="font-editorial text-2xl sm:text-3xl font-semibold text-ink leading-tight">
+        <h2 id="rigor-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink leading-tight">
           Built to reject generic filler and unverified claims.
         </h2>
         <p class="text-sm text-ink-muted leading-relaxed">
@@ -369,24 +738,24 @@ ${tracksHtml}
         </div>
       </div>
 
-      <div class="lg:col-span-8 grid grid-cols-1 sm:grid-cols-3 gap-6 lg:border-l lg:border-hairline lg:pl-8">
+      <div class="lg:col-span-8 grid grid-cols-1 sm:grid-cols-3 gap-6 broadsheet-divider">
         <div class="space-y-2">
-          <span class="font-tabular text-xs font-semibold text-accent">01 / GROUNDING</span>
-          <h3 class="font-semibold text-base text-ink">Primary-Source Citations</h3>
+          <span class="font-tabular text-xs font-bold text-accent">01 / GROUNDING</span>
+          <h3 class="font-editorial text-lg font-semibold text-ink">Primary-Source Citations</h3>
           <p class="text-sm text-ink-muted leading-relaxed">
             Findings are anchored directly to official advisories, release notes, papers, and reproducible benchmark tables—never circular summaries.
           </p>
         </div>
         <div class="space-y-2">
-          <span class="font-tabular text-xs font-semibold text-accent">02 / AUDIT</span>
-          <h3 class="font-semibold text-base text-ink">Deterministic Quality Gate</h3>
+          <span class="font-tabular text-xs font-bold text-accent">02 / AUDIT</span>
+          <h3 class="font-editorial text-lg font-semibold text-ink">Deterministic Quality Gate</h3>
           <p class="text-sm text-ink-muted leading-relaxed">
             Every draft is scored against a strict structural rubric enforcing answer-first summaries, verified fact tables, and zero cliché padding.
           </p>
         </div>
         <div class="space-y-2">
-          <span class="font-tabular text-xs font-semibold text-accent">03 / ACCOUNTABILITY</span>
-          <h3 class="font-semibold text-base text-ink">Human Editorial Review</h3>
+          <span class="font-tabular text-xs font-bold text-accent">03 / ACCOUNTABILITY</span>
+          <h3 class="font-editorial text-lg font-semibold text-ink">Human Editorial Review</h3>
           <p class="text-sm text-ink-muted leading-relaxed">
             Named editorial oversight by ${escapeHtml(settings.default_author || 'our desk')} with transparent corrections and direct Markdown/JSON provenance.
           </p>
@@ -394,8 +763,14 @@ ${tracksHtml}
       </div>
     </div>
   </div>
-</section>
+</section>`;
 
+  const landingBody = `${commandHeroHtml}
+${leadSpreadHtml}
+${recentGridHtml}
+${spotlightBandHtml}
+${tracksHtml}
+${rigorHtml}
 ${renderCtaStrip(settings)}`;
 
   const baseUrl = normalizeBaseUrl(settings.base_url);
@@ -425,7 +800,7 @@ ${renderCtaStrip(settings)}`;
 }
 
 /* ==========================================================================
-   2. Blog Index Page
+   2. Blog Index & Category Archive Page
    ========================================================================== */
 
 export function renderBlogIndexPage(opts: {
@@ -440,6 +815,7 @@ export function renderBlogIndexPage(opts: {
   const { settings, posts, skills, activeCategory, page, totalPages, query } = opts;
   const activeSkill = activeCategory ? skills.find((s) => s.slug === activeCategory) : undefined;
   const trimmedQuery = (query || '').trim();
+  const activeMeta = activeCategory ? getCategoryMeta(activeCategory) : null;
 
   const buildIndexUrl = (targetPage: number, cat?: string, q?: string): string => {
     const params = new URLSearchParams();
@@ -451,73 +827,47 @@ export function renderBlogIndexPage(opts: {
   };
 
   const filterChips = [
-    `<a href="${escapeHtml(buildIndexUrl(1, undefined, trimmedQuery))}" class="px-3 py-1.5 rounded-[4px] font-tabular text-xs border transition-colors ${
+    `<a href="${escapeHtml(buildIndexUrl(1, undefined, trimmedQuery))}" class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full font-tabular text-xs border transition-colors ${
       !activeCategory
         ? 'bg-[var(--ink-primary)] text-[var(--bg-paper)] border-[var(--ink-primary)] font-semibold'
-        : 'bg-surface text-ink-muted border-hairline hover:border-strong hover:text-ink'
+        : 'bg-surface text-ink-secondary border-hairline hover:border-strong hover:text-ink'
     }">All Tracks</a>`,
     ...skills
       .filter((s) => s.enabled || s.slug === activeCategory)
       .map((skill) => {
         const isActive = skill.slug === activeCategory;
-        return `<a href="${escapeHtml(buildIndexUrl(1, skill.slug, trimmedQuery))}" class="px-3 py-1.5 rounded-[4px] font-tabular text-xs border transition-colors ${
+        const meta = getCategoryMeta(skill.slug);
+        return `<a href="${escapeHtml(buildIndexUrl(1, skill.slug, trimmedQuery))}" class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full font-tabular text-xs border transition-colors ${
           isActive
             ? 'bg-[var(--accent)] text-white border-[var(--accent)] font-semibold'
-            : 'bg-surface text-ink-muted border-hairline hover:border-strong hover:text-ink'
-        }">${escapeHtml(skill.name)}</a>`;
+            : 'bg-surface text-ink-secondary border-hairline hover:border-strong hover:text-ink'
+        }">
+          <span class="cat-dot" style="--cat-color:${isActive ? '#FFFFFF' : meta.color}" aria-hidden="true"></span>
+          <span>${escapeHtml(meta.shortLabel)}</span>
+        </a>`;
       }),
   ].join('\n');
 
-  const rowsHtml =
+  const cardsHtml =
     posts.length > 0
-      ? `<div class="divide-y divide-[var(--border-hairline)] border-t border-b border-hairline">
+      ? `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         ${posts
-          .map(
-            (post) => `<article class="editorial-row py-7 px-3 -mx-3 rounded-[5px]">
-          <div class="grid grid-cols-1 md:grid-cols-12 gap-5 items-start">
-            <div class="md:col-span-3 space-y-2">
-              <time datetime="${escapeHtml(post.published_at || post.created_at)}" class="block font-tabular text-xs text-ink-faint">
-                ${escapeHtml(formatDate(post.published_at || post.created_at))}
-              </time>
-              <div class="flex flex-wrap gap-1.5">
-                <a href="/blog?category=${encodeURIComponent(post.category_slug)}" class="badge-editorial badge-accent">${escapeHtml(findSkillName(skills, post.category_slug))}</a>
-                <span class="badge-editorial">${escapeHtml(formatArchetype(post.archetype))}</span>
-              </div>
-              <div class="flex items-center gap-2 pt-1 font-tabular text-xs text-ink-faint">
-                <span>${post.reading_time_minutes} min read</span>
-                <span aria-hidden="true">&middot;</span>
-                <span>${post.sources_json.length} sources</span>
-              </div>
-            </div>
-
-            <div class="md:col-span-7 space-y-2.5">
-              <h2 class="font-editorial text-2xl font-semibold leading-snug text-ink">
-                <a href="/blog/${encodeURIComponent(post.slug)}" class="hover:text-accent transition-colors">${escapeHtml(post.title)}</a>
-              </h2>
-              <p class="text-[0.95rem] text-ink-secondary leading-relaxed">${escapeHtml(post.description)}</p>
-              ${
-                post.tldr_summary
-                  ? `<p class="text-xs sm:text-[13px] text-ink-muted bg-subtle/80 border-l-2 border-[var(--border-strong)] pl-3 py-1.5 leading-relaxed">
-                <strong class="font-tabular uppercase tracking-wider text-[10px] text-ink-faint mr-1.5">TL;DR</strong>${escapeHtml(post.tldr_summary)}
-              </p>`
-                  : ''
-              }
-            </div>
-
-            <div class="md:col-span-2 flex md:flex-col items-center md:items-end justify-between gap-3">
-              ${renderScoreBadge(post.quality_score)}
-              <a href="/blog/${encodeURIComponent(post.slug)}" class="font-tabular text-xs font-medium text-accent hover:underline underline-offset-2">Read briefing &rarr;</a>
-            </div>
-          </div>
-        </article>`,
-          )
-          .join('')}
+          .map((post, idx) => {
+            const topRel = computePostRelationships(post, posts, 1)[0] || null;
+            return renderVisualStoryCard({
+              post,
+              skills,
+              topRelation: topRel,
+              loading: idx < 3 ? 'eager' : 'lazy',
+            });
+          })
+          .join('\n')}
       </div>`
-      : `<div class="border border-hairline rounded-[6px] bg-surface p-10 text-center space-y-3">
-        <p class="font-editorial text-2xl text-ink">No matching briefings found.</p>
+      : `<div class="editorial-card p-10 text-center space-y-3">
+        <p class="font-masthead text-2xl font-bold text-ink">No matching briefings found.</p>
         <p class="text-sm text-ink-muted">Try clearing your search query or switching to another research track.</p>
         <div class="pt-2">
-          <a href="/blog" class="btn-ghost">Reset filters</a>
+          <a href="/blog" class="btn-ghost rounded-full">Reset filters</a>
         </div>
       </div>`;
 
@@ -527,32 +877,34 @@ export function renderBlogIndexPage(opts: {
         <div>
           ${
             page > 1
-              ? `<a href="${escapeHtml(buildIndexUrl(page - 1, activeCategory, trimmedQuery))}" class="btn-ghost font-tabular text-xs">&larr; Previous</a>`
-              : `<span class="btn-ghost opacity-40 pointer-events-none font-tabular text-xs">&larr; Previous</span>`
+              ? `<a href="${escapeHtml(buildIndexUrl(page - 1, activeCategory, trimmedQuery))}" class="btn-ghost rounded-full font-tabular text-xs">&larr; Previous</a>`
+              : `<span class="btn-ghost rounded-full opacity-40 pointer-events-none font-tabular text-xs">&larr; Previous</span>`
           }
         </div>
         <span class="font-tabular text-xs text-ink-muted">Page ${page} of ${totalPages}</span>
         <div>
           ${
             page < totalPages
-              ? `<a href="${escapeHtml(buildIndexUrl(page + 1, activeCategory, trimmedQuery))}" class="btn-ghost font-tabular text-xs">Next &rarr;</a>`
-              : `<span class="btn-ghost opacity-40 pointer-events-none font-tabular text-xs">Next &rarr;</span>`
+              ? `<a href="${escapeHtml(buildIndexUrl(page + 1, activeCategory, trimmedQuery))}" class="btn-ghost rounded-full font-tabular text-xs">Next &rarr;</a>`
+              : `<span class="btn-ghost rounded-full opacity-40 pointer-events-none font-tabular text-xs">Next &rarr;</span>`
           }
         </div>
       </nav>`
       : '';
 
-  const indexBody = `<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16">
-  <header class="pb-8 border-b border-strong space-y-6">
+  const indexBody = `<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-14">
+  <!-- Elevated Search + Category Filter Hub -->
+  <header class="editorial-card p-6 sm:p-8 space-y-6">
     <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
-      <div class="space-y-2 max-w-2xl">
-        <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">
-          ${activeSkill ? `Research Track &middot; ${escapeHtml(activeSkill.slug)}` : 'Complete Archive'}
+      <div class="space-y-2.5 max-w-2xl">
+        <p class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">
+          <span class="cat-dot" style="--cat-color:${activeMeta ? activeMeta.color : 'var(--accent)'}" aria-hidden="true"></span>
+          <span>${activeSkill ? `Research Track · ${escapeHtml(activeSkill.slug)}` : 'Complete Editorial Archive'}</span>
         </p>
-        <h1 class="font-editorial text-3xl sm:text-5xl font-semibold text-ink leading-[1.08]">
+        <h1 class="font-masthead text-3xl sm:text-5xl font-bold text-ink leading-[1.08]">
           ${activeSkill ? escapeHtml(activeSkill.name) : 'Research Briefings'}
         </h1>
-        <p class="text-base text-ink-muted leading-relaxed">
+        <p class="text-sm sm:text-base text-ink-muted leading-relaxed">
           ${
             activeSkill
               ? escapeHtml(activeSkill.description)
@@ -561,15 +913,18 @@ export function renderBlogIndexPage(opts: {
         </p>
       </div>
 
-      <form id="search" method="GET" action="/blog" role="search" class="w-full lg:w-80 flex items-center gap-2">
+      <form id="search" method="GET" action="/blog" role="search" class="w-full lg:w-[24rem] p-1.5 rounded-full bg-paper border border-hairline focus-within:border-[var(--accent)] transition-colors flex items-center gap-2">
         ${activeCategory ? `<input type="hidden" name="category" value="${escapeHtml(activeCategory)}">` : ''}
+        <span class="pl-3 text-ink-faint shrink-0" aria-hidden="true">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+        </span>
         <label for="blog-search-input" class="sr-only">Search briefings</label>
-        <input id="blog-search-input" type="search" name="q" value="${escapeHtml(trimmedQuery)}" placeholder="Search titles, topics, CVEs..." class="admin-input h-10">
-        <button type="submit" class="btn-primary h-10 px-4 shrink-0">Search</button>
+        <input id="blog-search-input" type="search" name="q" value="${escapeHtml(trimmedQuery)}" placeholder="Search titles, topics, CVEs..." class="w-full bg-transparent border-0 text-sm text-ink placeholder:text-ink-faint focus:outline-none py-1.5">
+        <button type="submit" class="btn-accent rounded-full px-4 py-1.5 text-xs shrink-0">Search</button>
       </form>
     </div>
 
-    <div class="flex flex-wrap items-center justify-between gap-3 pt-2">
+    <div class="pt-4 border-t border-hairline flex flex-wrap items-center justify-between gap-3">
       <div class="flex flex-wrap items-center gap-2" role="navigation" aria-label="Filter by category">
         ${filterChips}
       </div>
@@ -587,8 +942,8 @@ export function renderBlogIndexPage(opts: {
       : ''
   }
 
-  <div class="mt-6">
-    ${rowsHtml}
+  <div class="mt-8">
+    ${cardsHtml}
   </div>
 
   ${paginationHtml}
@@ -617,7 +972,7 @@ export function renderBlogIndexPage(opts: {
 }
 
 /* ==========================================================================
-   3. Single Blog Post Page (GEO + SEO + AdSense + High-Readability SSR)
+   3. Single Blog Post Page (Magazine Header + Cover Art + Connected Graph)
    ========================================================================== */
 
 export function renderBlogPostPage(opts: {
@@ -628,6 +983,7 @@ export function renderBlogPostPage(opts: {
   headings?: Array<{ id: string; level: number; text: string }>;
 }): string {
   const { settings, post, skill, relatedPosts, headings = [] } = opts;
+  const catMeta = getCategoryMeta(post.category_slug);
   const categoryName = skill?.name || post.category_slug.replace(/-/g, ' ');
   const authorName = post.author || settings.default_author || 'Editorial Desk';
   const publishedIso = post.published_at || post.created_at;
@@ -637,11 +993,14 @@ export function renderBlogPostPage(opts: {
     formatDate(updatedIso) !== formatDate(publishedIso);
   const hasToc = headings.length >= 2;
   const markdownUrl = `/blog/${encodeURIComponent(post.slug)}.md`;
+  const coverArtSrc = `/og/${encodeURIComponent(post.slug)}.svg`;
+
+  const relationships = computePostRelationships(post, relatedPosts, 3);
 
   const tldrHtml = post.tldr_summary
-    ? `<section aria-label="Executive Summary" class="mt-8 rounded-[6px] border border-hairline border-l-[3px] border-l-[var(--accent)] bg-surface p-5 sm:p-6">
+    ? `<section aria-label="Executive Summary" class="mt-8 rounded-[10px] border border-hairline border-l-[4px] border-l-[var(--accent)] bg-surface p-5 sm:p-6 shadow-[var(--shadow-subtle)]">
       <div class="flex items-center justify-between gap-2 mb-2">
-        <span class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">TL;DR &middot; Direct Answer</span>
+        <span class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-bold">TL;DR &middot; Direct Answer</span>
         <span class="font-tabular text-[11px] text-ink-faint">Key Takeaway</span>
       </div>
       <p class="text-[0.98rem] sm:text-base leading-[1.7] text-ink font-medium">${escapeHtml(post.tldr_summary)}</p>
@@ -650,9 +1009,9 @@ export function renderBlogPostPage(opts: {
 
   const keyFactsHtml =
     post.key_facts_json.length > 0
-      ? `<section aria-labelledby="key-facts-heading" class="mt-6 rounded-[6px] border border-hairline bg-surface overflow-hidden">
+      ? `<section aria-labelledby="key-facts-heading" class="mt-6 rounded-[10px] border border-hairline bg-surface overflow-hidden shadow-[var(--shadow-subtle)]">
       <div class="px-5 py-3 bg-subtle border-b border-hairline flex items-center justify-between gap-3">
-        <h2 id="key-facts-heading" class="font-tabular text-[11px] uppercase tracking-[0.14em] text-ink-muted font-semibold">Verified Key Facts</h2>
+        <h2 id="key-facts-heading" class="font-tabular text-[11px] uppercase tracking-[0.14em] text-ink-secondary font-bold">Verified Key Facts</h2>
         <span class="font-tabular text-[11px] text-ink-faint">${post.key_facts_json.length} structured data points</span>
       </div>
       <div class="overflow-x-auto">
@@ -680,7 +1039,7 @@ export function renderBlogPostPage(opts: {
 
   const tocHtml = hasToc
     ? `<aside aria-label="Table of contents" class="hidden lg:block lg:col-span-4 xl:col-span-3">
-      <div class="sticky top-24 space-y-4">
+      <div class="sticky top-28 space-y-4">
         <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-ink-faint font-semibold">On This Briefing</p>
         <nav class="space-y-0.5">
           ${headings
@@ -711,7 +1070,7 @@ export function renderBlogPostPage(opts: {
       ${post.tags_json
         .map(
           (tag) =>
-            `<a href="/blog?q=${encodeURIComponent(tag)}" class="badge-editorial hover:border-strong hover:text-ink transition-colors">${escapeHtml(tag)}</a>`,
+            `<a href="/blog?q=${encodeURIComponent(tag)}" class="rel-chip">${escapeHtml(tag)}</a>`,
         )
         .join('')}
     </div>`
@@ -719,9 +1078,9 @@ export function renderBlogPostPage(opts: {
 
   const faqHtml =
     post.faq_json.length > 0
-      ? `<section id="faq" aria-labelledby="faq-heading" class="mt-14 pt-8 border-t border-strong">
+      ? `<section id="faq" aria-labelledby="faq-heading" class="mt-14 pt-8 double-rule-top">
       <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Reference Q&amp;A</p>
-      <h2 id="faq-heading" class="font-editorial text-2xl sm:text-3xl font-semibold text-ink mt-1 mb-5">Frequently Asked Questions</h2>
+      <h2 id="faq-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1 mb-5">Frequently Asked Questions</h2>
       <div>
         ${post.faq_json
           .map(
@@ -737,11 +1096,11 @@ export function renderBlogPostPage(opts: {
 
   const sourcesHtml =
     post.sources_json.length > 0
-      ? `<section id="sources" aria-labelledby="sources-heading" class="mt-14 pt-8 border-t border-strong scroll-mt-24">
+      ? `<section id="sources" aria-labelledby="sources-heading" class="mt-14 pt-8 double-rule-top scroll-mt-24">
       <div class="flex items-baseline justify-between gap-3 mb-4">
         <div>
           <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Provenance</p>
-          <h2 id="sources-heading" class="font-editorial text-2xl font-semibold text-ink mt-1">Primary Sources &amp; Citations</h2>
+          <h2 id="sources-heading" class="font-masthead text-2xl font-bold text-ink mt-1">Primary Sources &amp; Citations</h2>
         </div>
         <span class="font-tabular text-xs text-ink-faint">${post.sources_json.length} verified references</span>
       </div>
@@ -762,11 +1121,11 @@ export function renderBlogPostPage(opts: {
     </section>`
       : '';
 
-  const authorCardHtml = `<section aria-label="Author and verification" class="mt-12 rounded-[6px] border border-hairline bg-surface p-6">
+  const authorCardHtml = `<section aria-label="Author and verification" class="mt-12 editorial-card p-6">
     <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
       <div class="space-y-2">
         <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-ink-faint font-semibold">Editorial Verification</p>
-        <h2 class="font-editorial text-xl font-semibold text-ink">
+        <h2 class="font-masthead text-xl font-bold text-ink">
           <a href="/about" class="hover:text-accent transition-colors">${escapeHtml(authorName)}</a>
         </h2>
         <p class="text-sm text-ink-muted leading-relaxed max-w-2xl">
@@ -786,61 +1145,55 @@ export function renderBlogPostPage(opts: {
   </section>`;
 
   const relatedHtml =
-    relatedPosts.length > 0
-      ? `<section aria-labelledby="related-heading" class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 mt-16 pt-10 border-t border-strong">
-      <div class="flex items-end justify-between gap-4 mb-6">
+    relationships.length > 0
+      ? `<section aria-labelledby="related-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-16 pt-8 double-rule-top">
+      <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
         <div>
-          <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Continue Reading</p>
-          <h2 id="related-heading" class="font-editorial text-2xl sm:text-3xl font-semibold text-ink mt-1">Related Briefings</h2>
+          <p class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">
+            <span class="cat-dot" style="--cat-color:var(--accent)" aria-hidden="true"></span>
+            <span>Connected Intelligence</span>
+          </p>
+          <h2 id="related-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1">Related Briefings</h2>
         </div>
-        <a href="/blog?category=${encodeURIComponent(post.category_slug)}" class="font-tabular text-xs text-ink-muted hover:text-accent">More in ${escapeHtml(categoryName)} &rarr;</a>
+        <a href="/category/${encodeURIComponent(post.category_slug)}" class="font-tabular text-xs font-semibold text-ink-muted hover:text-accent transition-colors">More in ${escapeHtml(categoryName)} &rarr;</a>
       </div>
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
-        ${relatedPosts
-          .slice(0, 3)
-          .map(
-            (rel) => `<article class="editorial-card p-5 flex flex-col justify-between gap-4">
-          <div class="space-y-2">
-            <div class="flex items-center justify-between gap-2 font-tabular text-[11px] text-ink-faint">
-              <span>${escapeHtml(formatArchetype(rel.archetype))}</span>
-              <span>${rel.reading_time_minutes} min</span>
-            </div>
-            <h3 class="font-editorial text-lg font-semibold leading-snug text-ink">
-              <a href="/blog/${encodeURIComponent(rel.slug)}" class="hover:text-accent transition-colors">${escapeHtml(rel.title)}</a>
-            </h3>
-            <p class="text-sm text-ink-muted leading-relaxed line-clamp-3">${escapeHtml(rel.description)}</p>
-          </div>
-          <div class="pt-3 border-t border-hairline flex items-center justify-between text-xs font-tabular text-ink-faint">
-            <span>${escapeHtml(formatDate(rel.published_at || rel.created_at))}</span>
-            ${renderScoreBadge(rel.quality_score)}
-          </div>
-        </article>`,
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        ${relationships
+          .map((rel) =>
+            renderVisualStoryCard({
+              post: rel.post,
+              reasonBadge: rel.reasonLabel,
+              loading: 'lazy',
+            }),
           )
-          .join('')}
+          .join('\n')}
       </div>
     </section>`
       : '';
 
   const articleBody = `<article class="pt-8 sm:pt-12">
-  <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
     <nav aria-label="Breadcrumb" class="mb-6 flex flex-wrap items-center gap-2 font-tabular text-xs text-ink-faint">
       <a href="/" class="hover:text-ink transition-colors">Home</a>
       <span aria-hidden="true">/</span>
       <a href="/blog" class="hover:text-ink transition-colors">Briefings</a>
       <span aria-hidden="true">/</span>
-      <a href="/blog?category=${encodeURIComponent(post.category_slug)}" class="hover:text-ink transition-colors">${escapeHtml(categoryName)}</a>
+      <a href="/category/${encodeURIComponent(post.category_slug)}" class="hover:text-ink transition-colors">${escapeHtml(categoryName)}</a>
       <span aria-hidden="true">/</span>
       <span class="text-ink-muted truncate max-w-[240px] sm:max-w-md" aria-current="page">${escapeHtml(post.title)}</span>
     </nav>
 
     <header class="max-w-4xl pb-8 border-b border-strong space-y-5">
-      <div class="flex flex-wrap items-center gap-2">
-        <a href="/blog?category=${encodeURIComponent(post.category_slug)}" class="badge-editorial badge-accent">${escapeHtml(categoryName)}</a>
+      <div class="flex flex-wrap items-center gap-2.5">
+        <a href="/category/${encodeURIComponent(post.category_slug)}" class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-hairline bg-surface font-tabular text-[11px] font-bold uppercase tracking-[0.09em]" style="color:${catMeta.color}">
+          <span class="cat-dot" style="--cat-color:${catMeta.color}" aria-hidden="true"></span>
+          <span>${escapeHtml(categoryName)}</span>
+        </a>
         <span class="badge-editorial">${escapeHtml(formatArchetype(post.archetype))}</span>
         ${renderScoreBadge(post.quality_score)}
       </div>
 
-      <h1 class="font-editorial text-3xl sm:text-4xl lg:text-[2.85rem] font-semibold leading-[1.1] text-ink">
+      <h1 class="font-masthead text-3xl sm:text-4xl lg:text-[2.95rem] font-bold leading-[1.08] text-ink">
         ${escapeHtml(post.title)}
       </h1>
 
@@ -850,7 +1203,7 @@ export function renderBlogPostPage(opts: {
 
       <div class="pt-2 flex flex-wrap items-center justify-between gap-4 font-tabular text-xs text-ink-muted">
         <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          <span>By <a href="/about" class="text-ink font-medium hover:text-accent underline underline-offset-2">${escapeHtml(authorName)}</a></span>
+          <span>By <a href="/about" class="text-ink font-semibold hover:text-accent underline underline-offset-2">${escapeHtml(authorName)}</a></span>
           <span aria-hidden="true">&middot;</span>
           <time datetime="${escapeHtml(publishedIso)}">${escapeHtml(formatDate(publishedIso))}</time>
           ${
@@ -862,11 +1215,16 @@ export function renderBlogPostPage(opts: {
           <span>${post.reading_time_minutes} min read (${post.word_count.toLocaleString('en-US')} words)</span>
         </div>
 
-        <a href="${markdownUrl}" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[4px] border border-hairline bg-surface hover:border-strong hover:text-accent transition-colors text-ink-secondary" title="Raw Markdown edition for developers and AI agents">
+        <a href="${markdownUrl}" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-hairline bg-surface hover:border-strong hover:text-accent transition-colors text-ink-secondary" title="Raw Markdown edition for developers and AI agents">
           <span>View Markdown (.md)</span>
         </a>
       </div>
     </header>
+
+    <!-- Full-Bleed Framed Editorial Cover Illustration -->
+    <figure class="mt-8 max-w-4xl rounded-[14px] overflow-hidden border border-hairline bg-surface shadow-[var(--shadow-subtle)]">
+      <img src="${coverArtSrc}" alt="${escapeHtml(post.title)}" width="1200" height="630" loading="eager" class="w-full aspect-[1200/630] object-cover block">
+    </figure>
 
     <div class="max-w-4xl">
       ${tldrHtml}
@@ -1122,8 +1480,11 @@ export function renderTrustPage(opts: {
 
   const trustBody = `<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16">
   <header class="pb-8 border-b border-strong space-y-4">
-    <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">${escapeHtml(page.eyebrow)}</p>
-    <h1 class="font-editorial text-3xl sm:text-5xl font-semibold text-ink leading-[1.08]">${escapeHtml(page.title)}</h1>
+    <p class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">
+      <span class="cat-dot" style="--cat-color:var(--accent)" aria-hidden="true"></span>
+      <span>${escapeHtml(page.eyebrow)}</span>
+    </p>
+    <h1 class="font-masthead text-3xl sm:text-5xl font-bold text-ink leading-[1.08]">${escapeHtml(page.title)}</h1>
     <p class="text-lg text-ink-secondary leading-relaxed">${escapeHtml(page.lead)}</p>
   </header>
 
@@ -1161,14 +1522,17 @@ export function renderNotFoundPage(opts: { settings: SiteSettings }): string {
   const siteName = opts.settings.site_name || 'Pyvren';
   const baseUrl = normalizeBaseUrl(opts.settings.base_url);
   const notFoundBody = `<div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-24 text-center space-y-6">
-  <p class="font-tabular text-xs uppercase tracking-[0.16em] text-accent font-semibold">Error 404</p>
-  <h1 class="font-editorial text-4xl sm:text-5xl font-semibold text-ink">Briefing Not Found</h1>
+  <p class="inline-flex items-center gap-2 font-tabular text-xs uppercase tracking-[0.16em] text-accent font-semibold">
+    <span class="cat-dot" style="--cat-color:var(--accent)" aria-hidden="true"></span>
+    <span>Error 404</span>
+  </p>
+  <h1 class="font-masthead text-4xl sm:text-5xl font-bold text-ink">Briefing Not Found</h1>
   <p class="text-base text-ink-muted max-w-lg mx-auto leading-relaxed">
     The requested dossier on ${escapeHtml(siteName)} may have been moved, unpublished, or the URL may contain a typo.
   </p>
   <div class="pt-2 flex flex-wrap items-center justify-center gap-3">
-    <a href="/" class="btn-primary">Return Home</a>
-    <a href="/blog" class="btn-ghost">Browse All Briefings</a>
+    <a href="/" class="btn-accent rounded-full px-5">Return Home</a>
+    <a href="/blog" class="btn-ghost rounded-full px-5">Browse All Briefings</a>
   </div>
 </div>`;
 

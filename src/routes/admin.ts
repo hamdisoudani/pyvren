@@ -8,11 +8,9 @@ import {
   createSessionToken,
   hashPassword,
   isAdminAuthenticated,
-  validatePasswordStrength,
   verifyPassword,
 } from '../lib/auth';
 import {
-  AdminAlreadyExistsError,
   createDatabase,
   ensureUniqueSlug,
   recoverStaleAndFindActiveRun,
@@ -63,13 +61,6 @@ const KEY_FACT_SCHEMA = z.object({
 const FAQ_ITEM_SCHEMA = z.object({
   question: z.string().trim().min(1).max(300),
   answer: z.string().trim().min(1).max(1200),
-});
-
-const BOOTSTRAP_SCHEMA = z.object({
-  email: z.string().trim().email(),
-  password: z.string().min(1),
-  display_name: z.string().trim().min(1).max(120).optional(),
-  bootstrap_secret: z.string().optional(),
 });
 
 const LOGIN_SCHEMA = z.object({
@@ -186,6 +177,17 @@ const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const MAX_FAILED_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 
+interface LoginLockoutState {
+  failedAttempts: number;
+  lockedUntilMs: number | null;
+}
+
+const envLoginLockouts = new Map<string, LoginLockoutState>();
+
+export function resetAdminLoginLockoutsForTests(): void {
+  envLoginLockouts.clear();
+}
+
 function isSecureRequest(req: Request): boolean {
   const forwardedProto = req.headers.get('x-forwarded-proto');
   if (forwardedProto) {
@@ -283,108 +285,23 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
   // =========================================================================
 
   app.get('/api/admin/auth/status', async (c) => {
-    const db = createDatabase(c.env);
-    const [admin, auth] = await Promise.all([
-      db.getAdminUser(),
-      isAdminAuthenticated(c.req.raw, c.env),
-    ]);
+    const auth = await isAdminAuthenticated(c.req.raw, c.env);
 
     return c.json({
-      initialized: Boolean(admin),
+      initialized: true,
       authenticated: auth.ok,
-      ...(auth.ok ? { email: auth.email || admin?.email, display_name: admin?.display_name } : {}),
-      bootstrap_secret_required: Boolean((c.env.ADMIN_BOOTSTRAP_SECRET || '').trim()),
+      ...(auth.email ? { email: auth.email } : {}),
+      locked_mode: 'env_locked',
     });
   });
 
-  app.post('/api/admin/auth/bootstrap', async (c) => {
-    const csrf = verifyCsrfOrigin(c.req.raw);
-    if (!csrf.ok) {
-      return c.json({ error: csrf.reason || 'CSRF validation failed' }, 403);
-    }
-
-    const rl = checkRateLimit(`auth:${extractClientIp(c.req.raw)}`, 15, 60_000);
-    if (!rl.allowed) {
-      c.header('Retry-After', String(rl.retryAfterSeconds));
-      return c.json(
-        { error: 'Too many authentication attempts. Please try again later.' },
-        429,
-      );
-    }
-
-    const db = createDatabase(c.env);
-    const existing = await db.getAdminUser();
-    if (existing) {
-      return c.json(
-        { error: 'Registration is permanently disabled: single-admin lock is active.' },
-        403,
-      );
-    }
-
-    const rawBody = await parseJsonBody(c.req.raw);
-    if (!rawBody.ok) {
-      return c.json({ error: 'Invalid JSON payload.' }, 400);
-    }
-
-    const parsed = BOOTSTRAP_SCHEMA.safeParse(rawBody.data);
-    if (!parsed.success) {
-      return c.json({ error: 'Invalid bootstrap payload.', details: parsed.error.flatten() }, 400);
-    }
-
-    const requiredSecret = (c.env.ADMIN_BOOTSTRAP_SECRET || '').trim();
-    if (requiredSecret) {
-      const suppliedSecret = (parsed.data.bootstrap_secret || '').trim();
-      if (!suppliedSecret || !constantTimeEqual(suppliedSecret, requiredSecret)) {
-        return c.json({ error: 'Invalid bootstrap secret.' }, 403);
-      }
-    }
-
-    const passwordError = validatePasswordStrength(parsed.data.password);
-    if (passwordError) {
-      return c.json({ error: passwordError }, 400);
-    }
-
-    const email = parsed.data.email.toLowerCase();
-    const settings = await db.getSettings();
-    const displayName = parsed.data.display_name || settings.default_author || 'Administrator';
-    const { hash, salt } = await hashPassword(parsed.data.password);
-
-    let adminUser;
-    try {
-      adminUser = await db.createSingleAdminUser({
-        email,
-        display_name: displayName,
-        password_hash: hash,
-        password_salt: salt,
-      });
-    } catch (err) {
-      if (err instanceof AdminAlreadyExistsError) {
-        return c.json(
-          { error: 'Registration is permanently disabled: single-admin lock is active.' },
-          403,
-        );
-      }
-      throw err;
-    }
-
-    const token = await createSessionToken(
-      {
-        sub: String(adminUser.id),
-        email: adminUser.email,
-        displayName: adminUser.display_name,
-      },
-      getSessionSecret(c.env),
-    );
-
-    c.header('Set-Cookie', buildSessionCookie(token, isSecureRequest(c.req.raw)));
+  app.post('/api/admin/auth/bootstrap', (c) => {
     return c.json(
       {
-        ok: true,
-        email: adminUser.email,
-        display_name: adminUser.display_name,
-        token,
+        error:
+          'Registration and setup are permanently disabled. Admin access is locked to the configured owner account.',
       },
-      201,
+      403,
     );
   });
 
@@ -413,69 +330,150 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
       return c.json({ error: 'Invalid email or password.' }, 400);
     }
 
+    const submittedEmail = parsed.data.email.trim().toLowerCase();
+    const submittedPassword = parsed.data.password;
+    const envEmail = (c.env.ADMIN_EMAIL || '').trim().toLowerCase();
+    const envPassword = c.env.ADMIN_PASSWORD || '';
+    const hasEnvCredentials = envEmail.length > 0 && envPassword.length > 0;
+
     const db = createDatabase(c.env);
     const admin = await db.getAdminUser();
-    if (!admin) {
-      await hashPassword(parsed.data.password);
-      return c.json({ error: 'Admin account is not initialized.' }, 401);
+
+    const ownerEmail = hasEnvCredentials ? envEmail : (admin?.email || '').trim().toLowerCase();
+    const emailMatchesOwner =
+      ownerEmail.length > 0 && constantTimeEqual(submittedEmail, ownerEmail);
+
+    const now = Date.now();
+    const memLock = ownerEmail ? envLoginLockouts.get(ownerEmail) : undefined;
+    const memLockedUntilMs =
+      memLock?.lockedUntilMs && memLock.lockedUntilMs > now ? memLock.lockedUntilMs : null;
+    if (memLock?.lockedUntilMs && memLock.lockedUntilMs <= now && ownerEmail) {
+      envLoginLockouts.delete(ownerEmail);
     }
 
-    if (admin.locked_until) {
-      const lockedUntilMs = new Date(admin.locked_until).getTime();
-      if (Number.isFinite(lockedUntilMs) && lockedUntilMs > Date.now()) {
-        const retrySecs = Math.max(1, Math.ceil((lockedUntilMs - Date.now()) / 1000));
+    const dbLockedRawMs = admin?.locked_until ? new Date(admin.locked_until).getTime() : NaN;
+    const dbLockedUntilMs =
+      Number.isFinite(dbLockedRawMs) && dbLockedRawMs > now ? dbLockedRawMs : null;
+    const dbLockExpired = Number.isFinite(dbLockedRawMs) && dbLockedRawMs <= now;
+
+    if (emailMatchesOwner) {
+      const activeLockedUntilMs = Math.max(memLockedUntilMs || 0, dbLockedUntilMs || 0);
+      if (activeLockedUntilMs > now) {
+        const retrySecs = Math.max(1, Math.ceil((activeLockedUntilMs - now) / 1000));
         c.header('Retry-After', String(retrySecs));
         return c.json(
           {
             error: 'Account temporarily locked due to repeated failed attempts. Try again later.',
-            locked_until: admin.locked_until,
+            locked_until: new Date(activeLockedUntilMs).toISOString(),
           },
           429,
         );
       }
     }
 
-    const submittedEmail = parsed.data.email.toLowerCase();
-    const emailMatches = constantTimeEqual(submittedEmail, admin.email.toLowerCase());
+    const recordOwnerFailure = async (): Promise<void> => {
+      if (!ownerEmail) return;
+      const currentMem = envLoginLockouts.get(ownerEmail);
+      const prevMemAttempts = currentMem?.failedAttempts || 0;
+      const prevDbAttempts = admin && !dbLockExpired ? admin.failed_attempts || 0 : 0;
+      const nextAttempts = Math.max(prevMemAttempts, prevDbAttempts) + 1;
+      const nextLockedUntilMs =
+        nextAttempts >= MAX_FAILED_LOGIN_ATTEMPTS ? Date.now() + LOCKOUT_DURATION_MS : null;
+
+      envLoginLockouts.set(ownerEmail, {
+        failedAttempts: nextAttempts,
+        lockedUntilMs: nextLockedUntilMs,
+      });
+
+      if (admin) {
+        await db.updateAdminLoginState({
+          failed_attempts: nextAttempts,
+          locked_until: nextLockedUntilMs ? new Date(nextLockedUntilMs).toISOString() : null,
+        });
+      }
+    };
+
+    if (hasEnvCredentials) {
+      const passwordMatches = constantTimeEqual(submittedPassword, envPassword);
+
+      if (!emailMatchesOwner || !passwordMatches) {
+        await hashPassword(submittedPassword);
+        if (emailMatchesOwner) {
+          await recordOwnerFailure();
+        }
+        return c.json({ error: 'Invalid email or password.' }, 401);
+      }
+
+      envLoginLockouts.delete(envEmail);
+      if (admin) {
+        await db.updateAdminLoginState({
+          failed_attempts: 0,
+          locked_until: null,
+          last_login_at: new Date().toISOString(),
+        });
+      }
+
+      const settings = await db.getSettings();
+      const displayName =
+        (c.env.ADMIN_DISPLAY_NAME || '').trim() || settings.default_author || 'Hamdi Soudani';
+
+      const token = await createSessionToken(
+        {
+          sub: '1',
+          email: envEmail,
+          displayName,
+        },
+        getSessionSecret(c.env),
+      );
+
+      c.header('Set-Cookie', buildSessionCookie(token, isSecureRequest(c.req.raw)));
+      return c.json({
+        ok: true,
+        email: envEmail,
+        display_name: displayName,
+        token,
+      });
+    }
+
+    // Fallback: verify against pre-seeded DB admin_users row via PBKDF2-SHA256
+    if (!admin) {
+      await hashPassword(submittedPassword);
+      return c.json({ error: 'Invalid email or password.' }, 401);
+    }
+
     let passwordMatches = false;
-    if (!emailMatches) {
-      await hashPassword(parsed.data.password);
+    if (!emailMatchesOwner) {
+      await hashPassword(submittedPassword);
     } else {
       passwordMatches = await verifyPassword(
-        parsed.data.password,
+        submittedPassword,
         admin.password_salt,
         admin.password_hash,
       );
     }
 
-    if (!emailMatches || !passwordMatches) {
-      if (emailMatches) {
-        const nextAttempts = (admin.failed_attempts || 0) + 1;
-        const lockedUntil =
-          nextAttempts >= MAX_FAILED_LOGIN_ATTEMPTS
-            ? new Date(Date.now() + LOCKOUT_DURATION_MS).toISOString()
-            : null;
-
-        await db.updateAdminLoginState({
-          failed_attempts: nextAttempts,
-          locked_until: lockedUntil,
-        });
+    if (!emailMatchesOwner || !passwordMatches) {
+      if (emailMatchesOwner) {
+        await recordOwnerFailure();
       }
-
       return c.json({ error: 'Invalid email or password.' }, 401);
     }
 
+    if (ownerEmail) {
+      envLoginLockouts.delete(ownerEmail);
+    }
     await db.updateAdminLoginState({
       failed_attempts: 0,
       locked_until: null,
       last_login_at: new Date().toISOString(),
     });
 
+    const displayName = (c.env.ADMIN_DISPLAY_NAME || '').trim() || admin.display_name;
     const token = await createSessionToken(
       {
         sub: String(admin.id),
         email: admin.email,
-        displayName: admin.display_name,
+        displayName,
       },
       getSessionSecret(c.env),
     );
@@ -484,7 +482,7 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
     return c.json({
       ok: true,
       email: admin.email,
-      display_name: admin.display_name,
+      display_name: displayName,
       token,
     });
   });

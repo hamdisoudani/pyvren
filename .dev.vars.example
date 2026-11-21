@@ -1,13 +1,15 @@
-# Copy to .dev.vars for local `wrangler dev` execution (gitignored)
+# Copy to .dev.vars for local dev (gitignored)
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
 SUPABASE_SECRET_KEY=sb_secret_...
 OPENROUTER_API_KEY=sk-or-v1-...
-DEFAULT_OPENROUTER_MODEL=google/gemma-4-31b-it:free
+DEFAULT_OPENROUTER_MODEL=openrouter/free
+ADMIN_EMAIL=your-admin@example.com
+ADMIN_PASSWORD=your-strong-admin-password
+ADMIN_DISPLAY_NAME=Hamdi Soudani
 SESSION_SECRET=replace-with-64-char-random-hex
 SERPER_API_KEY=
 JINA_API_KEY=
-ADMIN_BOOTSTRAP_SECRET=
 ADMIN_TOKEN=
 SITE_NAME=Pyvren Research
 BASE_URL=http://localhost:8787
