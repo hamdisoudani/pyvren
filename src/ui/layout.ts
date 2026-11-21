@@ -2,7 +2,11 @@ import { normalizeBaseUrl } from '../env';
 import { getCategoryMeta } from '../lib/relations';
 import { escapeHtml, safeJsonLd } from '../lib/security';
 import type { SiteSettings } from '../types';
-import { renderMastheadNibSvg } from './crew-art';
+import {
+  renderMastheadNibSvg,
+  renderTopicSketchIcon,
+  renderUiSketchIcon,
+} from './crew-art';
 import { renderDoodleCrewFooter } from './doodle-footer';
 
 export interface PublicLayoutOptions {
@@ -28,20 +32,48 @@ export interface PublicLayoutOptions {
 const GOOGLE_FONTS_HREF =
   'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;0,6..72,700&family=Oswald:wght@600;700&family=Playfair+Display:ital,wght@0,700;0,900;1,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap';
 
-const TOPIC_RAIL_ITEMS = [
-  { href: '/blog', label: 'All Stories', slug: '' },
-  { href: '/category/ai-coding-agents-mcp', label: 'Coding & MCP', slug: 'ai-coding-agents-mcp' },
-  { href: '/category/ai-security-jailbreaks', label: 'AI Security', slug: 'ai-security-jailbreaks' },
-  { href: '/category/ai-llms', label: 'Frontier LLMs', slug: 'ai-llms' },
-  { href: '/category/cloud-gpu-infra', label: 'Cloud & GPU', slug: 'cloud-gpu-infra' },
-  { href: '/category/agentic-browser-web-data', label: 'Web & Search', slug: 'agentic-browser-web-data' },
-  { href: '/category/dev-tooling-benchmarks', label: 'CVEs & Patches', slug: 'dev-tooling-benchmarks' },
-];
+export const TOPIC_ATLAS_ITEMS = [
+  {
+    href: '/category/ai-coding-agents-mcp',
+    label: 'Coding & MCP',
+    slug: 'ai-coding-agents-mcp',
+    blurb: 'CLI harnesses, MCP token math & SWE-bench CI.',
+  },
+  {
+    href: '/category/ai-security-jailbreaks',
+    label: 'AI Security',
+    slug: 'ai-security-jailbreaks',
+    blurb: 'Prompt injection defense, sandboxes & guardrails.',
+  },
+  {
+    href: '/category/ai-llms',
+    label: 'Frontier LLMs',
+    slug: 'ai-llms',
+    blurb: 'Model weights, local SLMs, VRAM & context windows.',
+  },
+  {
+    href: '/category/cloud-gpu-infra',
+    label: 'Cloud & GPU',
+    slug: 'cloud-gpu-infra',
+    blurb: 'Edge Workers, serverless Postgres & GPU economics.',
+  },
+  {
+    href: '/category/agentic-browser-web-data',
+    label: 'Web & Search',
+    slug: 'agentic-browser-web-data',
+    blurb: 'Web extraction, browser tools & structured retrieval.',
+  },
+  {
+    href: '/category/dev-tooling-benchmarks',
+    label: 'CVEs & Patches',
+    slug: 'dev-tooling-benchmarks',
+    blurb: 'Exploited advisories, root causes & clean upgrades.',
+  },
+] as const;
 
 function formatMastheadUtcDate(date: Date = new Date()): string {
   try {
     return new Intl.DateTimeFormat('en-US', {
-      weekday: 'short',
       month: 'short',
       day: 'numeric',
       year: 'numeric',
@@ -50,14 +82,6 @@ function formatMastheadUtcDate(date: Date = new Date()): string {
   } catch {
     return date.toUTCString().slice(0, 16);
   }
-}
-
-function isTopicActive(currentPath: string | undefined, target: string): boolean {
-  if (!currentPath) return false;
-  if (target === '/blog') {
-    return currentPath === '/blog';
-  }
-  return currentPath === target;
 }
 
 export function renderPublicLayout(opts: PublicLayoutOptions): string {
@@ -90,7 +114,12 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
   const adsenseClientId = (settings.adsense_client_id || '').trim();
   const resolvedOgImage = ogImageUrl || `${baseUrl}/og/default.svg`;
   const mastheadDate = formatMastheadUtcDate();
-  const htmlThemeAttr = initialTheme === 'dark' ? ' data-theme="dark"' : initialTheme === 'light' ? ' data-theme="light"' : '';
+  const htmlThemeAttr =
+    initialTheme === 'dark'
+      ? ' data-theme="dark"'
+      : initialTheme === 'light'
+        ? ' data-theme="light"'
+        : '';
 
   const organizationSchema: Record<string, unknown> = {
     '@context': 'https://schema.org',
@@ -149,24 +178,36 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
 
   const readingProgressBarHtml =
     ogType === 'article'
-      ? `<div id="reading-progress" aria-hidden="true" style="position:fixed;top:0;left:0;z-index:60;height:2px;width:100%;background:var(--accent);transform:scaleX(0);transform-origin:left center;pointer-events:none;transition:transform 80ms linear"></div>`
+      ? `<div id="reading-progress" aria-hidden="true" style="position:fixed;top:0;left:0;z-index:60;height:2.5px;width:100%;background:var(--accent);transform:scaleX(0);transform-origin:left center;pointer-events:none;transition:transform 80ms linear"></div>`
       : '';
 
-  const topicRailHtml = TOPIC_RAIL_ITEMS.map((item) => {
-    const active = isTopicActive(currentPath, item.href);
-    if (!item.slug) {
-      return `<a href="${item.href}" class="topic-pill"${active ? ' aria-current="page"' : ''}>${escapeHtml(item.label)}</a>`;
-    }
-    const meta = getCategoryMeta(item.slug);
-    const dotHtml = active
-      ? ''
-      : `<span class="h-2 w-2 rounded-full topic-accent-dot shrink-0" aria-hidden="true"></span>`;
-    return `<a href="${item.href}" class="topic-pill topic-tone" style="--topic-light:${meta.color}; --topic-dark:${meta.darkColor};"${active ? ' aria-current="page"' : ''}>${dotHtml}<span>${escapeHtml(item.label)}</span></a>`;
-  }).join('\n          ');
+  const isStoriesActive = currentPath === '/blog' || currentPath.startsWith('/blog/');
+  const isCategoryActive = currentPath.startsWith('/category/');
 
-  const mobileMenuItemsHtml = TOPIC_RAIL_ITEMS.map((item) => {
-    const active = isTopicActive(currentPath, item.href);
-    return `<a href="${item.href}" class="flex items-center justify-between px-4 py-2.5 text-sm font-medium ${active ? 'bg-subtle text-accent font-semibold' : 'text-ink hover:bg-subtle'} border-b border-hairline">${escapeHtml(item.label)}<span class="text-ink-faint text-xs">&rarr;</span></a>`;
+  const desktopAtlasItemsHtml = TOPIC_ATLAS_ITEMS.map((item) => {
+    const meta = getCategoryMeta(item.slug);
+    const active = currentPath === item.href;
+    return `<a href="${item.href}" class="topics-atlas-item topic-tone" style="--topic-light:${meta.color}; --topic-dark:${meta.darkColor};"${active ? ' aria-current="page"' : ''}>
+      <span class="mt-0.5 inline-flex items-center justify-center w-9 h-9 rounded-lg border border-hairline bg-paper text-ink shrink-0">
+        ${renderTopicSketchIcon(item.slug, 20)}
+      </span>
+      <span class="min-w-0">
+        <span class="block text-sm font-semibold text-ink">${escapeHtml(item.label)}</span>
+        <span class="block text-xs text-ink-muted leading-snug mt-0.5">${escapeHtml(item.blurb)}</span>
+      </span>
+    </a>`;
+  }).join('\n                  ');
+
+  const mobileAtlasItemsHtml = TOPIC_ATLAS_ITEMS.map((item) => {
+    const meta = getCategoryMeta(item.slug);
+    const active = currentPath === item.href;
+    return `<a href="${item.href}" class="topic-tone flex items-center gap-3 px-4 py-2.5 text-sm font-medium ${
+      active ? 'bg-subtle text-accent font-semibold' : 'text-ink hover:bg-subtle'
+    } border-b border-hairline" style="--topic-light:${meta.color}; --topic-dark:${meta.darkColor};">
+      ${renderTopicSketchIcon(item.slug, 18)}
+      <span class="flex-1 truncate">${escapeHtml(item.label)}</span>
+      <span class="font-tabular text-xs text-ink-faint">&rarr;</span>
+    </a>`;
   }).join('\n              ');
 
   const footerHtml = renderDoodleCrewFooter(settings);
@@ -225,78 +266,109 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
   </nav>
 
   <header class="editorial-topbar sticky top-0 z-40 border-b border-hairline">
-    <!-- Row 1: Sketchbook Broadsheet Masthead -->
-    <div class="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-8 py-2.5 sm:py-3.5">
-      <div class="grid grid-cols-[auto_1fr_auto] lg:grid-cols-[1fr_auto_1fr] items-center gap-2 sm:gap-4">
-        <!-- Left: Mobile Drawer Trigger / Desktop Co-Work Edition Note -->
-        <div class="flex items-center gap-2 min-w-0">
-          <details id="mobile-nav-drawer" class="relative lg:hidden">
-            <summary class="list-none inline-flex items-center justify-center w-9 h-9 rounded-full border border-hairline bg-surface text-ink-secondary hover:text-ink hover:border-strong cursor-pointer" aria-label="Open menu">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
-            </summary>
-            <div class="fixed inset-x-3 top-14 sm:absolute sm:inset-x-auto sm:left-0 sm:top-full sm:mt-2 sm:w-72 rounded-2xl bg-surface border border-strong shadow-xl overflow-hidden z-50">
-              <div class="px-4 py-3 bg-subtle border-b border-hairline flex items-center justify-between">
-                <span class="font-tabular text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-secondary">${escapeHtml(mastheadDate)}</span>
-                <span class="font-tabular text-[10px] text-ink-muted">Co-crafted</span>
-              </div>
-              <nav aria-label="Mobile topics">
-                ${mobileMenuItemsHtml}
-              </nav>
-              <div class="p-3 bg-subtle/60 flex flex-wrap items-center justify-between gap-2 text-xs">
-                <div class="flex items-center gap-3">
-                  <a href="/about" class="font-semibold text-ink hover:text-accent">About</a>
-                  <a href="/editorial-policy" class="font-medium text-ink-secondary hover:text-accent">Standards</a>
-                </div>
-                <a href="https://www.linkedin.com/in/hamdisoudani/" target="_blank" rel="noopener noreferrer" class="font-semibold text-accent hover:underline">Hamdi’s LinkedIn ↗</a>
-              </div>
-            </div>
-          </details>
-
-          <div class="hidden lg:flex flex-col leading-tight min-w-0">
-            <time class="text-[11px] font-medium text-ink-secondary truncate">${escapeHtml(mastheadDate)}</time>
-            <span class="inline-flex items-center gap-1.5 mt-0.5 text-[11px] text-ink-muted truncate">
-              <span class="h-1.5 w-1.5 rounded-full bg-[var(--accent)]" aria-hidden="true"></span>
-              <span>${escapeHtml(defaultAuthor)} &times; Pyvren</span>
-            </span>
-          </div>
-        </div>
-
-        <!-- Center: Sketchbook Nib + The Pyvren Dispatch Title -->
-        <div class="text-center min-w-0">
-          <a href="/" class="inline-flex items-center justify-center gap-2 sm:gap-2.5 group max-w-full" aria-label="${escapeHtml(siteName)} home">
-            <span class="hidden xs:inline-flex sm:inline-flex transition-transform duration-200 group-hover:-rotate-6">${renderMastheadNibSvg()}</span>
-            <span class="font-masthead font-black text-xl sm:text-3xl lg:text-[2.1rem] tracking-tight leading-none text-[var(--accent)] truncate">
+    <div class="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-8 h-16 sm:h-[4.25rem] flex items-center justify-between gap-3">
+      <!-- Left: Py (Snake) + Vren (Wren) Emblem & Masthead Wordmark -->
+      <div class="flex items-center gap-2.5 min-w-0">
+        <a href="/" class="inline-flex items-center gap-2.5 group min-w-0" aria-label="${escapeHtml(siteName)} home">
+          <span class="transition-transform duration-200 group-hover:-rotate-6">${renderMastheadNibSvg(36)}</span>
+          <span class="min-w-0">
+            <span class="block font-masthead font-black text-lg sm:text-2xl tracking-tight leading-none text-ink group-hover:text-accent transition-colors truncate">
               ${escapeHtml(siteName)}
             </span>
-          </a>
-        </div>
+            <span class="hidden sm:flex items-center gap-1.5 mt-1 font-tabular text-[10px] tracking-[0.04em] text-ink-muted">
+              <span>${escapeHtml(defaultAuthor)} &times; Pyvren</span>
+              <span aria-hidden="true">&middot;</span>
+              <time>${escapeHtml(mastheadDate)}</time>
+            </span>
+          </span>
+        </a>
+      </div>
 
-        <!-- Right: Search Trigger, Theme Persistence Toggle & Utility Links -->
-        <div class="flex items-center justify-end gap-1.5 sm:gap-2">
-          <button type="button" data-search-toggle class="inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-full border border-hairline bg-surface text-ink-secondary hover:text-ink hover:border-strong transition-colors cursor-pointer" aria-label="Search stories" aria-expanded="false" aria-controls="header-search-panel">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
-            <span class="hidden md:inline text-xs font-medium text-ink-muted">Search</span>
-            <kbd class="hidden xl:inline-block px-1.5 py-0.5 text-[10px] font-tabular rounded bg-subtle text-ink-faint border border-hairline">/</kbd>
-          </button>
+      <!-- Center (Desktop): Clean Single-Row Editorial Links + Illustrated Topics Atlas Popover -->
+      <nav aria-label="Primary navigation" class="hidden lg:flex items-center gap-1">
+        <a href="/blog" class="px-3.5 py-2 rounded-lg text-sm font-semibold transition-colors ${
+          isStoriesActive ? 'bg-subtle text-ink' : 'text-ink-secondary hover:text-ink hover:bg-subtle/60'
+        }"${currentPath === '/blog' ? ' aria-current="page"' : ''}>
+          Dispatches
+        </a>
 
-          <button type="button" id="theme-toggle" class="inline-flex items-center justify-center w-9 h-9 rounded-full border border-hairline bg-surface text-ink-secondary hover:text-ink hover:border-strong transition-colors cursor-pointer" aria-label="Switch color theme" title="Switch between warm paper and dark mode">
-            <svg data-theme-icon="sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="hidden" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32l1.41-1.41"/></svg>
-            <svg data-theme-icon="moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-          </button>
+        <details id="desktop-topics-menu" class="relative">
+          <summary class="list-none inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-semibold cursor-pointer select-none transition-colors ${
+            isCategoryActive ? 'bg-subtle text-ink' : 'text-ink-secondary hover:text-ink hover:bg-subtle/60'
+          }">
+            <span>Topics</span>
+            ${renderUiSketchIcon('chevron-down', 14)}
+          </summary>
+          <div class="topics-popover absolute left-1/2 -translate-x-1/2 mt-2.5 w-[38rem] p-4 z-50">
+            <div class="px-2 pb-2.5 mb-2 border-b border-hairline flex items-center justify-between">
+              <span class="font-tabular text-[11px] uppercase tracking-[0.1em] font-bold text-ink-muted">Six Engineering Beats</span>
+              <a href="/blog" class="font-tabular text-xs font-semibold text-accent hover:underline">Browse all stories &rarr;</a>
+            </div>
+            <div class="grid grid-cols-2 gap-1.5">
+              ${desktopAtlasItemsHtml}
+            </div>
+          </div>
+        </details>
 
-          <a href="/about" class="hidden sm:inline-flex items-center h-9 px-3.5 rounded-full border border-hairline bg-surface hover:border-strong text-xs font-semibold text-ink-secondary hover:text-ink transition-colors">
-            About
-          </a>
-        </div>
+        <a href="/about" class="px-3.5 py-2 rounded-lg text-sm font-semibold transition-colors ${
+          currentPath === '/about' ? 'bg-subtle text-ink' : 'text-ink-secondary hover:text-ink hover:bg-subtle/60'
+        }"${currentPath === '/about' ? ' aria-current="page"' : ''}>
+          About
+        </a>
+
+        <a href="/editorial-policy" class="px-3.5 py-2 rounded-lg text-sm font-semibold transition-colors ${
+          currentPath === '/editorial-policy' ? 'bg-subtle text-ink' : 'text-ink-secondary hover:text-ink hover:bg-subtle/60'
+        }"${currentPath === '/editorial-policy' ? ' aria-current="page"' : ''}>
+          Standards
+        </a>
+      </nav>
+
+      <!-- Right: Instant Search, Persistent Theme Switcher, LinkedIn & Mobile Menu -->
+      <div class="flex items-center justify-end gap-1.5 sm:gap-2 shrink-0">
+        <button type="button" data-search-toggle class="inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-lg border border-hairline bg-surface text-ink-secondary hover:text-ink hover:border-strong transition-colors cursor-pointer" aria-label="Search stories" aria-expanded="false" aria-controls="header-search-panel">
+          ${renderUiSketchIcon('search', 15)}
+          <span class="hidden md:inline text-xs font-semibold">Search</span>
+          <kbd class="hidden xl:inline-block px-1.5 py-0.5 text-[10px] font-tabular rounded bg-subtle text-ink-faint border border-hairline">/</kbd>
+        </button>
+
+        <button type="button" id="theme-toggle" class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-hairline bg-surface text-ink-secondary hover:text-ink hover:border-strong transition-colors cursor-pointer" aria-label="Switch color theme" title="Switch between warm paper and dark mode">
+          <svg data-theme-icon="sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" class="hidden" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32l1.41-1.41"/></svg>
+          <svg data-theme-icon="moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+
+        <details id="mobile-nav-drawer" class="relative lg:hidden">
+          <summary class="list-none inline-flex items-center justify-center w-9 h-9 rounded-lg border border-hairline bg-surface text-ink-secondary hover:text-ink hover:border-strong cursor-pointer" aria-label="Open menu">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+          </summary>
+          <div class="topics-popover fixed inset-x-3 top-[4.4rem] sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-80 overflow-hidden z-50">
+            <div class="px-4 py-3 bg-subtle border-b border-hairline flex items-center justify-between">
+              <span class="font-tabular text-[11px] font-bold uppercase tracking-[0.08em] text-ink">Browse Beats</span>
+              <a href="/blog" class="font-tabular text-xs font-semibold text-accent">All Dispatches &rarr;</a>
+            </div>
+            <nav aria-label="Mobile topics">
+              ${mobileAtlasItemsHtml}
+            </nav>
+            <div class="p-3.5 bg-subtle/60 flex items-center justify-between gap-2 text-xs">
+              <div class="flex items-center gap-3">
+                <a href="/about" class="font-semibold text-ink hover:text-accent">About</a>
+                <a href="/editorial-policy" class="font-medium text-ink-secondary hover:text-accent">Standards</a>
+              </div>
+              <a href="https://www.linkedin.com/in/hamdisoudani/" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 font-semibold text-accent hover:underline">
+                <span>Hamdi’s LinkedIn</span>
+                ${renderUiSketchIcon('external', 12)}
+              </a>
+            </div>
+          </div>
+        </details>
       </div>
     </div>
 
-    <!-- Collapsible Instant Search Panel (Works on Every Page) -->
-    <div id="header-search-panel" class="hidden border-t border-hairline bg-subtle/85">
+    <!-- Collapsible Instant Search Bar (Accessible on Every Page) -->
+    <div id="header-search-panel" class="hidden border-t border-hairline bg-subtle/90">
       <div class="max-w-3xl mx-auto px-4 sm:px-6 py-3">
         <form action="/blog" method="get" role="search" data-live-search class="relative">
-          <div class="flex items-center gap-2 rounded-full bg-surface border border-strong px-3.5 py-1.5 shadow-sm">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-ink-muted shrink-0" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+          <div class="flex items-center gap-2 rounded-xl bg-surface border border-strong px-3.5 py-1.5 shadow-sm">
+            ${renderUiSketchIcon('search', 16)}
             <input
               type="search"
               name="q"
@@ -305,21 +377,12 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
               aria-label="Search stories"
               class="w-full bg-transparent text-sm text-ink placeholder:text-ink-faint focus:outline-none py-1"
             >
-            <button type="submit" class="px-3.5 py-1.5 rounded-full bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-xs font-semibold shrink-0 cursor-pointer">
+            <button type="submit" class="px-3.5 py-1.5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-xs font-semibold shrink-0 cursor-pointer">
               Search
             </button>
           </div>
           <div data-search-results class="search-dropdown hidden" role="listbox" aria-label="Instant search suggestions"></div>
         </form>
-      </div>
-    </div>
-
-    <!-- Row 2: Responsive Swipeable Topic Pill Bar (Mobile + Tablet + Desktop) -->
-    <div class="border-t border-hairline bg-paper/90">
-      <div class="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 topic-rail-wrap">
-        <nav aria-label="Topics" class="topic-rail">
-          ${topicRailHtml}
-        </nav>
       </div>
     </div>
   </header>
@@ -360,23 +423,39 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
       });
     }
 
-    // Center active topic pill smoothly on narrow viewports
-    var activePill=document.querySelector('.topic-rail .topic-pill[aria-current="page"]');
-    if(activePill&&activePill.scrollIntoView&&window.innerWidth<1024){
-      try{activePill.scrollIntoView({inline:'center',block:'nearest'});}catch(e){}
+    // Close <details> popovers cleanly when clicking outside or pressing Escape
+    var desktopTopics=document.getElementById('desktop-topics-menu');
+    var mobileDrawer=document.getElementById('mobile-nav-drawer');
+    document.addEventListener('click',function(ev){
+      if(desktopTopics&&desktopTopics.open&&!desktopTopics.contains(ev.target)){
+        desktopTopics.open=false;
+      }
+      if(mobileDrawer&&mobileDrawer.open&&!mobileDrawer.contains(ev.target)){
+        mobileDrawer.open=false;
+      }
+    });
+
+    // Center active beat tab smoothly on mobile
+    var activeBeat=document.querySelector('.beat-strip .beat-tab[aria-current="page"]');
+    if(activeBeat&&activeBeat.scrollIntoView&&window.innerWidth<1024){
+      try{activeBeat.scrollIntoView({inline:'center',block:'nearest'});}catch(e){}
     }
 
-    // Capture-phase fallback if an external crawled reference image fails to load
+    // Auto-backup Cartoon Pyvren (Py Snake + Vren Wren) fallback if ANY image fails to load
     document.addEventListener('error',function(ev){
       var t=ev.target;
-      if(t&&t.tagName==='IMG'){
-        if(t.hasAttribute('data-story-cover')){
-          t.style.display='none';
-        }else if(t.closest&&t.closest('.article-hero-figure, .editorial-figure')){
-          var fig=t.closest('.article-hero-figure, .editorial-figure');
-          if(fig)fig.style.display='none';
-        }
+      if(!t||t.tagName!=='IMG')return;
+      if(t.hasAttribute('data-story-cover')){
+        // Hide failed external cover to reveal the inline Cartoon Py + Vren SVG base plate underneath
+        t.style.display='none';
+        return;
       }
+      if(t.getAttribute('data-pyvren-fallback')==='1')return;
+      t.setAttribute('data-pyvren-fallback','1');
+      var parentPost=t.closest?t.closest('[data-post-category]'):null;
+      var cat=t.getAttribute('data-fallback-category')||(parentPost?parentPost.getAttribute('data-post-category'):'')||'';
+      var alt=t.getAttribute('data-fallback-label')||t.getAttribute('alt')||'The Pyvren Dispatch';
+      t.src='/og/fallback.svg?category='+encodeURIComponent(cat)+'&label='+encodeURIComponent(alt.slice(0,44));
     },true);
 
     // Header search toggle & "/" keyboard shortcut
@@ -408,8 +487,10 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
           e.preventDefault();
           toggleHeaderSearch(true);
         }
-      }else if(e.key==='Escape'&&searchPanel&&!searchPanel.classList.contains('hidden')){
-        toggleHeaderSearch(false);
+      }else if(e.key==='Escape'){
+        if(desktopTopics&&desktopTopics.open)desktopTopics.open=false;
+        if(mobileDrawer&&mobileDrawer.open)mobileDrawer.open=false;
+        if(searchPanel&&!searchPanel.classList.contains('hidden'))toggleHeaderSearch(false);
       }
     });
 
@@ -567,9 +648,47 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
       updateProgress();
     }
 
-    // Code block copy buttons
-    var pres=document.querySelectorAll('pre');
-    pres.forEach(function(pre){
+    // Copy buttons mounted cleanly into .code-frame-bar (or standalone <pre> fallback)
+    function copyText(raw,btn){
+      var finish=function(ok){
+        btn.textContent=ok?'Copied!':'Error';
+        setTimeout(function(){btn.textContent='Copy';},1600);
+      };
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(raw||'').then(function(){finish(true);},function(){finish(false);});
+      }else{
+        try{
+          var ta=document.createElement('textarea');
+          ta.value=raw||'';
+          ta.style.position='fixed';
+          ta.style.opacity='0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          finish(true);
+        }catch(err){finish(false);}
+      }
+    }
+
+    document.querySelectorAll('.code-frame').forEach(function(frame){
+      if(frame.getAttribute('data-copy-bound'))return;
+      frame.setAttribute('data-copy-bound','1');
+      var bar=frame.querySelector('.code-frame-bar');
+      var codeEl=frame.querySelector('code');
+      if(!bar||!codeEl)return;
+      var btn=document.createElement('button');
+      btn.type='button';
+      btn.className='code-copy-btn';
+      btn.textContent='Copy';
+      btn.setAttribute('aria-label','Copy code snippet');
+      btn.addEventListener('click',function(){
+        copyText(codeEl.textContent||'',btn);
+      });
+      bar.appendChild(btn);
+    });
+
+    document.querySelectorAll('.prose-editorial > pre').forEach(function(pre){
       if(pre.getAttribute('data-copy-bound'))return;
       pre.setAttribute('data-copy-bound','1');
       var wrapper=document.createElement('div');
@@ -578,35 +697,17 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
         pre.parentNode.insertBefore(wrapper,pre);
         wrapper.appendChild(pre);
       }
-      var copyBtn=document.createElement('button');
-      copyBtn.type='button';
-      copyBtn.textContent='Copy';
-      copyBtn.setAttribute('aria-label','Copy code snippet');
-      copyBtn.style.cssText='position:absolute;top:8px;right:8px;z-index:2;padding:3px 8px;border-radius:4px;border:1px solid var(--code-border);background:rgba(23,24,27,0.88);color:var(--code-ink);font-family:var(--font-mono);font-size:11px;line-height:1.3;cursor:pointer;opacity:0.86;';
-      copyBtn.addEventListener('click',function(){
+      var btn=document.createElement('button');
+      btn.type='button';
+      btn.className='code-copy-btn';
+      btn.style.cssText='position:absolute;top:10px;right:10px;z-index:2;';
+      btn.textContent='Copy';
+      btn.setAttribute('aria-label','Copy code snippet');
+      btn.addEventListener('click',function(){
         var codeEl=pre.querySelector('code');
-        var raw=codeEl?codeEl.textContent:(pre.textContent||'');
-        var finish=function(ok){
-          copyBtn.textContent=ok?'Copied':'Error';
-          setTimeout(function(){copyBtn.textContent='Copy';},1600);
-        };
-        if(navigator.clipboard&&navigator.clipboard.writeText){
-          navigator.clipboard.writeText(raw||'').then(function(){finish(true);},function(){finish(false);});
-        }else{
-          try{
-            var ta=document.createElement('textarea');
-            ta.value=raw||'';
-            ta.style.position='fixed';
-            ta.style.opacity='0';
-            document.body.appendChild(ta);
-            ta.select();
-            document.execCommand('copy');
-            document.body.removeChild(ta);
-            finish(true);
-          }catch(err){finish(false);}
-        }
+        copyText(codeEl?codeEl.textContent:(pre.textContent||''),btn);
       });
-      wrapper.appendChild(copyBtn);
+      wrapper.appendChild(btn);
     });
   })();</script>
 </body>

@@ -1022,13 +1022,14 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
     const relatedPosts = relatedCandidates
       .filter((p) => p.id !== post.id && p.status === 'published')
       .slice(0, 3);
-    const { headings } = compileMarkdown(post.body_markdown);
+    const { html: compiledHtml, headings } = compileMarkdown(post.body_markdown);
     const html = renderBlogPostPage({
       settings,
       post,
       skill,
       relatedPosts,
       headings,
+      compiledHtml,
     });
 
     return new Response(html, {

@@ -1,5 +1,6 @@
 import { Marked, type RendererObject, type Tokens } from 'marked';
-import { sanitizeHtml, slugify } from './security';
+import { escapeHtml, sanitizeHtml, slugify } from './security';
+import { highlightCodeBlock } from './syntax';
 
 export interface MarkdownHeading {
   id: string;
@@ -66,6 +67,47 @@ export function compileMarkdown(markdown: string): CompiledMarkdown {
       }
 
       return `<h${depth}>${innerHtml}</h${depth}>\n`;
+    },
+    code({ text, lang }: Tokens.Code): string {
+      const highlighted = highlightCodeBlock(text, lang || '');
+      const safeLangClass = highlighted.normalizedLang.replace(/[^a-z0-9_-]/gi, '') || 'text';
+      const lineMeta =
+        highlighted.lineCount > 1 ? `${highlighted.lineCount} lines` : '1 line';
+      return (
+        `<div class="code-frame">` +
+        `<div class="code-frame-bar">` +
+        `<span class="code-frame-dots"><span class="code-dot code-dot-r"></span><span class="code-dot code-dot-y"></span><span class="code-dot code-dot-g"></span></span>` +
+        `<span class="code-frame-lang">${escapeHtml(highlighted.languageLabel)}</span>` +
+        `<span class="code-frame-meta">${escapeHtml(lineMeta)}</span>` +
+        `</div>` +
+        `<pre><code class="language-${escapeHtml(safeLangClass)}">${highlighted.html}</code></pre>` +
+        `</div>\n`
+      );
+    },
+    table(token: Tokens.Table): string {
+      let headerCells = '';
+      for (let i = 0; i < token.header.length; i++) {
+        const cell = token.header[i];
+        const align = token.align[i];
+        const alignAttr = align ? ` align="${escapeHtml(align)}"` : '';
+        headerCells += `<th${alignAttr}>${this.parser.parseInline(cell.tokens)}</th>`;
+      }
+      const thead = `<thead><tr>${headerCells}</tr></thead>`;
+
+      let bodyRows = '';
+      for (const row of token.rows) {
+        let cells = '';
+        for (let i = 0; i < row.length; i++) {
+          const cell = row[i];
+          const align = token.align[i];
+          const alignAttr = align ? ` align="${escapeHtml(align)}"` : '';
+          cells += `<td${alignAttr}>${this.parser.parseInline(cell.tokens)}</td>`;
+        }
+        bodyRows += `<tr>${cells}</tr>`;
+      }
+      const tbody = bodyRows ? `<tbody>${bodyRows}</tbody>` : '';
+
+      return `<div class="editorial-table-wrap"><table>${thead}${tbody}</table></div>\n`;
     },
     image({ href, title, text }: Tokens.Image): string {
       const safeSrc = (href || '').trim();

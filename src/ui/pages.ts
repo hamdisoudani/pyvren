@@ -10,8 +10,11 @@ import { escapeHtml } from '../lib/security';
 import type { Archetype, CategorySkill, PostImage, PostRecord, SiteSettings } from '../types';
 import {
   renderHeroCrewSceneSvg,
+  renderMastheadNibSvg,
   renderStoryCoverMedia,
   renderTopicCrewSvg,
+  renderTopicSketchIcon,
+  renderUiSketchIcon,
 } from './crew-art';
 import { renderPublicLayout } from './layout';
 
@@ -67,18 +70,47 @@ function extractDomain(url: string): string {
   }
 }
 
+function formatSourcePathLabel(url: string): { host: string; pathPreview: string } {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, '');
+    const rawPath = decodeURIComponent(parsed.pathname || '/').replace(/\/+$/, '');
+    if (!rawPath || rawPath === '') {
+      return { host, pathPreview: `${host} — Primary documentation` };
+    }
+    const cleanSegments = rawPath
+      .split('/')
+      .filter(Boolean)
+      .slice(-3)
+      .join(' / ');
+    return {
+      host,
+      pathPreview: cleanSegments.length > 74 ? `${cleanSegments.slice(0, 71)}…` : cleanSegments,
+    };
+  } catch {
+    return { host: 'Primary Source', pathPreview: truncateText(url, 72) };
+  }
+}
+
 function truncateText(text: string, maxLen: number): string {
   const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
   if (cleaned.length <= maxLen) return cleaned;
   return `${cleaned.slice(0, Math.max(1, maxLen - 1)).trimEnd()}…`;
 }
 
-function formatCoWorkByline(rawAuthor?: string | null, fallbackAuthor = 'Hamdi Soudani', compact = false): string {
+function formatCoWorkByline(
+  rawAuthor?: string | null,
+  fallbackAuthor = 'Hamdi Soudani',
+  compact = false,
+): string {
   const clean = (rawAuthor || fallbackAuthor || 'Hamdi Soudani').trim();
   return compact ? `${clean} · with Pyvren` : `${clean} · Co-crafted with Pyvren`;
 }
 
-function extractKeySignals(post: PostRecord, maxCount = 3): Array<{ label?: string; text: string }> {
+function extractKeySignals(
+  post: PostRecord,
+  maxCount = 3,
+): Array<{ label?: string; text: string }> {
   const signals: Array<{ label?: string; text: string }> = [];
   if (Array.isArray(post.key_facts_json) && post.key_facts_json.length > 0) {
     for (const fact of post.key_facts_json.slice(0, maxCount)) {
@@ -101,21 +133,69 @@ function extractKeySignals(post: PostRecord, maxCount = 3): Array<{ label?: stri
   return signals.slice(0, maxCount);
 }
 
+/**
+ * Sketched Category Badge — uses bespoke dry-brush SVG icon per beat (zero generic circle dots).
+ */
 function renderCategoryTag(slug: string, customLabel?: string, asLink = true): string {
   const meta = getCategoryMeta(slug);
   const label = customLabel || meta.shortLabel;
   const styleAttr = `style="--topic-light:${meta.color}; --topic-dark:${meta.darkColor};"`;
-  const inner = `<span class="h-2 w-2 rounded-full topic-accent-dot shrink-0" aria-hidden="true"></span><span>${escapeHtml(label)}</span>`;
+  const inner = `${renderTopicSketchIcon(slug, 15)}<span>${escapeHtml(label)}</span>`;
   const classes =
-    'topic-tone inline-flex items-center gap-1.5 font-tabular text-[11px] font-semibold uppercase tracking-[0.08em] topic-accent-text hover:opacity-80 transition-opacity';
+    'topic-tone inline-flex items-center gap-1.5 font-tabular text-[11px] font-semibold uppercase tracking-[0.07em] topic-accent-text hover:opacity-80 transition-opacity';
   if (asLink) {
     return `<a href="/category/${encodeURIComponent(slug)}" class="${classes}" ${styleAttr}>${inner}</a>`;
   }
   return `<span class="${classes}" ${styleAttr}>${inner}</span>`;
 }
 
-function renderLinkedInIcon(): string {
-  return `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" class="shrink-0"><path d="M19 3A2 2 0 0 1 21 5V19A2 2 0 0 1 19 21H5A2 2 0 0 1 3 19V5A2 2 0 0 1 5 3H19M18.5 18.5V13.2A3.26 3.26 0 0 0 15.24 9.94C14.39 9.94 13.4 10.46 12.92 11.24V10.13H10.13V18.5H12.92V13.57C12.92 12.8 13.54 12.17 14.31 12.17A1.4 1.4 0 0 1 15.71 13.57V18.5H18.5M6.88 8.56A1.68 1.68 0 0 0 8.56 6.88C8.56 5.95 7.81 5.19 6.88 5.19A1.69 1.69 0 0 0 5.19 6.88C5.19 7.81 5.95 8.56 6.88 8.56M8.27 18.5V10.13H5.5V18.5H8.27Z"/></svg>`;
+/**
+ * Illustrated In-Page Beat Strip — replaces cramped sub-navbar bars with tactile sketched tabs.
+ */
+function renderBeatStrip(opts: {
+  skills: CategorySkill[];
+  activeSlug?: string;
+  query?: string;
+  mode: 'home' | 'archive';
+}): string {
+  const { skills, activeSlug, query, mode } = opts;
+  const trimmedQuery = (query || '').trim();
+
+  const buildTabHref = (slug?: string): string => {
+    if (mode === 'home') {
+      return slug ? `/category/${encodeURIComponent(slug)}` : '/blog';
+    }
+    if (!trimmedQuery) {
+      return slug ? `/category/${encodeURIComponent(slug)}` : '/blog';
+    }
+    const params = new URLSearchParams();
+    if (slug) params.set('category', slug);
+    params.set('q', trimmedQuery);
+    return `/blog?${params.toString()}`;
+  };
+
+  const allActive = mode === 'archive' && !activeSlug;
+  const tabs: string[] = [
+    `<a href="${escapeHtml(buildTabHref(undefined))}" class="beat-tab"${allActive ? ' aria-current="page"' : ''}>
+      ${renderTopicSketchIcon('all', 17)}
+      <span>All Dispatches</span>
+    </a>`,
+  ];
+
+  for (const skill of skills.filter((s) => s.enabled || s.slug === activeSlug)) {
+    const meta = getCategoryMeta(skill.slug);
+    const isActive = skill.slug === activeSlug;
+    tabs.push(
+      `<a href="${escapeHtml(buildTabHref(skill.slug))}" class="beat-tab topic-tone" style="--topic-light:${meta.color}; --topic-dark:${meta.darkColor};"${isActive ? ' aria-current="page"' : ''}>
+        ${renderTopicSketchIcon(skill.slug, 17)}
+        <span>${escapeHtml(meta.navLabel)}</span>
+      </a>`,
+    );
+  }
+
+  return `<div class="beat-strip" role="navigation" aria-label="Engineering beats">
+    ${tabs.join('\n    ')}
+  </div>`;
 }
 
 function renderAdSlot(settings: SiteSettings, slotLabel = 'Advertisement'): string {
@@ -135,7 +215,8 @@ function renderAdSlot(settings: SiteSettings, slotLabel = 'Advertisement'): stri
 function renderCtaStrip(settings: SiteSettings): string {
   const author = settings.default_author || 'Hamdi Soudani';
   const headline =
-    settings.cta_headline || 'Honest engineering stories — co-crafted with primary benchmarks & real code';
+    settings.cta_headline ||
+    'Honest engineering stories — co-crafted with primary benchmarks & real code';
   const body =
     settings.cta_body ||
     'Every dispatch blends hands-on engineering judgment with verified primary sources, reproducible configs, and clear tradeoffs.';
@@ -144,19 +225,19 @@ function renderCtaStrip(settings: SiteSettings): string {
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-11 sm:py-14 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-7">
     <div class="max-w-2xl space-y-2.5">
       <p class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.12em] text-accent font-semibold">
-        <span class="h-2 w-2 rounded-full bg-[var(--accent)]" aria-hidden="true"></span>
+        ${renderUiSketchIcon('pen', 15)}
         <span>${escapeHtml(author)} &times; Pyvren</span>
       </p>
       <h2 class="font-masthead text-2xl sm:text-3xl font-bold text-ink leading-tight">${escapeHtml(headline)}</h2>
       <p class="text-sm sm:text-base text-ink-secondary leading-relaxed">${escapeHtml(body)}</p>
     </div>
     <div class="flex flex-wrap items-center gap-3 shrink-0">
-      <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="btn-accent rounded-full px-5">
-        ${renderLinkedInIcon()}
+      <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="btn-accent rounded-lg px-5">
+        ${renderUiSketchIcon('linkedin', 15)}
         <span>Connect with ${escapeHtml(author)}</span>
       </a>
-      <a href="/blog" class="btn-ghost rounded-full px-4 text-xs sm:text-sm">Browse All Stories</a>
-      <a href="/rss.xml" class="btn-ghost rounded-full font-tabular text-xs">RSS</a>
+      <a href="/blog" class="btn-ghost rounded-lg px-4 text-xs sm:text-sm">Browse All Dispatches</a>
+      <a href="/rss.xml" class="btn-ghost rounded-lg font-tabular text-xs">RSS</a>
     </div>
   </div>
 </section>`;
@@ -189,8 +270,8 @@ function renderMobileCarouselControls(count: number, label: string): string {
       ${dots}
     </div>
     <div class="flex items-center gap-1.5">
-      <button type="button" data-carousel-prev class="inline-flex items-center justify-center w-8 h-8 rounded-full border border-hairline bg-surface text-ink-secondary active:scale-95" aria-label="Previous ${escapeHtml(label)}">&larr;</button>
-      <button type="button" data-carousel-next class="inline-flex items-center justify-center w-8 h-8 rounded-full border border-hairline bg-surface text-ink-secondary active:scale-95" aria-label="Next ${escapeHtml(label)}">&rarr;</button>
+      <button type="button" data-carousel-prev class="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-hairline bg-surface text-ink-secondary active:scale-95" aria-label="Previous ${escapeHtml(label)}">&larr;</button>
+      <button type="button" data-carousel-next class="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-hairline bg-surface text-ink-secondary active:scale-95" aria-label="Next ${escapeHtml(label)}">&rarr;</button>
     </div>
   </div>`;
 }
@@ -228,15 +309,15 @@ function renderVisualStoryCard(opts: {
 
   const relationFooterHtml = reasonBadge
     ? `<div class="pt-1.5">
-        <span class="topic-tone inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-subtle text-ink-secondary border border-hairline max-w-full truncate" style="--topic-light:${meta.color}; --topic-dark:${meta.darkColor};">
-          <span class="h-1.5 w-1.5 rounded-full topic-accent-dot shrink-0" aria-hidden="true"></span>
+        <span class="topic-tone inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium bg-subtle text-ink-secondary border border-hairline max-w-full truncate" style="--topic-light:${meta.color}; --topic-dark:${meta.darkColor};">
+          ${renderUiSketchIcon('spark', 12)}
           <span class="truncate">${escapeHtml(reasonBadge)}</span>
         </span>
       </div>`
     : topRelation && topRelation.score > 0
       ? `<div class="pt-1.5">
           <a href="/blog/${encodeURIComponent(topRelation.post.slug)}" class="inline-flex items-center gap-1.5 text-[11px] font-medium text-ink-muted hover:text-accent transition-colors max-w-full truncate" title="${escapeHtml(topRelation.reasonLabel)}">
-            <span class="text-accent shrink-0" aria-hidden="true">&nearr;</span>
+            ${renderUiSketchIcon('external', 12)}
             <span class="truncate">Related: ${escapeHtml(truncateText(topRelation.post.title, 40))}</span>
           </a>
         </div>`
@@ -251,7 +332,10 @@ function renderVisualStoryCard(opts: {
     <div class="space-y-2.5">
       <div class="flex items-center justify-between gap-2">
         ${renderCategoryTag(post.category_slug)}
-        <span class="font-tabular text-[11px] text-ink-faint">${post.reading_time_minutes || 1} min read</span>
+        <span class="inline-flex items-center gap-1 font-tabular text-[11px] text-ink-faint">
+          ${renderUiSketchIcon('clock', 12)}
+          <span>${post.reading_time_minutes || 1}m</span>
+        </span>
       </div>
 
       <h3 class="font-editorial text-[1.22rem] sm:text-[1.28rem] font-semibold leading-[1.25] text-ink">
@@ -263,11 +347,14 @@ function renderVisualStoryCard(opts: {
     </div>
 
     <div class="pt-3.5 border-t border-hairline flex items-center justify-between gap-3">
-      <div class="min-w-0">
-        <p class="text-xs font-medium text-ink truncate">${escapeHtml(byline)}</p>
+      <div class="min-w-0 space-y-0.5">
+        <p class="inline-flex items-center gap-1.5 text-xs font-medium text-ink max-w-full">
+          ${renderUiSketchIcon('pen', 12)}
+          <span class="truncate">${escapeHtml(byline)}</span>
+        </p>
         <time datetime="${escapeHtml(post.published_at || post.created_at)}" class="block font-tabular text-[11px] text-ink-faint">${escapeHtml(formatDate(post.published_at || post.created_at))}</time>
       </div>
-      <a href="${postHref}" class="inline-flex items-center justify-center w-8 h-8 rounded-full border border-hairline bg-paper text-ink-secondary group-hover:bg-[var(--accent)] group-hover:border-[var(--accent)] group-hover:text-white transition-colors shrink-0" aria-label="Read ${escapeHtml(post.title)}">
+      <a href="${postHref}" class="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-hairline bg-paper text-ink-secondary group-hover:bg-[var(--ink-primary)] group-hover:border-[var(--ink-primary)] group-hover:text-[var(--bg-paper)] transition-colors shrink-0" aria-label="Read ${escapeHtml(post.title)}">
         <span aria-hidden="true">&rarr;</span>
       </a>
     </div>
@@ -278,7 +365,7 @@ function renderVisualStoryCard(opts: {
 }
 
 /* ==========================================================================
-   1. Landing Page — Sketchbook Editorial Magazine (Human + Pyvren Co-Work)
+   1. Landing Page — Sketchbook Editorial Broadsheet (Human + Pyvren Co-Work)
    ========================================================================== */
 
 export function renderLandingPage(opts: {
@@ -321,15 +408,17 @@ export function renderLandingPage(opts: {
   const topicClusters = buildTopicClusters(pool, skills);
   const leadRelations = leadPost ? computePostRelationships(leadPost, pool, 3) : [];
 
-  // 1. Sketchbook Studio Hero (Inspired by the Doodle Crew Footer)
+  // 1. Sketchbook Studio Hero (Cartoon Py Snake + Vren Wren Desk Scene)
   const heroHtml = `<section class="border-b border-hairline bg-paper">
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-7 pb-10 sm:pt-10 sm:pb-14">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-7 pb-8 sm:pt-10 sm:pb-11">
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-center">
-      <!-- Left 7 cols: Editorial Headline, Instant Search & Quick Topic Chips -->
+      <!-- Left 7 cols: Editorial Headline, Instant Search & Popular Tags -->
       <div class="lg:col-span-7 space-y-5">
-        <div class="inline-flex flex-wrap items-center gap-2 px-3 py-1 rounded-full bg-surface border border-hairline text-xs text-ink-secondary">
-          <span class="h-2 w-2 rounded-full bg-[var(--accent)]" aria-hidden="true"></span>
-          <span class="font-medium">${escapeHtml(defaultAuthor)} &middot; Co-crafted with Pyvren</span>
+        <div class="inline-flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-lg bg-surface border border-hairline text-xs text-ink-secondary shadow-[2px_2px_0_0_var(--border-hairline)]">
+          ${renderUiSketchIcon('pen', 14)}
+          <span class="font-semibold text-ink">${escapeHtml(defaultAuthor)}</span>
+          <span class="text-ink-faint" aria-hidden="true">&middot;</span>
+          <span>Co-crafted with Pyvren</span>
         </div>
 
         <h1 class="font-masthead text-3xl sm:text-5xl lg:text-[3.35rem] font-bold leading-[1.06] tracking-tight text-ink">
@@ -343,9 +432,9 @@ export function renderLandingPage(opts: {
         <!-- Rate-Limited Live Instant Search Bar -->
         <div class="pt-1 max-w-xl">
           <form method="GET" action="/blog" role="search" data-live-search class="relative">
-            <div class="p-1.5 rounded-full bg-surface border border-strong/80 shadow-[var(--shadow-subtle)] focus-within:border-[var(--accent)] focus-within:shadow-[var(--shadow-lift)] transition-all flex items-center gap-2">
-              <span class="pl-3 text-ink-muted shrink-0" aria-hidden="true">
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+            <div class="p-1.5 rounded-xl bg-surface border border-strong/80 shadow-[var(--shadow-subtle)] focus-within:border-[var(--accent)] focus-within:shadow-[var(--shadow-lift)] transition-all flex items-center gap-2">
+              <span class="pl-2.5 text-ink-muted shrink-0">
+                ${renderUiSketchIcon('search', 17)}
               </span>
               <label for="hero-search-input" class="sr-only">Search stories, benchmarks, CVEs, or topics</label>
               <input
@@ -356,7 +445,7 @@ export function renderLandingPage(opts: {
                 placeholder="Search MCP benchmarks, prompt injection, LLMs, GPUs..."
                 class="w-full min-w-0 bg-transparent border-0 text-sm text-ink placeholder:text-ink-faint focus:outline-none py-2"
               >
-              <button type="submit" class="btn-accent rounded-full px-4 sm:px-5 py-2 text-xs sm:text-sm shrink-0">
+              <button type="submit" class="btn-accent rounded-lg px-4 sm:px-5 py-2 text-xs sm:text-sm shrink-0">
                 Search
               </button>
             </div>
@@ -367,27 +456,39 @@ export function renderLandingPage(opts: {
         ${
           topicClusters.length > 0
             ? `<div class="pt-1 flex items-center gap-2 overflow-x-auto ribbon-scroll">
-                <span class="font-tabular text-[11px] uppercase tracking-[0.08em] text-ink-faint shrink-0">Popular:</span>
+                <span class="font-tabular text-[11px] uppercase tracking-[0.08em] text-ink-faint shrink-0">Indexed:</span>
                 ${renderTopicClusterChips(topicClusters, 5)}
               </div>`
             : ''
         }
       </div>
 
-      <!-- Right 5 cols: Hand-Drawn Crew Desk Scene Inspired by the Footer -->
+      <!-- Right 5 cols: Cartoon Py (Snake) + Vren (Wren) Studio Scene -->
       <div class="lg:col-span-5">
-        <div class="rounded-2xl border border-hairline bg-surface p-3 sm:p-4 shadow-[var(--shadow-subtle)]">
+        <div class="rounded-2xl border-[1.5px] border-strong/80 bg-surface p-3 sm:p-4 shadow-[4px_4px_0_0_var(--border-hairline)]">
           ${renderHeroCrewSceneSvg()}
         </div>
       </div>
     </div>
+
+    <!-- In-Page Illustrated Beat Strip (Cleanly replaces cramped sub-navbar bars) -->
+    ${
+      enabledSkills.length > 0
+        ? `<div class="mt-8 pt-5 border-t border-hairline">
+            <div class="flex items-center justify-between gap-3 mb-2">
+              <span class="font-tabular text-[10px] font-bold uppercase tracking-[0.12em] text-ink-muted">Explore Beats</span>
+              <a href="/blog" class="font-tabular text-[11px] font-semibold text-accent hover:underline">Archive &rarr;</a>
+            </div>
+            ${renderBeatStrip({ skills: enabledSkills, mode: 'home' })}
+          </div>`
+        : ''
+    }
   </div>
 </section>`;
 
   // 2. Lead Story Spread
   let leadSpreadHtml = '';
   if (leadPost) {
-    const leadMeta = getCategoryMeta(leadPost.category_slug);
     const leadSignals = extractKeySignals(leadPost, 3);
     const leadHref = `/blog/${encodeURIComponent(leadPost.slug)}`;
     const leadByline = formatCoWorkByline(leadPost.author, defaultAuthor, false);
@@ -410,11 +511,14 @@ export function renderLandingPage(opts: {
           loading: 'eager',
         })
       : `<div class="editorial-card p-6 space-y-3">
-          <p class="font-tabular text-[11px] uppercase tracking-[0.12em] text-accent font-semibold">About the Desk</p>
+          <p class="inline-flex items-center gap-1.5 font-tabular text-[11px] uppercase tracking-[0.12em] text-accent font-semibold">
+            ${renderUiSketchIcon('pen', 14)}
+            <span>About the Desk</span>
+          </p>
           <h3 class="font-masthead text-xl font-bold text-ink">${escapeHtml(defaultAuthor)} &times; Pyvren</h3>
           <p class="text-sm text-ink-secondary leading-relaxed">${escapeHtml(settings.author_bio)}</p>
           <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 text-xs font-semibold text-accent hover:underline">
-            ${renderLinkedInIcon()}
+            ${renderUiSketchIcon('linkedin', 14)}
             <span>Connect on LinkedIn &nearr;</span>
           </a>
         </div>`;
@@ -422,20 +526,26 @@ export function renderLandingPage(opts: {
     const relatedWireHtml =
       leadRelations.length > 0
         ? `<aside class="editorial-card p-5 space-y-3.5" aria-label="Further reading">
-            <div class="flex items-center justify-between gap-2 pb-2 border-b border-hairline">
-              <h3 class="font-tabular text-[11px] uppercase tracking-[0.12em] font-bold text-ink">Connected Reading</h3>
+            <div class="flex items-center justify-between gap-2 pb-2.5 border-b border-hairline">
+              <h3 class="inline-flex items-center gap-1.5 font-tabular text-[11px] uppercase tracking-[0.12em] font-bold text-ink">
+                ${renderUiSketchIcon('layers', 14)}
+                <span>Connected Reading</span>
+              </h3>
               <a href="/blog" class="font-tabular text-[11px] text-accent hover:underline">All &rarr;</a>
             </div>
             <ul class="divide-y divide-[var(--border-hairline)]">
               ${leadRelations
                 .map((rel) => {
                   const relMeta = getCategoryMeta(rel.post.category_slug);
-                  return `<li class="py-2.5 first:pt-0 last:pb-0 space-y-1">
+                  return `<li class="py-3 first:pt-0 last:pb-0 space-y-1.5">
                     <div class="flex items-center justify-between gap-2 text-[11px]">
                       ${renderCategoryTag(rel.post.category_slug, relMeta.navLabel, false)}
-                      <span class="text-ink-faint font-tabular">${rel.post.reading_time_minutes || 1}m</span>
+                      <span class="inline-flex items-center gap-1 text-ink-faint font-tabular">
+                        ${renderUiSketchIcon('clock', 11)}
+                        <span>${rel.post.reading_time_minutes || 1}m</span>
+                      </span>
                     </div>
-                    <a href="/blog/${encodeURIComponent(rel.post.slug)}" class="block font-editorial text-[0.98rem] font-semibold leading-snug text-ink hover:text-accent transition-colors">
+                    <a href="/blog/${encodeURIComponent(rel.post.slug)}" class="block font-editorial text-[1rem] font-semibold leading-snug text-ink hover:text-accent transition-colors">
                       ${escapeHtml(rel.post.title)}
                     </a>
                   </li>`;
@@ -447,11 +557,14 @@ export function renderLandingPage(opts: {
 
     leadSpreadHtml = `<section aria-labelledby="featured-story-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10 pb-4">
   <div class="double-rule-top pt-3 pb-4 flex flex-wrap items-center justify-between gap-3">
-    <div class="flex items-center gap-2">
-      <span class="h-2 w-2 rounded-full bg-[var(--accent)]" aria-hidden="true"></span>
+    <div class="flex items-center gap-2 text-ink">
+      ${renderUiSketchIcon('spark', 14)}
       <h2 id="featured-story-heading" class="font-tabular text-[11px] uppercase tracking-[0.14em] text-ink font-bold">Featured Dispatch</h2>
     </div>
-    <span class="font-tabular text-xs text-ink-faint">${escapeHtml(formatDate(leadPost.published_at || leadPost.created_at))}</span>
+    <span class="inline-flex items-center gap-1.5 font-tabular text-xs text-ink-faint">
+      ${renderUiSketchIcon('calendar', 13)}
+      <span>${escapeHtml(formatDate(leadPost.published_at || leadPost.created_at))}</span>
+    </span>
   </div>
 
   <div class="grid grid-cols-1 lg:grid-cols-12 gap-7 items-start">
@@ -466,7 +579,10 @@ export function renderLandingPage(opts: {
             ${renderCategoryTag(leadPost.category_slug)}
             <span class="badge-editorial">${escapeHtml(formatArchetype(leadPost.archetype))}</span>
           </div>
-          <span class="font-tabular text-xs text-ink-muted">${leadPost.reading_time_minutes || 1} min read</span>
+          <span class="inline-flex items-center gap-1.5 font-tabular text-xs text-ink-muted">
+            ${renderUiSketchIcon('clock', 13)}
+            <span>${leadPost.reading_time_minutes || 1} min read</span>
+          </span>
         </div>
 
         <h3 class="font-masthead text-2xl sm:text-3xl lg:text-[2.1rem] font-bold leading-[1.13] text-ink">
@@ -477,13 +593,16 @@ export function renderLandingPage(opts: {
 
         ${
           leadSignals.length > 0
-            ? `<div class="rounded-xl bg-subtle/75 border border-hairline p-4 space-y-2">
-                <p class="font-tabular text-[10px] uppercase tracking-[0.12em] text-ink-muted font-semibold">At a Glance</p>
+            ? `<div class="rounded-xl bg-subtle/80 border border-hairline p-4 space-y-2.5">
+                <p class="inline-flex items-center gap-1.5 font-tabular text-[10px] uppercase tracking-[0.12em] text-ink font-bold">
+                  ${renderUiSketchIcon('ledger', 13)}
+                  <span>Verified Highlights</span>
+                </p>
                 <ul class="space-y-1.5 text-xs sm:text-[13.5px] text-ink-secondary leading-snug">
                   ${leadSignals
                     .map(
-                      (sig) => `<li class="topic-tone flex items-start gap-2" style="--topic-light:${leadMeta.color}; --topic-dark:${leadMeta.darkColor};">
-                        <span class="h-1.5 w-1.5 rounded-full topic-accent-dot mt-1.5 shrink-0" aria-hidden="true"></span>
+                      (sig) => `<li class="flex items-start gap-2">
+                        <span class="font-tabular font-bold text-accent select-none shrink-0" aria-hidden="true">&mdash;</span>
                         <span>${sig.label ? `<strong class="text-ink font-semibold">${escapeHtml(sig.label)}:</strong> ` : ''}${escapeHtml(sig.text)}</span>
                       </li>`,
                     )
@@ -493,13 +612,20 @@ export function renderLandingPage(opts: {
             : ''
         }
 
-        <div class="pt-3 border-t border-hairline flex flex-wrap items-center justify-between gap-4">
-          <div class="text-xs text-ink-secondary">
-            <span class="font-semibold text-ink">${escapeHtml(leadByline)}</span>
-            <span class="text-ink-faint"> &middot; ${leadPost.sources_json.length} primary sources</span>
+        <div class="pt-3.5 border-t border-hairline flex flex-wrap items-center justify-between gap-4">
+          <div class="flex flex-wrap items-center gap-2 text-xs text-ink-secondary">
+            <span class="inline-flex items-center gap-1.5 font-semibold text-ink">
+              ${renderUiSketchIcon('pen', 13)}
+              <span>${escapeHtml(leadByline)}</span>
+            </span>
+            <span class="text-ink-faint" aria-hidden="true">&middot;</span>
+            <span class="inline-flex items-center gap-1 font-tabular text-ink-muted">
+              ${renderUiSketchIcon('source', 13)}
+              <span>${leadPost.sources_json.length} primary sources</span>
+            </span>
           </div>
-          <a href="${leadHref}" class="btn-accent rounded-full px-5 py-2 text-xs sm:text-sm">
-            <span>Read Story</span>
+          <a href="${leadHref}" class="btn-accent rounded-lg px-5 py-2 text-xs sm:text-sm">
+            <span>Read Dispatch</span>
             <span aria-hidden="true">&rarr;</span>
           </a>
         </div>
@@ -516,8 +642,9 @@ export function renderLandingPage(opts: {
   } else {
     leadSpreadHtml = `<section class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10 pb-4">
       <div class="editorial-card p-8 sm:p-10 text-center space-y-4">
-        <h2 class="font-masthead text-2xl sm:text-3xl font-bold text-ink">Fresh stories are on the drafting desk.</h2>
-        <p class="text-sm sm:text-base text-ink-secondary max-w-xl mx-auto">Explore our six engineering topics below while the next primary-source story is prepared.</p>
+        <div class="mx-auto w-40 h-28">${renderTopicCrewSvg('ai-coding-agents-mcp', 'empty-home')}</div>
+        <h2 class="font-masthead text-2xl sm:text-3xl font-bold text-ink">Fresh dispatches are on Py &amp; Vren’s drafting desk.</h2>
+        <p class="text-sm sm:text-base text-ink-secondary max-w-xl mx-auto">Explore our six engineering beats below while the next primary-source story is prepared.</p>
       </div>
     </section>`;
   }
@@ -528,10 +655,13 @@ export function renderLandingPage(opts: {
       ? `<section aria-labelledby="recent-stories-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-12" data-carousel-root>
   <div class="double-rule-top pt-4 pb-5 flex items-end justify-between gap-4">
     <div>
-      <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Latest Dispatches</p>
+      <p class="inline-flex items-center gap-1.5 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">
+        ${renderUiSketchIcon('note', 14)}
+        <span>Latest Dispatches</span>
+      </p>
       <h2 id="recent-stories-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1">Recent Stories</h2>
     </div>
-    <a href="/blog" class="font-tabular text-xs font-semibold text-ink-secondary hover:text-accent transition-colors shrink-0">View all &rarr;</a>
+    <a href="/blog" class="font-tabular text-xs font-semibold text-ink-secondary hover:text-accent transition-colors shrink-0">View archive &rarr;</a>
   </div>
 
   <div class="mobile-carousel md:grid md:grid-cols-2 lg:grid-cols-3 md:gap-6" data-carousel-track>
@@ -552,16 +682,19 @@ export function renderLandingPage(opts: {
 </section>`
       : '';
 
-  // 4. 6 Bespoke Crew Topic Cards (Swipeable Mobile Carousel -> 3-Col Desktop Grid)
+  // 4. 6 Illustrated Py + Vren Topic Cards (Swipeable Mobile Carousel -> 3-Col Desktop Grid)
   const topicsSectionHtml =
     enabledSkills.length > 0
       ? `<section id="categories" aria-labelledby="topics-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 scroll-mt-24" data-carousel-root>
   <div class="double-rule-top pt-4 pb-5 flex flex-col sm:flex-row sm:items-end justify-between gap-3">
     <div>
-      <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Explore by Topic</p>
-      <h2 id="topics-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1">Six Beats, Six Crew Guides</h2>
+      <p class="inline-flex items-center gap-1.5 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">
+        ${renderUiSketchIcon('layers', 14)}
+        <span>Subject Atlas</span>
+      </p>
+      <h2 id="topics-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1">Six Engineering Beats</h2>
     </div>
-    <p class="text-xs sm:text-sm text-ink-muted max-w-md">Swipe on mobile or pick a beat — each topic is illustrated by its own member of the Pyvren sketchbook crew.</p>
+    <p class="text-xs sm:text-sm text-ink-muted max-w-md">Swipe on mobile or choose a beat — each section pairs primary benchmarks with Py &amp; Vren’s sketchbook illustrations.</p>
   </div>
 
   <div class="mobile-carousel mobile-carousel--compact md:grid md:grid-cols-2 lg:grid-cols-3 md:gap-5" data-carousel-track>
@@ -575,10 +708,10 @@ export function renderLandingPage(opts: {
               <div class="rounded-xl bg-subtle/85 border border-hairline px-3 pt-3 pb-1 overflow-hidden">
                 <div class="flex items-center justify-between gap-2 mb-1">
                   <span class="inline-flex items-center gap-1.5 font-tabular text-[10px] font-bold uppercase tracking-[0.09em] topic-accent-text">
-                    <span class="h-2 w-2 rounded-full topic-accent-dot" aria-hidden="true"></span>
+                    ${renderTopicSketchIcon(skill.slug, 15)}
                     <span>${escapeHtml(meta.shortLabel)}</span>
                   </span>
-                  <span class="font-tabular text-[10px] text-ink-faint">${escapeHtml(meta.crewName)}</span>
+                  <span class="font-tabular text-[10px] text-ink-faint">Py &amp; Vren</span>
                 </div>
                 <div class="h-28 w-full max-w-[190px] mx-auto">
                   ${crewSvg}
@@ -602,33 +735,45 @@ export function renderLandingPage(opts: {
 
   // 5. Human + Agent Co-Work Note & Hamdi Soudani Profile Card
   const coWorkNoteHtml = `<section aria-labelledby="cowork-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-16">
-  <div class="editorial-card p-6 sm:p-9">
+  <div class="field-note p-6 sm:p-9">
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
-      <div class="lg:col-span-7 space-y-3">
-        <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">How We Write</p>
+      <div class="lg:col-span-7 space-y-3.5">
+        <div class="flex items-center gap-3">
+          ${renderMastheadNibSvg(42)}
+          <div>
+            <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-bold">How We Write</p>
+            <p class="text-xs text-ink-muted">${escapeHtml(defaultAuthor)} &times; Pyvren Studio</p>
+          </div>
+        </div>
         <h2 id="cowork-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink leading-tight">
-          Human taste &amp; engineering judgment, paired with tireless research.
+          Human taste &amp; engineering judgment, paired with tireless primary-source research.
         </h2>
         <p class="text-sm sm:text-base text-ink-secondary leading-relaxed">
-          ${escapeHtml(siteName)} is a collaborative publication by <strong>${escapeHtml(defaultAuthor)}</strong> and <strong>Pyvren</strong>. Together we track real advisories, benchmark repos, and systems papers — turning raw primary documentation into clear, practical stories with zero filler.
+          ${escapeHtml(siteName)} is a collaborative publication by <strong>${escapeHtml(defaultAuthor)}</strong> and <strong>Pyvren</strong>. Together we track real advisories, benchmark repos, and systems papers — turning raw primary documentation into clear, practical dispatches with zero filler.
         </p>
-        <div class="pt-2 flex flex-wrap items-center gap-3">
-          <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="btn-primary rounded-full px-5 text-xs sm:text-sm">
-            ${renderLinkedInIcon()}
+        <div class="pt-1 flex flex-wrap items-center gap-3">
+          <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="btn-primary rounded-lg px-5 text-xs sm:text-sm">
+            ${renderUiSketchIcon('linkedin', 15)}
             <span>${escapeHtml(defaultAuthor)} on LinkedIn</span>
           </a>
-          <a href="/about" class="btn-ghost rounded-full px-4 text-xs sm:text-sm">About the Co-Work</a>
+          <a href="/about" class="btn-ghost rounded-lg px-4 text-xs sm:text-sm">About the Co-Work</a>
         </div>
       </div>
 
       <div class="lg:col-span-5 grid grid-cols-1 sm:grid-cols-2 gap-4 broadsheet-divider">
-        <div class="p-4 rounded-xl bg-subtle/70 border border-hairline space-y-1.5">
-          <p class="font-tabular text-[11px] font-bold text-accent">PRIMARY SOURCES</p>
-          <p class="text-xs sm:text-sm text-ink-secondary leading-relaxed">Every benchmark number, config snippet, and diagram links back to the original repo, paper, or advisory.</p>
+        <div class="p-4 rounded-xl bg-subtle/75 border border-hairline space-y-2">
+          <p class="inline-flex items-center gap-1.5 font-tabular text-[11px] font-bold text-ink">
+            ${renderUiSketchIcon('source', 14)}
+            <span>PRIMARY SOURCES</span>
+          </p>
+          <p class="text-xs sm:text-sm text-ink-secondary leading-relaxed">Every benchmark number, config snippet, and diagram links directly to the original repo, paper, or advisory.</p>
         </div>
-        <div class="p-4 rounded-xl bg-subtle/70 border border-hairline space-y-1.5">
-          <p class="font-tabular text-[11px] font-bold text-accent">BUILT FOR READERS</p>
-          <p class="text-xs sm:text-sm text-ink-secondary leading-relaxed">Warm paper or dark mode, fast on every phone, and structured cleanly under the hood.</p>
+        <div class="p-4 rounded-xl bg-subtle/75 border border-hairline space-y-2">
+          <p class="inline-flex items-center gap-1.5 font-tabular text-[11px] font-bold text-ink">
+            ${renderUiSketchIcon('ledger', 14)}
+            <span>NO FLUFF OR SLOP</span>
+          </p>
+          <p class="text-xs sm:text-sm text-ink-secondary leading-relaxed">Warm newsprint or obsidian dark mode, colorized code blocks, full-width benchmark tables, and honest tradeoffs.</p>
         </div>
       </div>
     </div>
@@ -710,24 +855,6 @@ export function renderBlogIndexPage(opts: {
     return qs ? `/blog?${qs}` : '/blog';
   };
 
-  const filterChips = [
-    `<a href="${escapeHtml(buildIndexUrl(1, undefined, trimmedQuery))}" class="topic-pill ${
-      !activeCategory ? 'bg-[var(--ink-primary)] text-[var(--bg-paper)] border-[var(--ink-primary)]' : 'bg-surface border-hairline'
-    }"${!activeCategory ? ' aria-current="page"' : ''}>All Stories</a>`,
-    ...skills
-      .filter((s) => s.enabled || s.slug === activeCategory)
-      .map((skill) => {
-        const isActive = skill.slug === activeCategory;
-        const meta = getCategoryMeta(skill.slug);
-        return `<a href="${escapeHtml(buildIndexUrl(1, skill.slug, trimmedQuery))}" class="topic-pill topic-tone ${
-          isActive ? '' : 'bg-surface border-hairline'
-        }" style="--topic-light:${meta.color}; --topic-dark:${meta.darkColor};"${isActive ? ' aria-current="page"' : ''}>
-          ${isActive ? '' : `<span class="h-2 w-2 rounded-full topic-accent-dot shrink-0" aria-hidden="true"></span>`}
-          <span>${escapeHtml(meta.navLabel)}</span>
-        </a>`;
-      }),
-  ].join('\n');
-
   const rateLimitBannerHtml = rateLimitRetrySeconds
     ? `<div role="alert" class="mt-6 rounded-xl border border-[var(--accent)] bg-[var(--accent-soft)] p-5 text-sm text-ink space-y-1">
         <p class="font-semibold text-accent">Whoa — slow down just a bit!</p>
@@ -751,11 +878,12 @@ export function renderBlogIndexPage(opts: {
           })
           .join('\n')}
       </div>`
-      : `<div class="editorial-card p-10 text-center space-y-3">
-        <p class="font-masthead text-2xl font-bold text-ink">No matching stories found.</p>
-        <p class="text-sm text-ink-muted">Try another keyword or browse all topics below.</p>
-        <div class="pt-2">
-          <a href="/blog" class="btn-ghost rounded-full">Show all stories</a>
+      : `<div class="editorial-card p-10 text-center space-y-4">
+        <div class="mx-auto w-36 h-24">${renderTopicCrewSvg(activeCategory || 'agentic-browser-web-data', 'empty-search')}</div>
+        <p class="font-masthead text-2xl font-bold text-ink">No matching dispatches found.</p>
+        <p class="text-sm text-ink-muted">Try another keyword or switch beats above.</p>
+        <div class="pt-1">
+          <a href="/blog" class="btn-ghost rounded-lg">Show all dispatches</a>
         </div>
       </div>`;
 
@@ -765,39 +893,40 @@ export function renderBlogIndexPage(opts: {
         <div>
           ${
             page > 1
-              ? `<a href="${escapeHtml(buildIndexUrl(page - 1, activeCategory, trimmedQuery))}" class="btn-ghost rounded-full font-tabular text-xs">&larr; Previous</a>`
-              : `<span class="btn-ghost rounded-full opacity-40 pointer-events-none font-tabular text-xs">&larr; Previous</span>`
+              ? `<a href="${escapeHtml(buildIndexUrl(page - 1, activeCategory, trimmedQuery))}" class="btn-ghost rounded-lg font-tabular text-xs">&larr; Previous</a>`
+              : `<span class="btn-ghost rounded-lg opacity-40 pointer-events-none font-tabular text-xs">&larr; Previous</span>`
           }
         </div>
         <span class="font-tabular text-xs text-ink-muted">Page ${page} of ${totalPages}</span>
         <div>
           ${
             page < totalPages
-              ? `<a href="${escapeHtml(buildIndexUrl(page + 1, activeCategory, trimmedQuery))}" class="btn-ghost rounded-full font-tabular text-xs">Next &rarr;</a>`
-              : `<span class="btn-ghost rounded-full opacity-40 pointer-events-none font-tabular text-xs">Next &rarr;</span>`
+              ? `<a href="${escapeHtml(buildIndexUrl(page + 1, activeCategory, trimmedQuery))}" class="btn-ghost rounded-lg font-tabular text-xs">Next &rarr;</a>`
+              : `<span class="btn-ghost rounded-lg opacity-40 pointer-events-none font-tabular text-xs">Next &rarr;</span>`
           }
         </div>
       </nav>`
       : '';
 
-  const categoryMascotHtml = activeSkill && activeMeta
-    ? `<div class="topic-tone hidden md:flex items-center justify-center w-44 h-28 rounded-xl bg-subtle border border-hairline p-2 shrink-0" style="--topic-light:${activeMeta.color}; --topic-dark:${activeMeta.darkColor};">
+  const categoryMascotHtml =
+    activeSkill && activeMeta
+      ? `<div class="topic-tone hidden md:flex items-center justify-center w-44 h-28 rounded-xl bg-subtle border border-hairline p-2 shrink-0" style="--topic-light:${activeMeta.color}; --topic-dark:${activeMeta.darkColor};">
         ${renderTopicCrewSvg(activeSkill.slug, 'archive-header')}
       </div>`
-    : '';
+      : '';
 
   const indexBody = `<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
-  <header class="editorial-card p-5 sm:p-8 space-y-6">
+  <header class="field-note p-5 sm:p-8 space-y-6">
     <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
       <div class="flex items-center gap-5 min-w-0">
         ${categoryMascotHtml}
         <div class="space-y-2 max-w-2xl min-w-0">
-          <p class="topic-tone inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.13em] topic-accent-text font-semibold" style="--topic-light:${activeMeta ? activeMeta.color : 'var(--accent)'}; --topic-dark:${activeMeta ? activeMeta.darkColor : 'var(--accent)'};">
-            <span class="h-2 w-2 rounded-full topic-accent-dot" aria-hidden="true"></span>
-            <span>${activeSkill ? `${escapeHtml(activeMeta?.crewName || 'Crew')}’s Beat` : 'All Published Stories'}</span>
+          <p class="topic-tone inline-flex items-center gap-1.5 font-tabular text-[11px] uppercase tracking-[0.13em] topic-accent-text font-semibold" style="--topic-light:${activeMeta ? activeMeta.color : 'var(--accent)'}; --topic-dark:${activeMeta ? activeMeta.darkColor : 'var(--accent)'};">
+            ${renderTopicSketchIcon(activeSkill ? activeSkill.slug : 'all', 16)}
+            <span>${activeSkill ? `${escapeHtml(activeMeta?.shortLabel || 'Beat')} Beat` : 'Complete Dispatch Archive'}</span>
           </p>
           <h1 class="font-masthead text-2xl sm:text-4xl lg:text-[2.65rem] font-bold text-ink leading-[1.1]">
-            ${activeSkill ? escapeHtml(activeSkill.name) : 'Stories & Benchmarks'}
+            ${activeSkill ? escapeHtml(activeSkill.name) : 'Dispatches & Benchmarks'}
           </h1>
           <p class="text-sm sm:text-base text-ink-secondary leading-relaxed">
             ${
@@ -811,25 +940,25 @@ export function renderBlogIndexPage(opts: {
 
       <form id="search" method="GET" action="/blog" role="search" data-live-search class="relative w-full lg:w-[23rem] shrink-0">
         ${activeCategory ? `<input type="hidden" name="category" value="${escapeHtml(activeCategory)}">` : ''}
-        <div class="p-1.5 rounded-full bg-paper border border-strong/75 focus-within:border-[var(--accent)] transition-colors flex items-center gap-2">
-          <span class="pl-3 text-ink-muted shrink-0" aria-hidden="true">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+        <div class="p-1.5 rounded-xl bg-paper border border-strong/75 focus-within:border-[var(--accent)] transition-colors flex items-center gap-2">
+          <span class="pl-2.5 text-ink-muted shrink-0">
+            ${renderUiSketchIcon('search', 16)}
           </span>
           <label for="archive-search-input" class="sr-only">Search stories</label>
           <input id="archive-search-input" type="search" name="q" autocomplete="off" value="${escapeHtml(trimmedQuery)}" placeholder="Search titles, topics, CVEs..." class="w-full min-w-0 bg-transparent border-0 text-sm text-ink placeholder:text-ink-faint focus:outline-none py-1.5">
-          <button type="submit" class="btn-accent rounded-full px-4 py-1.5 text-xs shrink-0">Search</button>
+          <button type="submit" class="btn-accent rounded-lg px-4 py-1.5 text-xs shrink-0">Search</button>
         </div>
         <div data-search-results class="search-dropdown hidden" role="listbox" aria-label="Search suggestions"></div>
       </form>
     </div>
 
     <div class="pt-4 border-t border-hairline flex items-center justify-between gap-3">
-      <div class="topic-rail flex-1 py-0" role="navigation" aria-label="Filter by topic">
-        ${filterChips}
+      <div class="min-w-0 flex-1">
+        ${renderBeatStrip({ skills, activeSlug: activeCategory, query: trimmedQuery, mode: 'archive' })}
       </div>
       ${
         trimmedQuery || activeCategory
-          ? `<a href="/blog" class="font-tabular text-xs text-ink-muted hover:text-accent underline underline-offset-2 shrink-0">Reset</a>`
+          ? `<a href="/blog" class="font-tabular text-xs font-semibold text-ink-muted hover:text-accent underline underline-offset-2 shrink-0">Reset</a>`
           : ''
       }
     </div>
@@ -858,10 +987,11 @@ export function renderBlogIndexPage(opts: {
     ? `${activeSkill.name} — ${siteName}`
     : trimmedQuery
       ? `Search: ${trimmedQuery} — ${siteName}`
-      : `Stories & Benchmarks — ${siteName}`;
+      : `Dispatches & Benchmarks — ${siteName}`;
   const pageDesc = activeSkill
     ? activeSkill.description
-    : settings.site_tagline || 'Field notes, benchmarks, and deep dives into AI, security, and cloud craft.';
+    : settings.site_tagline ||
+      'Field notes, benchmarks, and deep dives into AI, security, and cloud craft.';
 
   return renderPublicLayout({
     title: pageTitle,
@@ -877,7 +1007,7 @@ export function renderBlogIndexPage(opts: {
 }
 
 /* ==========================================================================
-   3. Single Blog Post Page (Clean Human Reader + Crawled Reference Figures)
+   3. Single Blog Post Page (Syntax Code, Ledger Tables, Ref Cards, Pyvren Backup)
    ========================================================================== */
 
 export function renderBlogPostPage(opts: {
@@ -886,9 +1016,18 @@ export function renderBlogPostPage(opts: {
   skill?: CategorySkill | null;
   relatedPosts: PostRecord[];
   headings?: Array<{ id: string; level: number; text: string }>;
+  compiledHtml?: string;
   initialTheme?: 'light' | 'dark';
 }): string {
-  const { settings, post, skill, relatedPosts, headings = [], initialTheme } = opts;
+  const {
+    settings,
+    post,
+    skill,
+    relatedPosts,
+    headings = [],
+    compiledHtml,
+    initialTheme,
+  } = opts;
   const catMeta = getCategoryMeta(post.category_slug);
   const categoryName = skill?.name || catMeta.navLabel || post.category_slug.replace(/-/g, ' ');
   const authorName = post.author || settings.default_author || 'Hamdi Soudani';
@@ -896,15 +1035,18 @@ export function renderBlogPostPage(opts: {
   const publishedIso = post.published_at || post.created_at;
   const updatedIso = post.updated_at;
   const showUpdated =
-    Boolean(updatedIso && publishedIso) &&
-    formatDate(updatedIso) !== formatDate(publishedIso);
+    Boolean(updatedIso && publishedIso) && formatDate(updatedIso) !== formatDate(publishedIso);
   const hasToc = headings.length >= 2;
   const markdownUrl = `/blog/${encodeURIComponent(post.slug)}.md`;
+  const renderedProseHtml = compiledHtml || post.body_html;
 
   const relationships = computePostRelationships(post, relatedPosts, 3);
 
-  // Hero visual: real crawled primary reference image if available, otherwise clean theme-adaptive Crew banner
-  const hasRealCover = Boolean(post.cover_image_url && post.cover_image_url.trim().startsWith('https://'));
+  // Hero visual: real crawled primary reference image (with automatic onerror swap to Cartoon Py+Vren),
+  // OR automatic Cartoon Py (Python snake) + Vren (Wren) wide banner when no cover image exists!
+  const hasRealCover = Boolean(
+    post.cover_image_url && post.cover_image_url.trim().startsWith('https://'),
+  );
   const coverSourceMatch = Array.isArray(post.images_json)
     ? post.images_json.find((img) => img.url === post.cover_image_url)
     : undefined;
@@ -914,20 +1056,28 @@ export function renderBlogPostPage(opts: {
         <img
           src="${escapeHtml(post.cover_image_url!.trim())}"
           alt="${escapeHtml(post.cover_image_alt || post.title)}"
+          data-fallback-category="${escapeHtml(post.category_slug)}"
+          data-fallback-label="${escapeHtml(post.title)}"
           loading="eager"
           decoding="async"
           referrerpolicy="no-referrer"
         />
         <figcaption class="article-hero-caption flex flex-wrap items-center justify-between gap-2">
-          <span>${escapeHtml(post.cover_image_alt || post.title)}</span>
+          <span class="inline-flex items-center gap-1.5">
+            ${renderUiSketchIcon('note', 13)}
+            <span>${escapeHtml(post.cover_image_alt || post.title)}</span>
+          </span>
           ${
             coverSourceMatch?.source_page_url
-              ? `<a href="${escapeHtml(safeHref(coverSourceMatch.source_page_url))}" target="_blank" rel="noopener noreferrer" class="font-tabular text-xs text-accent hover:underline">Source: ${escapeHtml(extractDomain(coverSourceMatch.source_page_url))} &nearr;</a>`
+              ? `<a href="${escapeHtml(safeHref(coverSourceMatch.source_page_url))}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 font-tabular text-xs font-medium text-accent hover:underline">
+                  <span>Source: ${escapeHtml(extractDomain(coverSourceMatch.source_page_url))}</span>
+                  ${renderUiSketchIcon('external', 12)}
+                </a>`
               : ''
           }
         </figcaption>
       </figure>`
-    : `<div class="mt-7 max-w-4xl rounded-2xl overflow-hidden border border-hairline bg-surface shadow-[var(--shadow-subtle)]">
+    : `<div class="mt-7 max-w-4xl rounded-2xl overflow-hidden border-[1.5px] border-hairline bg-surface shadow-[var(--shadow-subtle)]">
         ${renderStoryCoverMedia({
           coverImageUrl: null,
           categorySlug: post.category_slug,
@@ -953,19 +1103,34 @@ export function renderBlogPostPage(opts: {
   const referenceGalleryHtml =
     extraReferenceImages.length > 0
       ? `<section aria-labelledby="ref-figures-heading" class="mt-12 pt-8 border-t border-hairline">
-          <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Visual References</p>
+          <p class="inline-flex items-center gap-1.5 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">
+            ${renderUiSketchIcon('layers', 14)}
+            <span>Visual Evidence</span>
+          </p>
           <h2 id="ref-figures-heading" class="font-masthead text-2xl font-bold text-ink mt-1 mb-4">Figures from Cited Sources</h2>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             ${extraReferenceImages
               .slice(0, 4)
               .map(
                 (img) => `<figure class="editorial-figure m-0 rounded-xl overflow-hidden border border-hairline bg-surface">
-                  <img src="${escapeHtml(img.url)}" alt="${escapeHtml(img.alt || post.title)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" class="w-full aspect-[16/10] object-cover bg-subtle">
+                  <img
+                    src="${escapeHtml(img.url)}"
+                    alt="${escapeHtml(img.alt || post.title)}"
+                    data-fallback-category="${escapeHtml(post.category_slug)}"
+                    data-fallback-label="${escapeHtml(img.caption || img.alt || post.title)}"
+                    loading="lazy"
+                    decoding="async"
+                    referrerpolicy="no-referrer"
+                    class="w-full aspect-[16/10] object-cover bg-subtle"
+                  >
                   <figcaption class="editorial-caption flex items-center justify-between gap-2">
                     <span class="truncate">${escapeHtml(img.caption || img.alt || 'Reference diagram')}</span>
                     ${
                       img.source_page_url
-                        ? `<a href="${escapeHtml(safeHref(img.source_page_url))}" target="_blank" rel="noopener noreferrer" class="font-tabular text-[11px] text-accent hover:underline shrink-0">${escapeHtml(extractDomain(img.source_page_url))} &nearr;</a>`
+                        ? `<a href="${escapeHtml(safeHref(img.source_page_url))}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 font-tabular text-[11px] font-medium text-accent hover:underline shrink-0">
+                            <span>${escapeHtml(extractDomain(img.source_page_url))}</span>
+                            ${renderUiSketchIcon('external', 11)}
+                          </a>`
                         : ''
                     }
                   </figcaption>
@@ -976,37 +1141,55 @@ export function renderBlogPostPage(opts: {
         </section>`
       : '';
 
+  // Crafted Field-Note Summary Card (Replaces cliché AI left-border callout)
   const tldrHtml = post.tldr_summary
-    ? `<section aria-label="Quick Summary" class="mt-8 rounded-2xl border border-hairline border-l-[4px] border-l-[var(--accent)] bg-surface p-5 sm:p-6 shadow-[var(--shadow-subtle)]">
-      <div class="flex items-center justify-between gap-2 mb-2">
-        <span class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-bold">TL;DR &middot; The Short Version</span>
-        <span class="font-tabular text-[11px] text-ink-faint">${post.reading_time_minutes} min read</span>
+    ? `<section aria-label="Quick Summary" class="field-note mt-8 p-5 sm:p-6">
+      <div class="flex flex-wrap items-center justify-between gap-2 pb-3 mb-3 border-b border-hairline">
+        <span class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.13em] text-ink font-bold">
+          ${renderUiSketchIcon('note', 16)}
+          <span>Field Note &middot; The Short Version</span>
+        </span>
+        <span class="inline-flex items-center gap-1 font-tabular text-[11px] text-ink-muted">
+          ${renderUiSketchIcon('clock', 12)}
+          <span>${post.reading_time_minutes} min read</span>
+        </span>
       </div>
-      <p class="text-[0.98rem] sm:text-base leading-[1.7] text-ink font-medium">${escapeHtml(post.tldr_summary)}</p>
+      <p class="font-editorial text-[1.08rem] sm:text-[1.16rem] leading-[1.62] text-ink">${escapeHtml(post.tldr_summary)}</p>
     </section>`
     : '';
 
+  // Full-Width Editorial Benchmark Ledger for Key Numbers & Specs
   const keyFactsHtml =
     post.key_facts_json.length > 0
-      ? `<section aria-labelledby="key-facts-heading" class="mt-6 rounded-2xl border border-hairline bg-surface overflow-hidden shadow-[var(--shadow-subtle)]">
-      <div class="px-5 py-3 bg-subtle border-b border-hairline flex items-center justify-between gap-3">
-        <h2 id="key-facts-heading" class="font-tabular text-[11px] uppercase tracking-[0.14em] text-ink-secondary font-bold">Key Numbers &amp; Specs</h2>
-        <span class="font-tabular text-[11px] text-ink-faint">${post.key_facts_json.length} verified points</span>
-      </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-left border-collapse text-sm">
-          <tbody class="divide-y divide-[var(--border-hairline)]">
+      ? `<section aria-labelledby="key-facts-heading" class="mt-6">
+      <div class="editorial-table-wrap !my-0">
+        <div class="px-4 sm:px-5 py-3 bg-subtle border-b border-strong flex items-center justify-between gap-3">
+          <h2 id="key-facts-heading" class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.13em] text-ink font-bold">
+            ${renderUiSketchIcon('ledger', 15)}
+            <span>Key Numbers &amp; Verified Specs</span>
+          </h2>
+          <span class="font-tabular text-[11px] text-ink-muted">${post.key_facts_json.length} metrics</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Metric / Spec</th>
+              <th>Verified Finding</th>
+              <th>Source</th>
+            </tr>
+          </thead>
+          <tbody>
             ${post.key_facts_json
               .map((fact) => {
                 const srcHref = fact.source_url ? safeHref(fact.source_url, '') : '';
-                return `<tr class="hover:bg-subtle/60 transition-colors">
-              <th scope="row" class="py-3 px-4 sm:px-5 font-tabular text-xs font-medium text-ink-muted w-1/3 align-top">${escapeHtml(fact.label)}</th>
-              <td class="py-3 px-4 sm:px-5 text-ink align-top">${escapeHtml(fact.value)}</td>
-              ${
+                return `<tr>
+              <td class="font-tabular text-xs font-semibold text-ink w-1/3">${escapeHtml(fact.label)}</td>
+              <td class="text-ink-secondary font-medium">${escapeHtml(fact.value)}</td>
+              <td class="font-tabular text-xs whitespace-nowrap">${
                 srcHref
-                  ? `<td class="py-3 px-4 sm:px-5 font-tabular text-xs text-right whitespace-nowrap align-top"><a href="${escapeHtml(srcHref)}" target="_blank" rel="noopener noreferrer" class="text-accent hover:underline underline-offset-2">${escapeHtml(extractDomain(srcHref))} &nearr;</a></td>`
-                  : `<td class="py-3 px-4 sm:px-5"></td>`
-              }
+                  ? `<a href="${escapeHtml(srcHref)}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 font-semibold text-accent hover:underline underline-offset-2"><span>${escapeHtml(extractDomain(srcHref))}</span>${renderUiSketchIcon('external', 11)}</a>`
+                  : `<span class="text-ink-faint">Measured</span>`
+              }</td>
             </tr>`;
               })
               .join('')}
@@ -1018,8 +1201,11 @@ export function renderBlogPostPage(opts: {
 
   const tocHtml = hasToc
     ? `<aside aria-label="Table of contents" class="hidden lg:block lg:col-span-4 xl:col-span-3">
-      <div class="sticky top-28 space-y-4">
-        <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-ink-faint font-semibold">In This Story</p>
+      <div class="sticky top-24 rounded-xl border border-hairline bg-surface p-4 space-y-4 shadow-[var(--shadow-subtle)]">
+        <p class="inline-flex items-center gap-1.5 font-tabular text-[11px] uppercase tracking-[0.13em] text-ink font-bold">
+          ${renderUiSketchIcon('layers', 14)}
+          <span>In This Dispatch</span>
+        </p>
         <nav class="space-y-0.5">
           ${headings
             .map((h) => {
@@ -1028,14 +1214,14 @@ export function renderBlogPostPage(opts: {
             })
             .join('\n          ')}
         </nav>
-        <div class="pt-4 border-t border-hairline space-y-2.5 text-xs">
+        <div class="pt-3.5 border-t border-hairline space-y-2.5 text-xs">
           <a href="#sources" class="flex items-center justify-between font-tabular text-ink-muted hover:text-accent transition-colors">
-            <span>Cited Sources (${post.sources_json.length})</span>
+            <span class="inline-flex items-center gap-1.5">${renderUiSketchIcon('source', 13)}<span>Primary Sources (${post.sources_json.length})</span></span>
             <span aria-hidden="true">&darr;</span>
           </a>
           <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="flex items-center justify-between font-medium text-ink-secondary hover:text-accent transition-colors">
-            <span>Connect with ${escapeHtml(authorName)}</span>
-            <span aria-hidden="true">&nearr;</span>
+            <span class="inline-flex items-center gap-1.5">${renderUiSketchIcon('linkedin', 13)}<span>${escapeHtml(authorName)}</span></span>
+            ${renderUiSketchIcon('external', 12)}
           </a>
         </div>
       </div>
@@ -1058,7 +1244,10 @@ export function renderBlogPostPage(opts: {
   const faqHtml =
     post.faq_json.length > 0
       ? `<section id="faq" aria-labelledby="faq-heading" class="mt-14 pt-8 double-rule-top">
-      <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Common Questions</p>
+      <p class="inline-flex items-center gap-1.5 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">
+        ${renderUiSketchIcon('qa', 14)}
+        <span>Reader Q&amp;A</span>
+      </p>
       <h2 id="faq-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1 mb-5">Frequently Asked Questions</h2>
       <div>
         ${post.faq_json
@@ -1073,57 +1262,79 @@ export function renderBlogPostPage(opts: {
     </section>`
       : '';
 
+  // Crafted Numbered Bibliography Cards (Replaces raw wrapping URL dump)
   const sourcesHtml =
     post.sources_json.length > 0
       ? `<section id="sources" aria-labelledby="sources-heading" class="mt-14 pt-8 double-rule-top scroll-mt-24">
-      <div class="flex flex-wrap items-baseline justify-between gap-3 mb-4">
+      <div class="flex flex-wrap items-end justify-between gap-3 mb-5">
         <div>
-          <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">References</p>
-          <h2 id="sources-heading" class="font-masthead text-2xl font-bold text-ink mt-1">Primary Sources &amp; Links</h2>
+          <p class="inline-flex items-center gap-1.5 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">
+            ${renderUiSketchIcon('source', 14)}
+            <span>Bibliography &amp; Verification</span>
+          </p>
+          <h2 id="sources-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1">Primary Sources &amp; References</h2>
         </div>
-        <span class="font-tabular text-xs text-ink-faint">${post.sources_json.length} references</span>
+        <span class="font-tabular text-xs font-semibold px-2.5 py-1 rounded-md bg-subtle border border-hairline text-ink-secondary">${post.sources_json.length} cited sources</span>
       </div>
-      <ol class="space-y-2.5 text-sm">
+      <ol class="grid grid-cols-1 gap-2.5 list-none p-0 m-0">
         ${post.sources_json
           .map((src, idx) => {
             const href = safeHref(src, '#');
-            return `<li class="flex items-start gap-3 py-2 border-b border-hairline last:border-b-0">
-          <span class="font-tabular text-xs text-ink-faint w-6 shrink-0 pt-0.5">[${idx + 1}]</span>
-          <div class="min-w-0 flex-1">
-            <span class="font-tabular text-[11px] uppercase tracking-wider text-ink-muted block">${escapeHtml(extractDomain(src))}</span>
-            <a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" class="text-accent hover:underline underline-offset-2 break-all">${escapeHtml(src)}</a>
-          </div>
+            const stamp = String(idx + 1).padStart(2, '0');
+            const { host, pathPreview } = formatSourcePathLabel(src);
+            return `<li>
+          <a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(src)}" class="ref-card group">
+            <span class="ref-stamp">[${stamp}]</span>
+            <span class="min-w-0 flex-1">
+              <span class="flex items-center gap-2 font-tabular text-[11px] font-bold uppercase tracking-[0.06em] text-ink">
+                <span>${escapeHtml(host)}</span>
+              </span>
+              <span class="block text-xs sm:text-[13px] text-ink-muted group-hover:text-accent transition-colors truncate mt-0.5 font-tabular">${escapeHtml(pathPreview)}</span>
+            </span>
+            <span class="inline-flex items-center gap-1 font-tabular text-[11px] font-semibold text-ink-muted group-hover:text-accent shrink-0 self-center">
+              <span class="hidden sm:inline">Source</span>
+              ${renderUiSketchIcon('external', 13)}
+            </span>
+          </a>
         </li>`;
           })
-          .join('')}
+          .join('\n        ')}
       </ol>
     </section>`
       : '';
 
-  // Bottom Creator & Co-Work Card with Hamdi Soudani's LinkedIn
-  const authorCardHtml = `<section aria-label="About the authors" class="mt-12 rounded-2xl border border-strong/40 bg-surface p-6 sm:p-7 shadow-[var(--shadow-subtle)]">
+  // Bottom Creator & Co-Work Card featuring Py + Vren Emblem & Hamdi Soudani's LinkedIn
+  const authorCardHtml = `<section aria-label="About the authors" class="field-note mt-12 p-6 sm:p-7">
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-5">
-      <div class="space-y-2">
-        <p class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.12em] text-accent font-semibold">
-          <span class="h-2 w-2 rounded-full bg-[var(--accent)]" aria-hidden="true"></span>
-          <span>Co-crafted Story</span>
-        </p>
-        <h2 class="font-masthead text-xl sm:text-2xl font-bold text-ink">
-          ${escapeHtml(authorName)} <span class="text-ink-muted font-normal text-base sm:text-lg">&middot; in collaboration with Pyvren</span>
-        </h2>
-        <p class="text-sm text-ink-secondary leading-relaxed max-w-2xl">
-          ${escapeHtml(settings.author_bio || 'Systems engineer & technical writer exploring AI infrastructure, security, and edge craft in daily collaboration with Pyvren.')}
-        </p>
+      <div class="flex items-start gap-4">
+        <div class="hidden sm:block shrink-0 mt-0.5">
+          ${renderMastheadNibSvg(48)}
+        </div>
+        <div class="space-y-2">
+          <p class="inline-flex items-center gap-1.5 font-tabular text-[11px] uppercase tracking-[0.12em] text-accent font-bold">
+            ${renderUiSketchIcon('pen', 14)}
+            <span>Human &times; Agent Co-Work</span>
+          </p>
+          <h2 class="font-masthead text-xl sm:text-2xl font-bold text-ink">
+            ${escapeHtml(authorName)} <span class="text-ink-muted font-normal text-base sm:text-lg">&middot; in collaboration with Pyvren</span>
+          </h2>
+          <p class="text-sm text-ink-secondary leading-relaxed max-w-2xl">
+            ${escapeHtml(
+              settings.author_bio ||
+                'Systems engineer & technical writer exploring AI infrastructure, security, and edge craft in daily collaboration with Pyvren.',
+            )}
+          </p>
+        </div>
       </div>
       <div class="shrink-0">
-        <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="btn-accent rounded-full px-5 py-2.5 text-xs sm:text-sm">
-          ${renderLinkedInIcon()}
+        <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="btn-accent rounded-lg px-5 py-2.5 text-xs sm:text-sm">
+          ${renderUiSketchIcon('linkedin', 15)}
           <span>Connect on LinkedIn</span>
         </a>
       </div>
     </div>
     <div class="mt-4 pt-4 border-t border-hairline flex flex-wrap items-center gap-4 text-xs text-ink-muted">
-      <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="font-medium text-ink hover:text-accent underline underline-offset-2">linkedin.com/in/hamdisoudani</a>
+      <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="font-semibold text-ink hover:text-accent underline underline-offset-2">linkedin.com/in/hamdisoudani</a>
       <span aria-hidden="true">&middot;</span>
       <a href="/about" class="hover:text-accent">About the Co-Work</a>
       <span aria-hidden="true">&middot;</span>
@@ -1137,11 +1348,11 @@ export function renderBlogPostPage(opts: {
       ? `<section aria-labelledby="related-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-16 pt-8 double-rule-top" data-carousel-root>
       <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
         <div>
-          <p class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">
-            <span class="h-2 w-2 rounded-full bg-[var(--accent)]" aria-hidden="true"></span>
+          <p class="inline-flex items-center gap-1.5 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">
+            ${renderUiSketchIcon('spark', 14)}
             <span>Keep Reading</span>
           </p>
-          <h2 id="related-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1">Related Stories</h2>
+          <h2 id="related-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1">Related Dispatches</h2>
         </div>
         <a href="/category/${encodeURIComponent(post.category_slug)}" class="font-tabular text-xs font-semibold text-ink-muted hover:text-accent transition-colors">More in ${escapeHtml(categoryName)} &rarr;</a>
       </div>
@@ -1165,7 +1376,7 @@ export function renderBlogPostPage(opts: {
   const mobileQuickTocHtml = hasToc
     ? `<details class="mt-6 lg:hidden rounded-xl border border-hairline bg-surface p-4">
         <summary class="font-tabular text-xs uppercase tracking-[0.1em] font-semibold text-ink cursor-pointer flex items-center justify-between">
-          <span>Jump to section (${headings.length})</span>
+          <span class="inline-flex items-center gap-1.5">${renderUiSketchIcon('layers', 14)}<span>Jump to section (${headings.length})</span></span>
           <span class="text-accent">+</span>
         </summary>
         <nav class="mt-3 pt-3 border-t border-hairline space-y-2 text-sm">
@@ -1179,20 +1390,20 @@ export function renderBlogPostPage(opts: {
       </details>`
     : '';
 
-  const articleBody = `<article class="pt-6 sm:pt-10">
+  const articleBody = `<article class="pt-6 sm:pt-10" data-post-category="${escapeHtml(post.category_slug)}">
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
     <nav aria-label="Breadcrumb" class="mb-5 flex flex-wrap items-center gap-2 font-tabular text-xs text-ink-faint">
       <a href="/" class="hover:text-ink transition-colors">Home</a>
       <span aria-hidden="true">/</span>
-      <a href="/blog" class="hover:text-ink transition-colors">Stories</a>
+      <a href="/blog" class="hover:text-ink transition-colors">Dispatches</a>
       <span aria-hidden="true">/</span>
       <a href="/category/${encodeURIComponent(post.category_slug)}" class="hover:text-ink transition-colors">${escapeHtml(categoryName)}</a>
     </nav>
 
     <header class="max-w-4xl pb-7 border-b border-strong space-y-4 sm:space-y-5">
       <div class="flex flex-wrap items-center gap-2.5">
-        <a href="/category/${encodeURIComponent(post.category_slug)}" class="topic-tone inline-flex items-center gap-2 px-3 py-1 rounded-full border border-hairline bg-surface font-tabular text-[11px] font-bold uppercase tracking-[0.08em] topic-accent-text" style="--topic-light:${catMeta.color}; --topic-dark:${catMeta.darkColor};">
-          <span class="h-2 w-2 rounded-full topic-accent-dot" aria-hidden="true"></span>
+        <a href="/category/${encodeURIComponent(post.category_slug)}" class="topic-tone inline-flex items-center gap-2 px-3 py-1 rounded-lg border border-hairline bg-surface font-tabular text-[11px] font-bold uppercase tracking-[0.08em] topic-accent-text shadow-[2px_2px_0_0_var(--border-hairline)]" style="--topic-light:${catMeta.color}; --topic-dark:${catMeta.darkColor};">
+          ${renderTopicSketchIcon(post.category_slug, 16)}
           <span>${escapeHtml(categoryName)}</span>
         </a>
         <span class="badge-editorial">${escapeHtml(formatArchetype(post.archetype))}</span>
@@ -1207,17 +1418,31 @@ export function renderBlogPostPage(opts: {
       </p>
 
       <div class="pt-1 flex flex-wrap items-center justify-between gap-3 text-xs text-ink-muted">
-        <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-          <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="font-semibold text-ink hover:text-accent transition-colors">${escapeHtml(coWorkByline)}</a>
-          <span aria-hidden="true">&middot;</span>
-          <time datetime="${escapeHtml(publishedIso)}" class="font-tabular">${escapeHtml(formatDate(publishedIso))}</time>
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 font-semibold text-ink hover:text-accent transition-colors">
+            ${renderUiSketchIcon('pen', 13)}
+            <span>${escapeHtml(coWorkByline)}</span>
+          </a>
+          <span class="text-ink-faint" aria-hidden="true">&middot;</span>
+          <span class="inline-flex items-center gap-1.5 font-tabular">
+            ${renderUiSketchIcon('calendar', 13)}
+            <time datetime="${escapeHtml(publishedIso)}">${escapeHtml(formatDate(publishedIso))}</time>
+          </span>
           ${
             showUpdated
-              ? `<span aria-hidden="true">&middot;</span><span class="font-tabular">Updated <time datetime="${escapeHtml(updatedIso)}">${escapeHtml(formatDate(updatedIso))}</time></span>`
+              ? `<span class="text-ink-faint" aria-hidden="true">&middot;</span><span class="font-tabular">Updated <time datetime="${escapeHtml(updatedIso)}">${escapeHtml(formatDate(updatedIso))}</time></span>`
               : ''
           }
-          <span aria-hidden="true">&middot;</span>
-          <span class="font-tabular">${post.reading_time_minutes} min read</span>
+          <span class="text-ink-faint" aria-hidden="true">&middot;</span>
+          <span class="inline-flex items-center gap-1.5 font-tabular">
+            ${renderUiSketchIcon('clock', 13)}
+            <span>${post.reading_time_minutes} min read</span>
+          </span>
+          <span class="text-ink-faint" aria-hidden="true">&middot;</span>
+          <a href="#sources" class="inline-flex items-center gap-1.5 font-tabular hover:text-accent transition-colors">
+            ${renderUiSketchIcon('source', 13)}
+            <span>${post.sources_json.length} sources</span>
+          </a>
         </div>
       </div>
     </header>
@@ -1232,11 +1457,11 @@ export function renderBlogPostPage(opts: {
     </div>
 
     <div class="mt-9 grid grid-cols-1 ${hasToc ? 'lg:grid-cols-12 gap-10 xl:gap-12' : ''} items-start">
-      <div class="${hasToc ? 'lg:col-span-8 xl:col-span-9' : 'max-w-3xl'} min-w-0">
-        <div class="prose-editorial max-w-[70ch]">
-          ${post.body_html}
+      <div class="${hasToc ? 'lg:col-span-8 xl:col-span-9' : 'max-w-4xl'} min-w-0">
+        <div class="prose-editorial max-w-[74ch]">
+          ${renderedProseHtml}
         </div>
-        <div class="max-w-[70ch]">
+        <div class="max-w-[74ch]">
           ${referenceGalleryHtml}
           ${tagsHtml}
           ${faqHtml}
@@ -1305,7 +1530,7 @@ export function renderBlogPostPage(opts: {
       '@type': 'BreadcrumbList',
       itemListElement: [
         { '@type': 'ListItem', position: 1, name: 'Home', item: `${baseUrl}/` },
-        { '@type': 'ListItem', position: 2, name: 'Stories', item: `${baseUrl}/blog` },
+        { '@type': 'ListItem', position: 2, name: 'Dispatches', item: `${baseUrl}/blog` },
         {
           '@type': 'ListItem',
           position: 3,
@@ -1384,12 +1609,12 @@ export function renderTrustPage(opts: {
         <p>${escapeHtml(siteName)} is an engineering publication for builders who care about real numbers, reproducible configurations, and primary sources. Instead of rehashing press releases, every piece digs into official advisories, benchmark repositories, changelogs, and technical papers.</p>
 
         <h2>Human &times; Agent Collaboration</h2>
-        <p><strong>Creator &amp; Editor:</strong> <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer">${escapeHtml(author)}</a> — in daily collaboration with <strong>Pyvren</strong>.</p>
+        <p><strong>Creator &amp; Editor:</strong> <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer">${escapeHtml(author)}</a> — in daily collaboration with <strong>Pyvren</strong> (symbolized in our sketchbook margin art by <em>Py</em> the Python snake and <em>Vren</em> the spectacled Wren).</p>
         <p>${escapeHtml(authorBio)}</p>
         <p>We believe the best technical writing happens when human engineering taste and skepticism guide deep research tools. Pyvren helps gather primary documentation, benchmark data, and visual figures; ${escapeHtml(author)} shapes the editorial bar, standards, and accountability.</p>
 
         <h2>Connect with ${escapeHtml(author)}</h2>
-        <p>Want to collaborate, discuss AI systems &amp; edge architecture, or share feedback on a story? Connect directly on LinkedIn at <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer">linkedin.com/in/hamdisoudani</a> or write to <a href="${escapeHtml(mailtoHref)}">${escapeHtml(contactEmail)}</a>.</p>
+        <p>Want to collaborate, discuss AI systems &amp; edge architecture, or share feedback on a dispatch? Connect directly on LinkedIn at <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer">linkedin.com/in/hamdisoudani</a> or write to <a href="${escapeHtml(mailtoHref)}">${escapeHtml(contactEmail)}</a>.</p>
       `,
     },
 
@@ -1397,7 +1622,7 @@ export function renderTrustPage(opts: {
       eyebrow: 'Editorial Craft',
       title: 'Editorial & Verification Standards',
       lead:
-        'How we research, fact-check, and co-craft every technical story before publication.',
+        'How we research, fact-check, and co-craft every technical dispatch before publication.',
       bodyHtml: `
         <h2>1. Primary Sources First</h2>
         <p>Every story published on ${escapeHtml(siteName)} links directly to its primary sources: vendor security advisories, CVE records, upstream commits, academic papers, and reproducible benchmark repositories.</p>
@@ -1419,8 +1644,7 @@ export function renderTrustPage(opts: {
     privacy: {
       eyebrow: 'Reader Privacy',
       title: 'Privacy & Cookie Policy',
-      lead:
-        `How ${siteName} respects your privacy, remembers your reading theme, and handles advertising disclosures.`,
+      lead: `How ${siteName} respects your privacy, remembers your reading theme, and handles advertising disclosures.`,
       bodyHtml: `
         <h2>1. Minimal Data Collection</h2>
         <p>You can read all stories on ${escapeHtml(siteName)} without creating an account. Standard server logs (such as anonymized IP rate-limiting for search protection and HTTP status codes) are processed transiently on the edge to keep the site fast and reliable.</p>
@@ -1455,7 +1679,7 @@ export function renderTrustPage(opts: {
         </ul>
 
         <h2>Story Tips &amp; Corrections</h2>
-        <p>Spotted an updated benchmark, a newly patched CVE, or an inaccuracy in a published piece? Send over the article link and primary source — we appreciate sharp-eyed readers and update stories quickly.</p>
+        <p>Spotted an updated benchmark, a newly patched CVE, or an inaccuracy in a published piece? Send over the article link and primary source — we appreciate sharp-eyed readers and update dispatches quickly.</p>
       `,
     },
   };
@@ -1467,24 +1691,27 @@ export function renderTrustPage(opts: {
   const trustBody = `<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-16">
   <header class="pb-8 border-b border-strong space-y-4">
     <p class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">
-      <span class="h-2 w-2 rounded-full bg-[var(--accent)]" aria-hidden="true"></span>
+      ${renderUiSketchIcon('pen', 15)}
       <span>${escapeHtml(page.eyebrow)}</span>
     </p>
     <h1 class="font-masthead text-3xl sm:text-5xl font-bold text-ink leading-[1.08]">${escapeHtml(page.title)}</h1>
     <p class="text-base sm:text-lg text-ink-secondary leading-relaxed">${escapeHtml(page.lead)}</p>
   </header>
 
-  <div class="mt-10 prose-editorial max-w-[70ch]">
+  <div class="mt-10 prose-editorial max-w-[72ch]">
     ${page.bodyHtml}
   </div>
 
-  <div class="mt-12 rounded-2xl border border-hairline bg-surface p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-    <div>
-      <p class="font-masthead text-lg font-bold text-ink">${escapeHtml(author)} &middot; Co-crafted with Pyvren</p>
-      <p class="text-xs sm:text-sm text-ink-muted">Follow new stories or connect directly on LinkedIn.</p>
+  <div class="field-note mt-12 p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div class="flex items-center gap-3.5">
+      ${renderMastheadNibSvg(42)}
+      <div>
+        <p class="font-masthead text-lg font-bold text-ink">${escapeHtml(author)} &middot; Co-crafted with Pyvren</p>
+        <p class="text-xs sm:text-sm text-ink-muted">Follow new dispatches or connect directly on LinkedIn.</p>
+      </div>
     </div>
-    <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="btn-accent rounded-full px-5 text-xs sm:text-sm shrink-0">
-      ${renderLinkedInIcon()}
+    <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="btn-accent rounded-lg px-5 text-xs sm:text-sm shrink-0">
+      ${renderUiSketchIcon('linkedin', 15)}
       <span>Connect on LinkedIn</span>
     </a>
   </div>
@@ -1523,20 +1750,20 @@ export function renderNotFoundPage(opts: {
   const siteName = opts.settings.site_name || 'The Pyvren Dispatch';
   const baseUrl = normalizeBaseUrl(opts.settings.base_url);
   const notFoundBody = `<div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-20 sm:py-24 text-center space-y-6">
-  <div class="mx-auto w-44 h-28">
+  <div class="mx-auto w-48 h-32">
     ${renderTopicCrewSvg('agentic-browser-web-data', '404')}
   </div>
   <p class="inline-flex items-center gap-2 font-tabular text-xs uppercase tracking-[0.16em] text-accent font-semibold">
-    <span class="h-2 w-2 rounded-full bg-[var(--accent)]" aria-hidden="true"></span>
+    ${renderUiSketchIcon('spark', 14)}
     <span>404 &middot; Off the Map</span>
   </p>
-  <h1 class="font-masthead text-3xl sm:text-5xl font-bold text-ink">We couldn’t find that page</h1>
+  <h1 class="font-masthead text-3xl sm:text-5xl font-bold text-ink">We couldn’t find that dispatch</h1>
   <p class="text-base text-ink-muted max-w-lg mx-auto leading-relaxed">
-    Boo looked everywhere on ${escapeHtml(siteName)}, but this story may have moved or the link has a typo.
+    Py &amp; Vren searched every shelf of ${escapeHtml(siteName)}, but this story may have moved or the link has a typo.
   </p>
   <div class="pt-2 flex flex-wrap items-center justify-center gap-3">
-    <a href="/" class="btn-accent rounded-full px-5">Back to Home</a>
-    <a href="/blog" class="btn-ghost rounded-full px-5">Browse All Stories</a>
+    <a href="/" class="btn-accent rounded-lg px-5">Back to Home</a>
+    <a href="/blog" class="btn-ghost rounded-lg px-5">Browse All Dispatches</a>
   </div>
 </div>`;
 

@@ -134,18 +134,23 @@ describe('Dual-Layer UX (Humans vs Agents), Theme Persistence, Rate-Limited Sear
     expect(homeHtml).toContain('Hamdi Soudani');
     expect(homeHtml).toContain('Co-crafted with Pyvren');
     expect(homeHtml).toContain('https://www.linkedin.com/in/hamdisoudani/');
+    expect(homeHtml).toContain('pyvren-mascot-svg');
     expect(homeHtml).toContain('crew-hero-svg');
     expect(homeHtml).toContain('crew-topic-svg');
-    expect(homeHtml).toContain('topic-rail');
+    expect(homeHtml).toContain('sketch-icon');
+    expect(homeHtml).toContain('beat-strip');
+    expect(homeHtml).toContain('topics-popover');
     expect(homeHtml).toContain('mobile-carousel');
     expect(homeHtml).toContain('data-agent-directory');
 
-    // Strictly zero visible QS score clutter or View Markdown button on human pages
+    // Strictly zero visible QS score clutter, View Markdown button, or AI-slop colored circle dots
     expect(homeHtml).not.toContain('QS ');
     expect(homeHtml).not.toContain('score-ring');
     expect(homeHtml).not.toContain('View Markdown (.md)');
+    expect(homeHtml).not.toContain('topic-accent-dot');
+    expect(homeHtml).not.toContain('cat-dot');
 
-    // Inspect Single Post Page (cover image, inline figure, extra reference gallery, LinkedIn card)
+    // Inspect Single Post Page (cover image, syntax-colored code block, wrapped table, ref cards, LinkedIn card)
     const postRes = await app.request(`https://pyvren.com/blog/${created.slug}`, {}, env);
     expect(postRes.status).toBe(200);
     const postHtml = await postRes.text();
@@ -156,12 +161,32 @@ describe('Dual-Layer UX (Humans vs Agents), Theme Persistence, Rate-Limited Sear
     expect(postHtml).toContain('https://docs.cloudflare.com/assets/workers-workflow-diagram.png');
     expect(postHtml).toContain('https://modelcontextprotocol.io/images/mcp-topology-figure.png');
     expect(postHtml).toContain('editorial-figure');
+    expect(postHtml).toContain('code-frame');
+    expect(postHtml).toContain('code-frame-bar');
+    expect(postHtml).toContain('tok-kw');
+    expect(postHtml).toContain('editorial-table-wrap');
+    expect(postHtml).toContain('field-note');
+    expect(postHtml).toContain('ref-card');
+    expect(postHtml).toContain('ref-stamp');
     expect(postHtml).not.toContain('QS ');
     expect(postHtml).not.toContain('View Markdown (.md)');
+    expect(postHtml).not.toContain('topic-accent-dot');
     // Invisible <head> alternate link for AI agents MUST remain intact
     expect(postHtml).toContain(
       `<link rel="alternate" type="text/markdown" title="Markdown briefing" href="https://pyvren.com/blog/${created.slug}.md">`,
     );
+
+    // Inspect Standalone Cartoon Py + Vren Fallback SVG (/og/fallback.svg)
+    const fbRes = await app.request(
+      'https://pyvren.com/og/fallback.svg?category=ai-coding-agents-mcp&label=CLI+vs+MCP',
+      {},
+      env,
+    );
+    expect(fbRes.status).toBe(200);
+    expect(fbRes.headers.get('content-type')).toContain('image/svg+xml');
+    const fbSvg = await fbRes.text();
+    expect(fbSvg).toContain('PY + VREN ILLUSTRATED EDITION');
+    expect(fbSvg).toContain('CLI vs MCP');
 
     // Inspect AI Agent Map (/api/v1/map) — includes quality_score & markdown_url for agents
     const mapRes = await app.request('https://pyvren.com/api/v1/map', {}, env);

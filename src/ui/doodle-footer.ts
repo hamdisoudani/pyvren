@@ -89,15 +89,23 @@ function renderFloaterGlyph(kind: FloaterSpec['kind'], accent?: boolean): string
 }
 
 function renderMiniYetiLogo(): string {
-  return `<svg class="dcf-mini-yeti" width="40" height="40" viewBox="0 0 44 44" fill="none" aria-hidden="true">
-  <rect x="2" y="2" width="40" height="40" rx="10" fill="var(--dcf-surface)" stroke="var(--dcf-ink)" stroke-width="2"/>
-  <path d="M13 13 C11 8 14 6 17 10 M31 13 C33 8 30 6 27 10" stroke="var(--dcf-ink)" stroke-width="2.1" stroke-linecap="round"/>
-  <path d="M11 33 C9 25 10 15 15 12 C19 10 25 10 29 12 C34 15 35 25 33 33 C29 35 15 35 11 33 Z" fill="var(--dcf-bg)" stroke="var(--dcf-ink)" stroke-width="2" stroke-linejoin="round"/>
-  <ellipse cx="22" cy="21" rx="8.5" ry="6.2" fill="var(--dcf-surface)" stroke="var(--dcf-ink)" stroke-width="1.6"/>
-  <circle cx="18.5" cy="20.2" r="1.6" fill="var(--dcf-ink)"/>
-  <circle cx="25.5" cy="20.2" r="1.6" fill="var(--dcf-ink)"/>
-  <path d="M19.5 23.6 Q22 25.4 24.5 23.6" stroke="var(--dcf-ink)" stroke-width="1.5" stroke-linecap="round"/>
-  <path d="M13 28.5 Q22 31.5 31 28.5" stroke="var(--dcf-accent)" stroke-width="2.4" stroke-linecap="round"/>
+  return `<svg class="dcf-mini-yeti" width="42" height="42" viewBox="0 0 44 44" fill="none" aria-hidden="true">
+  <rect x="2" y="2" width="40" height="40" rx="11" fill="var(--dcf-surface)" stroke="var(--dcf-ink)" stroke-width="2.1"/>
+  <g transform="translate(23, 10)" stroke="var(--dcf-ink)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M-6 2 L-10 -3 L-7 -4 L-4 0" fill="var(--dcf-bg)"/>
+    <ellipse cx="0" cy="2" rx="6" ry="4.8" fill="var(--dcf-bg)"/>
+    <circle cx="2.2" cy="1" r="1.2" fill="var(--dcf-ink)" stroke="none"/>
+    <path d="M5.8 1 L9.4 2.2 L5.8 3.4 Z" fill="var(--dcf-accent)" stroke-width="1.3"/>
+  </g>
+  <g stroke="var(--dcf-ink)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9.5 34 C9.5 28.5 16 27.5 23 28.5 C30.5 29.5 34.5 27 34.5 23 C34.5 18.2 28.5 15.5 21.5 15.5 C14.5 15.5 10.5 19 11.2 23.5 C11.8 27 16.5 28 22.5 27.2" fill="var(--dcf-surface)"/>
+    <circle cx="17.5" cy="20.5" r="3" fill="var(--dcf-bg)" stroke-width="1.8"/>
+    <circle cx="25.2" cy="20.5" r="3" fill="var(--dcf-bg)" stroke-width="1.8"/>
+    <circle cx="18.2" cy="20.5" r="1.4" fill="var(--dcf-ink)" stroke="none"/>
+    <circle cx="25.9" cy="20.5" r="1.4" fill="var(--dcf-ink)" stroke="none"/>
+    <path d="M17.8 25 C20 26.8 23.2 26.8 25.4 25" fill="none" stroke-width="1.7"/>
+    <path d="M28.5 24.2 L33.2 24.8 M33.2 24.8 L35.4 23.3 M33.2 24.8 L35.2 26.5" stroke="var(--dcf-accent)" stroke-width="1.8"/>
+  </g>
 </svg>`;
 }
 
@@ -688,7 +696,7 @@ export function renderDoodleCrewFooter(settings: SiteSettings): string {
 
     <div class="dcf-cta-band">
       <div class="dcf-cta-copy">
-        <span class="cat-dot" style="--cat-color:var(--dcf-accent)" aria-hidden="true"></span>
+        <svg width="15" height="15" viewBox="0 0 20 20" fill="none" aria-hidden="true" class="shrink-0"><path d="M10 2L12.1 7.6L18 9.8L12.1 12L10 17.8L7.9 12L2 9.8L7.9 7.6L10 2Z" fill="var(--dcf-accent)" stroke="var(--dcf-ink)" stroke-width="1.5" stroke-linejoin="round"/></svg>
         <span>Tap any crew member below for a desk note — or connect with ${escapeHtml(author)} on LinkedIn.</span>
       </div>
       <div class="dcf-cta-actions">

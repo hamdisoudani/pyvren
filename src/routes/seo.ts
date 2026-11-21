@@ -4,6 +4,7 @@ import { createDatabase } from '../lib/db';
 import { getCategoryMeta } from '../lib/relations';
 import { escapeXml } from '../lib/security';
 import type { CategorySkill, PostRecord, SiteSettings } from '../types';
+import { renderStandalonePyvrenFallbackSvg } from '../ui/crew-art';
 
 function formatIsoDate(value?: string | null): string {
   const parsed = value ? new Date(value) : new Date();
@@ -128,10 +129,14 @@ function wrapSvgLines(rawText: string, maxCharsPerLine: number, maxLines: number
 
 function renderFaviconSvg(): string {
   return [
-    '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none">',
-    '  <rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="#FAF5EA" stroke="#171512" stroke-width="1.8"/>',
-    '  <path d="M7.5 16.8V7.2H13.1C15.1 7.2 16.35 8.28 16.35 10C16.35 11.72 15.1 12.8 13.1 12.8H7.5" stroke="#171512" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>',
-    '  <circle cx="16.2" cy="16.2" r="2.1" fill="#D63333"/>',
+    '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 32 32" fill="none">',
+    '  <rect x="1.5" y="1.5" width="29" height="29" rx="8" fill="#FAF5EA" stroke="#171512" stroke-width="2"/>',
+    '  <path d="M7.5 24.5C7.5 20.5 12 19.8 17.5 20.5C22.5 21.2 25 19.2 25 16C25 12.2 20.5 10 15.2 10C10 10 7.2 12.8 7.8 16.2C8.2 19 11.8 19.8 16.5 19.2" fill="#FFFDF8" stroke="#171512" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>',
+    '  <circle cx="12.5" cy="14.2" r="2.2" fill="#FAF5EA" stroke="#171512" stroke-width="1.5"/>',
+    '  <circle cx="18.2" cy="14.2" r="2.2" fill="#FAF5EA" stroke="#171512" stroke-width="1.5"/>',
+    '  <circle cx="13" cy="14.2" r="1" fill="#171512"/>',
+    '  <circle cx="18.7" cy="14.2" r="1" fill="#171512"/>',
+    '  <path d="M21.5 17.2L25.5 17.6M25.5 17.6L27.5 16.2M25.5 17.6L27.4 19" stroke="#D63333" stroke-width="1.8" stroke-linecap="round"/>',
     '</svg>',
   ].join('\n');
 }
@@ -501,6 +506,19 @@ export function createSeoRoutes(): Hono<{ Bindings: WorkerEnv }> {
 
   app.get('/favicon.svg', () => {
     return new Response(renderFaviconSvg(), {
+      status: 200,
+      headers: {
+        'Content-Type': 'image/svg+xml; charset=utf-8',
+        'Cache-Control': 'public, max-age=86400, s-maxage=604800',
+      },
+    });
+  });
+
+  app.get('/og/fallback.svg', (c) => {
+    const category = (c.req.query('category') || '').trim();
+    const label = (c.req.query('label') || 'The Pyvren Dispatch').trim();
+    const svg = renderStandalonePyvrenFallbackSvg(category, label);
+    return new Response(svg, {
       status: 200,
       headers: {
         'Content-Type': 'image/svg+xml; charset=utf-8',

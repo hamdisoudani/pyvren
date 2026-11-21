@@ -349,13 +349,14 @@ export function createPublicRoutes(): Hono<{ Bindings: WorkerEnv }> {
     const allPublished = allPublishedRaw.filter((candidate) => candidate.status === 'published');
     const relatedPosts = computePostRelationships(post, allPublished, 4).map((rel) => rel.post);
 
-    const { headings } = compileMarkdown(post.body_markdown);
+    const { html: compiledHtml, headings } = compileMarkdown(post.body_markdown);
     const html = renderBlogPostPage({
       settings,
       post,
       skill,
       relatedPosts,
       headings,
+      compiledHtml,
       initialTheme,
     });
 
