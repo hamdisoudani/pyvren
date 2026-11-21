@@ -79,6 +79,13 @@ export interface FaqItem {
   answer: string;
 }
 
+export interface PostImage {
+  url: string;
+  alt: string;
+  caption?: string;
+  source_page_url?: string;
+}
+
 export interface HumanitySignals {
   sentence_count: number;
   avg_sentence_words: number;
@@ -103,6 +110,12 @@ export interface QualityBreakdown {
   humanity_signals?: HumanitySignals;
 }
 
+export type PostCreateRecord = Omit<
+  PostRecord,
+  'id' | 'created_at' | 'updated_at' | 'cover_image_url' | 'cover_image_alt' | 'images_json'
+> &
+  Partial<Pick<PostRecord, 'cover_image_url' | 'cover_image_alt' | 'images_json'>>;
+
 export interface PostRecord {
   id: number;
   slug: string;
@@ -113,6 +126,9 @@ export interface PostRecord {
   faq_json: FaqItem[];
   body_markdown: string;
   body_html: string;
+  cover_image_url: string | null;
+  cover_image_alt: string | null;
+  images_json: PostImage[];
   author: string;
   category_slug: string;
   archetype: Archetype;
@@ -180,6 +196,9 @@ export interface PostInput {
   key_facts?: KeyFact[];
   faq?: FaqItem[];
   body_markdown: string;
+  cover_image_url?: string | null;
+  cover_image_alt?: string | null;
+  images?: PostImage[];
   author?: string;
   category_slug?: string;
   archetype: Archetype;
@@ -248,7 +267,7 @@ export interface DatabaseAdapter {
   getPostById(id: number): Promise<PostRecord | null>;
   getPostBySlug(slug: string, onlyPublished?: boolean): Promise<PostRecord | null>;
   slugExists(slug: string, excludeId?: number): Promise<boolean>;
-  createPost(record: Omit<PostRecord, 'id' | 'created_at' | 'updated_at'>): Promise<PostRecord>;
+  createPost(record: PostCreateRecord): Promise<PostRecord>;
   updatePost(id: number, patch: Partial<PostRecord>, ctx?: PostMutationContext): Promise<PostRecord | null>;
   deletePost(id: number): Promise<boolean>;
 

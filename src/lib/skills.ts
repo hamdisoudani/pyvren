@@ -248,9 +248,10 @@ GEO / AEO ANSWER-FIRST & CITATION REQUIREMENTS:
 - Cite at least 3 DISTINCT deep primary https:// URLs inline inside body_markdown using descriptive Markdown links: [Anchor Text](https://domain.com/deep/path).
 - NEVER link bare root domains (such as https://github.com/ or https://cloudflare.com) — every citation URL MUST have a specific deep path (pathname length > 1) and come from the provided primary sources.
 - Also populate the top-level "sources" array with at least 2 (ideally 3-5) verified deep https:// URLs used in the article.
+- REFERENCE IMAGES & DIAGRAMS: When VERIFIED CRAWLED REFERENCE IMAGES are provided in the prompt, select the single most informative diagram/screenshot/card as "cover_image_url" + "cover_image_alt", include 1-4 relevant entries in "images", and embed 1-2 relevant figures on their own paragraph line inside "body_markdown" as ![Descriptive engineering caption](https://exact-verified-image-url). NEVER invent, guess, or alter image URLs; if no crawled images are provided, set "cover_image_url" to "" and "images" to [].
 
 HUMAN STAFF-ENGINEER VOICE & ANTI-AI-DETECTION RULES (MANDATORY):
-- Write like a battle-tested staff engineer publishing peer-reviewed production field notes, never like an AI assistant or marketing brochure.
+- Write like a battle-tested staff engineer publishing peer-reviewed production field notes in collaboration with ${settings.default_author}, never like an AI assistant or marketing brochure.
 - Vary sentence cadence intentionally for high burstiness: alternate punchy 6-10 word direct verdicts ("This default breaks under burst traffic.", "Skip the proxy layer.") with substantive 20-30 word technical explanations detailing mechanisms, limits, and failure modes.
 - FORBIDDEN robotic transition openers: NEVER start sentences or paragraphs with "Furthermore,", "Moreover,", "Additionally,", "Consequently,", "Importantly,", "Notably,", "Ultimately,", or "Overall,". Connect ideas through technical causality instead.
 - Em-dash discipline: keep em-dashes ("—" or "--") strictly to at most 1 per 100 words. Prefer commas, periods, or parentheses.
@@ -274,13 +275,18 @@ Return ONLY a single valid JSON object (no surrounding markdown prose) matching 
   "slug": "kebab-case-url-slug",
   "description": "string (100-170 chars)",
   "tldr_summary": "string (80-240 chars direct answer)",
+  "cover_image_url": "https://exact-verified-crawled-image-url-or-empty",
+  "cover_image_alt": "Concise descriptive alt text for cover image",
+  "images": [
+    { "url": "https://exact-verified-crawled-image-url", "alt": "string", "caption": "string", "source_page_url": "https://..." }
+  ],
   "key_facts": [
     { "label": "string", "value": "string", "source_url": "https://..." }
   ],
   "faq": [
     { "question": "string", "answer": "string" }
   ],
-  "body_markdown": "string (Markdown starting with an answer-first lead paragraph, then ## sections including concrete tradeoffs, table/code block, and >= 3 deep https:// inline citations; NO # H1)",
+  "body_markdown": "string (Markdown starting with an answer-first lead paragraph, then ## sections including concrete tradeoffs, table/code block, optional verified ![Caption](https://...) figure, and >= 3 deep https:// inline citations; NO # H1)",
   "tags": ["tag-1", "tag-2", "tag-3"],
   "keywords": ["lowercase search phrase 1", "lowercase search phrase 2", "lowercase search phrase 3", "lowercase search phrase 4", "lowercase search phrase 5"],
   "sources": ["https://...", "https://...", "https://..."],

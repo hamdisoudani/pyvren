@@ -7,14 +7,21 @@ import {
   type TopicCluster,
 } from '../lib/relations';
 import { escapeHtml } from '../lib/security';
-import type { Archetype, CategorySkill, PostRecord, SiteSettings } from '../types';
+import type { Archetype, CategorySkill, PostImage, PostRecord, SiteSettings } from '../types';
+import {
+  renderHeroCrewSceneSvg,
+  renderStoryCoverMedia,
+  renderTopicCrewSvg,
+} from './crew-art';
 import { renderPublicLayout } from './layout';
 
+const HAMDI_LINKEDIN_URL = 'https://www.linkedin.com/in/hamdisoudani/';
+
 const ARCHETYPE_LABELS: Record<Archetype, string> = {
-  'advisory-teardown': 'Advisory Teardown',
-  'benchmark-index': 'Benchmark Index',
-  'migration-fix-log': 'Migration & Fix Log',
-  'architecture-analysis': 'Architecture Analysis',
+  'advisory-teardown': 'Security Advisory',
+  'benchmark-index': 'Benchmark Study',
+  'migration-fix-log': 'Field Fix Log',
+  'architecture-analysis': 'Deep Dive',
 };
 
 function formatArchetype(archetype: string): string {
@@ -22,7 +29,7 @@ function formatArchetype(archetype: string): string {
 }
 
 function formatDate(iso?: string | null): string {
-  if (!iso) return 'Unpublished';
+  if (!iso) return 'Draft';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString('en-US', {
@@ -39,7 +46,11 @@ function safeHref(url?: string | null, fallback = '#'): string {
   if (raw.startsWith('/') || raw.startsWith('#')) return raw;
   try {
     const parsed = new URL(raw);
-    if (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'mailto:') {
+    if (
+      parsed.protocol === 'http:' ||
+      parsed.protocol === 'https:' ||
+      parsed.protocol === 'mailto:'
+    ) {
       return raw;
     }
   } catch {
@@ -60,6 +71,11 @@ function truncateText(text: string, maxLen: number): string {
   const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
   if (cleaned.length <= maxLen) return cleaned;
   return `${cleaned.slice(0, Math.max(1, maxLen - 1)).trimEnd()}…`;
+}
+
+function formatCoWorkByline(rawAuthor?: string | null, fallbackAuthor = 'Hamdi Soudani', compact = false): string {
+  const clean = (rawAuthor || fallbackAuthor || 'Hamdi Soudani').trim();
+  return compact ? `${clean} · with Pyvren` : `${clean} · Co-crafted with Pyvren`;
 }
 
 function extractKeySignals(post: PostRecord, maxCount = 3): Array<{ label?: string; text: string }> {
@@ -85,43 +101,27 @@ function extractKeySignals(post: PostRecord, maxCount = 3): Array<{ label?: stri
   return signals.slice(0, maxCount);
 }
 
-function scoreToneColor(score: number): string {
-  if (score >= 85) return 'var(--success)';
-  if (score >= 70) return 'var(--warning)';
-  return 'var(--danger)';
-}
-
-function renderScoreBadge(score: number): string {
-  const clamped = Math.max(0, Math.min(100, Math.round(score || 0)));
-  const toneClass =
-    clamped >= 85 ? 'badge-success' : clamped >= 70 ? 'badge-warning' : 'badge-danger';
-  return `<span class="badge-editorial ${toneClass}" title="Editorial verification &amp; citation score">QS ${clamped}/100</span>`;
-}
-
-function renderScoreRing(score: number): string {
-  const clamped = Math.max(0, Math.min(100, Math.round(score || 0)));
-  const color = scoreToneColor(clamped);
-  return `<div class="score-ring" style="--score-pct:${clamped}%;--score-color:${color}" aria-label="Quality score ${clamped} out of 100" title="Editorial quality score: ${clamped}/100">
-  <span class="score-ring-value">${clamped}</span>
-</div>`;
-}
-
 function renderCategoryTag(slug: string, customLabel?: string, asLink = true): string {
   const meta = getCategoryMeta(slug);
   const label = customLabel || meta.shortLabel;
-  const inner = `<span class="cat-dot" style="--cat-color:${meta.color}" aria-hidden="true"></span><span>${escapeHtml(label)}</span>`;
+  const styleAttr = `style="--topic-light:${meta.color}; --topic-dark:${meta.darkColor};"`;
+  const inner = `<span class="h-2 w-2 rounded-full topic-accent-dot shrink-0" aria-hidden="true"></span><span>${escapeHtml(label)}</span>`;
   const classes =
-    'inline-flex items-center gap-1.5 font-tabular text-[11px] font-semibold uppercase tracking-[0.09em] text-ink-secondary hover:text-accent transition-colors';
+    'topic-tone inline-flex items-center gap-1.5 font-tabular text-[11px] font-semibold uppercase tracking-[0.08em] topic-accent-text hover:opacity-80 transition-opacity';
   if (asLink) {
-    return `<a href="/category/${encodeURIComponent(slug)}" class="${classes}">${inner}</a>`;
+    return `<a href="/category/${encodeURIComponent(slug)}" class="${classes}" ${styleAttr}>${inner}</a>`;
   }
-  return `<span class="${classes}">${inner}</span>`;
+  return `<span class="${classes}" ${styleAttr}>${inner}</span>`;
+}
+
+function renderLinkedInIcon(): string {
+  return `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" class="shrink-0"><path d="M19 3A2 2 0 0 1 21 5V19A2 2 0 0 1 19 21H5A2 2 0 0 1 3 19V5A2 2 0 0 1 5 3H19M18.5 18.5V13.2A3.26 3.26 0 0 0 15.24 9.94C14.39 9.94 13.4 10.46 12.92 11.24V10.13H10.13V18.5H12.92V13.57C12.92 12.8 13.54 12.17 14.31 12.17A1.4 1.4 0 0 1 15.71 13.57V18.5H18.5M6.88 8.56A1.68 1.68 0 0 0 8.56 6.88C8.56 5.95 7.81 5.19 6.88 5.19A1.69 1.69 0 0 0 5.19 6.88C5.19 7.81 5.95 8.56 6.88 8.56M8.27 18.5V10.13H5.5V18.5H8.27Z"/></svg>`;
 }
 
 function renderAdSlot(settings: SiteSettings, slotLabel = 'Advertisement'): string {
   const clientId = (settings.adsense_client_id || '').trim();
   if (!clientId) return '';
-  return `<aside class="ad-slot rounded-[10px]" aria-label="${escapeHtml(slotLabel)}">
+  return `<aside class="ad-slot rounded-[12px]" aria-label="${escapeHtml(slotLabel)}">
   <span class="ad-slot-label">${escapeHtml(slotLabel)}</span>
   <ins class="adsbygoogle block w-full text-center"
        style="display:block;min-height:90px"
@@ -133,30 +133,30 @@ function renderAdSlot(settings: SiteSettings, slotLabel = 'Advertisement'): stri
 }
 
 function renderCtaStrip(settings: SiteSettings): string {
-  const headline = settings.cta_headline || 'Follow verified engineering briefings';
+  const author = settings.default_author || 'Hamdi Soudani';
+  const headline =
+    settings.cta_headline || 'Honest engineering stories — co-crafted with primary benchmarks & real code';
   const body =
     settings.cta_body ||
-    'Subscribe via RSS or integrate our structured JSON and Markdown endpoints directly into your engineering workflow.';
-  const ctaUrl = safeHref(settings.cta_url || '/rss.xml', '/rss.xml');
-  const isExternal = ctaUrl.startsWith('http://') || ctaUrl.startsWith('https://');
+    'Every dispatch blends hands-on engineering judgment with verified primary sources, reproducible configs, and clear tradeoffs.';
 
   return `<section class="mt-16 border-t border-b border-hairline bg-subtle/60">
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-8">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-11 sm:py-14 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-7">
     <div class="max-w-2xl space-y-2.5">
-      <p class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">
-        <span class="cat-dot" style="--cat-color:var(--accent)" aria-hidden="true"></span>
-        <span>Dispatch &amp; Syndication</span>
+      <p class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.12em] text-accent font-semibold">
+        <span class="h-2 w-2 rounded-full bg-[var(--accent)]" aria-hidden="true"></span>
+        <span>${escapeHtml(author)} &times; Pyvren</span>
       </p>
       <h2 class="font-masthead text-2xl sm:text-3xl font-bold text-ink leading-tight">${escapeHtml(headline)}</h2>
-      <p class="text-sm sm:text-base text-ink-muted leading-relaxed">${escapeHtml(body)}</p>
+      <p class="text-sm sm:text-base text-ink-secondary leading-relaxed">${escapeHtml(body)}</p>
     </div>
     <div class="flex flex-wrap items-center gap-3 shrink-0">
-      <a href="${escapeHtml(ctaUrl)}"${isExternal ? ' target="_blank" rel="noopener noreferrer"' : ''} class="btn-accent rounded-full px-5">
-        <span>Explore Dispatch</span>
-        <span aria-hidden="true">&rarr;</span>
+      <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="btn-accent rounded-full px-5">
+        ${renderLinkedInIcon()}
+        <span>Connect with ${escapeHtml(author)}</span>
       </a>
-      <a href="/rss.xml" class="btn-ghost rounded-full font-tabular text-xs">RSS Feed</a>
-      <a href="/llms.txt" class="btn-ghost rounded-full font-tabular text-xs">llms.txt</a>
+      <a href="/blog" class="btn-ghost rounded-full px-4 text-xs sm:text-sm">Browse All Stories</a>
+      <a href="/rss.xml" class="btn-ghost rounded-full font-tabular text-xs">RSS</a>
     </div>
   </div>
 </section>`;
@@ -167,8 +167,7 @@ function renderTopicClusterChips(clusters: TopicCluster[], limit = 10): string {
   return clusters
     .slice(0, limit)
     .map(
-      (cluster) => `<a href="/blog?q=${encodeURIComponent(cluster.query)}" class="rel-chip">
-      <span class="cat-dot" style="--cat-color:${cluster.color}" aria-hidden="true"></span>
+      (cluster) => `<a href="/blog?q=${encodeURIComponent(cluster.query)}" class="rel-chip topic-tone" style="--topic-light:${cluster.color}; --topic-dark:${cluster.darkColor};">
       <span>${escapeHtml(cluster.label)}</span>
       <span class="font-tabular text-[10px] text-ink-faint">${cluster.count}</span>
     </a>`,
@@ -176,62 +175,97 @@ function renderTopicClusterChips(clusters: TopicCluster[], limit = 10): string {
     .join('\n');
 }
 
+function renderMobileCarouselControls(count: number, label: string): string {
+  if (count <= 1) return '';
+  const dots = Array.from({ length: count })
+    .map(
+      (_, idx) =>
+        `<button type="button" class="carousel-dot" data-carousel-dot aria-label="Go to ${escapeHtml(label)} ${idx + 1}" aria-selected="${idx === 0 ? 'true' : 'false'}"></button>`,
+    )
+    .join('');
+
+  return `<div class="mt-4 flex md:hidden items-center justify-between gap-3">
+    <div class="flex items-center gap-1.5" role="tablist" aria-label="${escapeHtml(label)} slides">
+      ${dots}
+    </div>
+    <div class="flex items-center gap-1.5">
+      <button type="button" data-carousel-prev class="inline-flex items-center justify-center w-8 h-8 rounded-full border border-hairline bg-surface text-ink-secondary active:scale-95" aria-label="Previous ${escapeHtml(label)}">&larr;</button>
+      <button type="button" data-carousel-next class="inline-flex items-center justify-center w-8 h-8 rounded-full border border-hairline bg-surface text-ink-secondary active:scale-95" aria-label="Next ${escapeHtml(label)}">&rarr;</button>
+    </div>
+  </div>`;
+}
+
 function renderVisualStoryCard(opts: {
   post: PostRecord;
-  skills?: CategorySkill[];
+  defaultAuthor?: string;
   topRelation?: PostRelationship | null;
   reasonBadge?: string;
   loading?: 'lazy' | 'eager';
+  slideWrapper?: boolean;
 }): string {
-  const { post, topRelation, reasonBadge, loading = 'lazy' } = opts;
+  const {
+    post,
+    defaultAuthor = 'Hamdi Soudani',
+    topRelation,
+    reasonBadge,
+    loading = 'lazy',
+    slideWrapper = false,
+  } = opts;
   const meta = getCategoryMeta(post.category_slug);
   const postHref = `/blog/${encodeURIComponent(post.slug)}`;
-  const ogSrc = `/og/${encodeURIComponent(post.slug)}.svg`;
-  const sourceCount = Array.isArray(post.sources_json) ? post.sources_json.length : 0;
+  const byline = formatCoWorkByline(post.author, defaultAuthor, true);
+
+  const coverHtml = renderStoryCoverMedia({
+    coverImageUrl: post.cover_image_url,
+    coverImageAlt: post.cover_image_alt || post.title,
+    categorySlug: post.category_slug,
+    archetype: formatArchetype(post.archetype),
+    title: post.title,
+    instanceKey: `card-${post.id}`,
+    aspectClass: 'aspect-[16/10]',
+    eager: loading === 'eager',
+  });
 
   const relationFooterHtml = reasonBadge
-    ? `<div class="pt-2">
-        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-subtle text-ink-secondary border border-hairline max-w-full truncate">
-          <span class="cat-dot" style="--cat-color:${meta.color}" aria-hidden="true"></span>
+    ? `<div class="pt-1.5">
+        <span class="topic-tone inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-subtle text-ink-secondary border border-hairline max-w-full truncate" style="--topic-light:${meta.color}; --topic-dark:${meta.darkColor};">
+          <span class="h-1.5 w-1.5 rounded-full topic-accent-dot shrink-0" aria-hidden="true"></span>
           <span class="truncate">${escapeHtml(reasonBadge)}</span>
         </span>
       </div>`
     : topRelation && topRelation.score > 0
-      ? `<div class="pt-2">
+      ? `<div class="pt-1.5">
           <a href="/blog/${encodeURIComponent(topRelation.post.slug)}" class="inline-flex items-center gap-1.5 text-[11px] font-medium text-ink-muted hover:text-accent transition-colors max-w-full truncate" title="${escapeHtml(topRelation.reasonLabel)}">
             <span class="text-accent shrink-0" aria-hidden="true">&nearr;</span>
-            <span class="truncate">Linked: ${escapeHtml(truncateText(topRelation.post.title, 38))}</span>
+            <span class="truncate">Related: ${escapeHtml(truncateText(topRelation.post.title, 40))}</span>
           </a>
         </div>`
-      : `<div class="pt-2 font-tabular text-[11px] text-ink-faint">
-          <span>${sourceCount} verified primary ${sourceCount === 1 ? 'source' : 'sources'}</span>
-        </div>`;
+      : '';
 
-  return `<article class="story-card group flex flex-col overflow-hidden">
-  <a href="${postHref}" class="block relative overflow-hidden bg-subtle border-b border-hairline">
-    <img src="${ogSrc}" alt="${escapeHtml(post.title)}" width="1200" height="630" loading="${loading}" class="w-full aspect-[1200/630] object-cover block transition-transform duration-300 group-hover:scale-[1.03]">
+  const cardHtml = `<article class="story-card group h-full flex flex-col overflow-hidden">
+  <a href="${postHref}" class="block focus:outline-none" aria-label="${escapeHtml(post.title)}">
+    ${coverHtml}
   </a>
 
   <div class="p-5 flex-1 flex flex-col justify-between gap-4">
     <div class="space-y-2.5">
       <div class="flex items-center justify-between gap-2">
         ${renderCategoryTag(post.category_slug)}
-        ${renderScoreBadge(post.quality_score)}
+        <span class="font-tabular text-[11px] text-ink-faint">${post.reading_time_minutes || 1} min read</span>
       </div>
 
-      <h3 class="font-editorial text-[1.22rem] font-semibold leading-[1.25] text-ink">
+      <h3 class="font-editorial text-[1.22rem] sm:text-[1.28rem] font-semibold leading-[1.25] text-ink">
         <a href="${postHref}" class="hover:text-accent transition-colors">${escapeHtml(post.title)}</a>
       </h3>
 
-      <p class="text-sm text-ink-muted leading-relaxed line-clamp-2">${escapeHtml(post.description)}</p>
+      <p class="text-sm text-ink-secondary leading-relaxed line-clamp-2">${escapeHtml(post.description)}</p>
       ${relationFooterHtml}
     </div>
 
     <div class="pt-3.5 border-t border-hairline flex items-center justify-between gap-3">
-      <div class="flex items-center gap-2 font-tabular text-[11px] text-ink-faint min-w-0 truncate">
-        <time datetime="${escapeHtml(post.published_at || post.created_at)}">${escapeHtml(formatDate(post.published_at || post.created_at))}</time>
-        <span aria-hidden="true">&middot;</span>
-        <span>${post.reading_time_minutes || 1} min read</span>
+      <div class="min-w-0">
+        <p class="text-xs font-medium text-ink truncate">${escapeHtml(byline)}</p>
+        <time datetime="${escapeHtml(post.published_at || post.created_at)}" class="block font-tabular text-[11px] text-ink-faint">${escapeHtml(formatDate(post.published_at || post.created_at))}</time>
       </div>
       <a href="${postHref}" class="inline-flex items-center justify-center w-8 h-8 rounded-full border border-hairline bg-paper text-ink-secondary group-hover:bg-[var(--accent)] group-hover:border-[var(--accent)] group-hover:text-white transition-colors shrink-0" aria-label="Read ${escapeHtml(post.title)}">
         <span aria-hidden="true">&rarr;</span>
@@ -239,10 +273,12 @@ function renderVisualStoryCard(opts: {
     </div>
   </div>
 </article>`;
+
+  return slideWrapper ? `<div class="mobile-carousel-slide">${cardHtml}</div>` : cardHtml;
 }
 
 /* ==========================================================================
-   1. Landing Page — Editorial Broadsheet + Smart AI Tech Publication
+   1. Landing Page — Sketchbook Editorial Magazine (Human + Pyvren Co-Work)
    ========================================================================== */
 
 export function renderLandingPage(opts: {
@@ -250,13 +286,15 @@ export function renderLandingPage(opts: {
   featuredPost: PostRecord | null;
   recentPosts: PostRecord[];
   skills: CategorySkill[];
+  initialTheme?: 'light' | 'dark';
 }): string {
-  const { settings, featuredPost, recentPosts, skills } = opts;
+  const { settings, featuredPost, recentPosts, skills, initialTheme } = opts;
   const enabledSkills = skills.filter((s) => s.enabled);
-  const siteName = settings.site_name || 'Pyvren';
+  const siteName = settings.site_name || 'The Pyvren Dispatch';
+  const defaultAuthor = settings.default_author || 'Hamdi Soudani';
   const tagline =
     settings.site_tagline ||
-    'Primary-source technical briefings, security teardowns, and benchmark dossiers built for engineers and citation-grade retrieval.';
+    'Field notes, benchmarks, and deep dives into AI systems, security, and cloud craft — co-crafted by Hamdi Soudani & Pyvren.';
 
   // Build deduplicated published pool
   const pool: PostRecord[] = [];
@@ -273,15 +311,8 @@ export function renderLandingPage(opts: {
   const otherPosts = leadPost ? pool.filter((p) => p.id !== leadPost.id) : [];
   const secondaryPost = otherPosts[0] || null;
 
-  // Pick spotlight post (highest quality_score, defaulting to leadPost)
-  const spotlightPost =
-    pool.length > 0
-      ? pool.reduce((best, curr) => ((curr.quality_score || 0) > (best.quality_score || 0) ? curr : best), pool[0])
-      : null;
-
-  // Grid posts for 3-column visual story cards
   const gridCandidates =
-    otherPosts.length >= 4
+    otherPosts.length >= 3
       ? otherPosts.slice(1, 10)
       : otherPosts.length > 0
         ? otherPosts.slice(0, 9)
@@ -290,497 +321,337 @@ export function renderLandingPage(opts: {
   const topicClusters = buildTopicClusters(pool, skills);
   const leadRelations = leadPost ? computePostRelationships(leadPost, pool, 3) : [];
 
-  // 1. Smart Command Search & Category Strip (PinVpn inspired)
-  const categoryPillsHtml = enabledSkills
-    .map((skill) => {
-      const meta = getCategoryMeta(skill.slug);
-      return `<a href="/category/${encodeURIComponent(skill.slug)}" class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-surface border border-hairline hover:border-strong hover:text-accent text-xs font-medium text-ink-secondary transition-all">
-        <span class="cat-dot" style="--cat-color:${meta.color}" aria-hidden="true"></span>
-        <span>${escapeHtml(meta.shortLabel)}</span>
-      </a>`;
-    })
-    .join('\n');
+  // 1. Sketchbook Studio Hero (Inspired by the Doodle Crew Footer)
+  const heroHtml = `<section class="border-b border-hairline bg-paper">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-7 pb-10 sm:pt-10 sm:pb-14">
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-center">
+      <!-- Left 7 cols: Editorial Headline, Instant Search & Quick Topic Chips -->
+      <div class="lg:col-span-7 space-y-5">
+        <div class="inline-flex flex-wrap items-center gap-2 px-3 py-1 rounded-full bg-surface border border-hairline text-xs text-ink-secondary">
+          <span class="h-2 w-2 rounded-full bg-[var(--accent)]" aria-hidden="true"></span>
+          <span class="font-medium">${escapeHtml(defaultAuthor)} &middot; Co-crafted with Pyvren</span>
+        </div>
 
-  const commandHeroHtml = `<section class="border-b border-hairline bg-paper">
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-10 sm:pt-10 sm:pb-12">
-    <div class="max-w-3xl mx-auto text-center space-y-4">
-      <p class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.14em] text-ink-muted font-semibold">
-        <span class="cat-dot" style="--cat-color:var(--accent)" aria-hidden="true"></span>
-        <span>Automated AI-Tech Intelligence Desk</span>
-      </p>
-      <h1 class="font-masthead text-3xl sm:text-5xl font-bold leading-[1.08] text-ink">
-        Latest Briefings &amp; <span class="text-accent">Technical Guides</span>
-      </h1>
-      <p class="text-sm sm:text-base text-ink-secondary leading-relaxed max-w-2xl mx-auto">
-        ${escapeHtml(tagline)}
-      </p>
+        <h1 class="font-masthead text-3xl sm:text-5xl lg:text-[3.35rem] font-bold leading-[1.06] tracking-tight text-ink">
+          Field notes &amp; benchmarks for <span class="text-accent">builders who read the source.</span>
+        </h1>
 
-      <!-- Elevated Command Search Bar Card -->
-      <div class="pt-2">
-        <form method="GET" action="/blog" role="search" class="max-w-2xl mx-auto p-1.5 sm:p-2 rounded-full bg-surface border border-hairline shadow-[var(--shadow-subtle)] focus-within:border-[var(--accent)] focus-within:shadow-[var(--shadow-lift)] transition-all flex items-center gap-2">
-          <span class="pl-3.5 text-ink-faint shrink-0" aria-hidden="true">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
-          </span>
-          <label for="home-search-input" class="sr-only">Search briefings, CVEs, benchmarks, or protocols</label>
-          <input id="home-search-input" type="search" name="q" placeholder="Search briefings, MCP benchmarks, CVEs, GPU math..." class="w-full bg-transparent border-0 text-sm text-ink placeholder:text-ink-faint focus:outline-none py-2">
-          <button type="submit" class="btn-accent rounded-full px-5 py-2 text-xs sm:text-sm shrink-0">Search</button>
-        </form>
+        <p class="text-base sm:text-lg text-ink-secondary leading-relaxed max-w-2xl">
+          ${escapeHtml(tagline)}
+        </p>
+
+        <!-- Rate-Limited Live Instant Search Bar -->
+        <div class="pt-1 max-w-xl">
+          <form method="GET" action="/blog" role="search" data-live-search class="relative">
+            <div class="p-1.5 rounded-full bg-surface border border-strong/80 shadow-[var(--shadow-subtle)] focus-within:border-[var(--accent)] focus-within:shadow-[var(--shadow-lift)] transition-all flex items-center gap-2">
+              <span class="pl-3 text-ink-muted shrink-0" aria-hidden="true">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+              </span>
+              <label for="hero-search-input" class="sr-only">Search stories, benchmarks, CVEs, or topics</label>
+              <input
+                id="hero-search-input"
+                type="search"
+                name="q"
+                autocomplete="off"
+                placeholder="Search MCP benchmarks, prompt injection, LLMs, GPUs..."
+                class="w-full min-w-0 bg-transparent border-0 text-sm text-ink placeholder:text-ink-faint focus:outline-none py-2"
+              >
+              <button type="submit" class="btn-accent rounded-full px-4 sm:px-5 py-2 text-xs sm:text-sm shrink-0">
+                Search
+              </button>
+            </div>
+            <div data-search-results class="search-dropdown hidden" role="listbox" aria-label="Search suggestions"></div>
+          </form>
+        </div>
+
+        ${
+          topicClusters.length > 0
+            ? `<div class="pt-1 flex items-center gap-2 overflow-x-auto ribbon-scroll">
+                <span class="font-tabular text-[11px] uppercase tracking-[0.08em] text-ink-faint shrink-0">Popular:</span>
+                ${renderTopicClusterChips(topicClusters, 5)}
+              </div>`
+            : ''
+        }
       </div>
 
-      <!-- Category Filter Pills with 6px Colored Micro-Squares -->
-      <div class="pt-2 flex flex-wrap items-center justify-center gap-2" role="navigation" aria-label="Research tracks">
-        <a href="/blog" class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[var(--ink-primary)] text-[var(--bg-paper)] text-xs font-semibold transition-colors hover:bg-[var(--accent)] hover:text-white">
-          All Briefings
-        </a>
-        ${categoryPillsHtml}
-      </div>
-
-      <!-- Live Publication Telemetry Strip -->
-      <div class="pt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 font-tabular text-[11px] uppercase tracking-[0.1em] text-ink-faint">
-        <span>${pool.length} Published ${pool.length === 1 ? 'Briefing' : 'Briefings'}</span>
-        <span aria-hidden="true">&middot;</span>
-        <span>${enabledSkills.length} Automated Tracks</span>
-        <span aria-hidden="true">&middot;</span>
-        <span>Primary-Source Verified</span>
+      <!-- Right 5 cols: Hand-Drawn Crew Desk Scene Inspired by the Footer -->
+      <div class="lg:col-span-5">
+        <div class="rounded-2xl border border-hairline bg-surface p-3 sm:p-4 shadow-[var(--shadow-subtle)]">
+          ${renderHeroCrewSceneSvg()}
+        </div>
       </div>
     </div>
   </div>
 </section>`;
 
-  // 2. Front-Page Broadsheet Lead Spread (Featured Times inspired)
+  // 2. Lead Story Spread
   let leadSpreadHtml = '';
   if (leadPost) {
     const leadMeta = getCategoryMeta(leadPost.category_slug);
     const leadSignals = extractKeySignals(leadPost, 3);
     const leadHref = `/blog/${encodeURIComponent(leadPost.slug)}`;
+    const leadByline = formatCoWorkByline(leadPost.author, defaultAuthor, false);
+
+    const leadCoverHtml = renderStoryCoverMedia({
+      coverImageUrl: leadPost.cover_image_url,
+      coverImageAlt: leadPost.cover_image_alt || leadPost.title,
+      categorySlug: leadPost.category_slug,
+      archetype: formatArchetype(leadPost.archetype),
+      title: leadPost.title,
+      instanceKey: `lead-${leadPost.id}`,
+      aspectClass: 'aspect-[16/10]',
+      eager: true,
+    });
 
     const secondaryCardHtml = secondaryPost
-      ? `<article class="editorial-card overflow-hidden flex flex-col">
-        <a href="/blog/${encodeURIComponent(secondaryPost.slug)}" class="block overflow-hidden border-b border-hairline bg-subtle group">
-          <img src="/og/${encodeURIComponent(secondaryPost.slug)}.svg" alt="${escapeHtml(secondaryPost.title)}" width="1200" height="630" loading="eager" class="w-full aspect-[1200/630] object-cover block transition-transform duration-300 group-hover:scale-[1.03]">
-        </a>
-        <div class="p-4 space-y-2">
-          <div class="flex items-center justify-between gap-2">
-            ${renderCategoryTag(secondaryPost.category_slug)}
-            ${renderScoreBadge(secondaryPost.quality_score)}
-          </div>
-          <h3 class="font-editorial text-lg font-semibold leading-snug text-ink">
-            <a href="/blog/${encodeURIComponent(secondaryPost.slug)}" class="hover:text-accent transition-colors">${escapeHtml(secondaryPost.title)}</a>
-          </h3>
-          <p class="text-xs text-ink-muted leading-relaxed line-clamp-2">${escapeHtml(secondaryPost.description)}</p>
-          <div class="pt-2 border-t border-hairline flex items-center justify-between font-tabular text-[11px] text-ink-faint">
-            <span>${escapeHtml(formatDate(secondaryPost.published_at || secondaryPost.created_at))}</span>
-            <span>${secondaryPost.reading_time_minutes || 1} min read</span>
-          </div>
-        </div>
-      </article>`
-      : '';
+      ? renderVisualStoryCard({
+          post: secondaryPost,
+          defaultAuthor,
+          loading: 'eager',
+        })
+      : `<div class="editorial-card p-6 space-y-3">
+          <p class="font-tabular text-[11px] uppercase tracking-[0.12em] text-accent font-semibold">About the Desk</p>
+          <h3 class="font-masthead text-xl font-bold text-ink">${escapeHtml(defaultAuthor)} &times; Pyvren</h3>
+          <p class="text-sm text-ink-secondary leading-relaxed">${escapeHtml(settings.author_bio)}</p>
+          <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 text-xs font-semibold text-accent hover:underline">
+            ${renderLinkedInIcon()}
+            <span>Connect on LinkedIn &nearr;</span>
+          </a>
+        </div>`;
 
-    const wireItemsHtml =
+    const relatedWireHtml =
       leadRelations.length > 0
-        ? `<ul class="divide-y divide-[var(--border-hairline)]">
-          ${leadRelations
-            .map((rel) => {
-              const relMeta = getCategoryMeta(rel.post.category_slug);
-              return `<li class="py-3 first:pt-0 last:pb-0 space-y-1">
-              <div class="flex items-center justify-between gap-2 font-tabular text-[10px] uppercase tracking-[0.08em]">
-                <span class="inline-flex items-center gap-1.5 text-ink-muted">
-                  <span class="cat-dot" style="--cat-color:${relMeta.color}" aria-hidden="true"></span>
-                  <span>${escapeHtml(relMeta.shortLabel)}</span>
-                </span>
-                <span class="text-accent font-semibold truncate max-w-[58%]">${escapeHtml(rel.reasonLabel)}</span>
-              </div>
-              <a href="/blog/${encodeURIComponent(rel.post.slug)}" class="block font-editorial text-[0.98rem] font-semibold leading-snug text-ink hover:text-accent transition-colors">
-                ${escapeHtml(rel.post.title)}
-              </a>
-            </li>`;
-            })
-            .join('')}
-        </ul>`
-        : `<p class="text-xs text-ink-muted leading-relaxed">Cross-track signal links populate automatically as new verified dossiers enter the archive.</p>`;
+        ? `<aside class="editorial-card p-5 space-y-3.5" aria-label="Further reading">
+            <div class="flex items-center justify-between gap-2 pb-2 border-b border-hairline">
+              <h3 class="font-tabular text-[11px] uppercase tracking-[0.12em] font-bold text-ink">Connected Reading</h3>
+              <a href="/blog" class="font-tabular text-[11px] text-accent hover:underline">All &rarr;</a>
+            </div>
+            <ul class="divide-y divide-[var(--border-hairline)]">
+              ${leadRelations
+                .map((rel) => {
+                  const relMeta = getCategoryMeta(rel.post.category_slug);
+                  return `<li class="py-2.5 first:pt-0 last:pb-0 space-y-1">
+                    <div class="flex items-center justify-between gap-2 text-[11px]">
+                      ${renderCategoryTag(rel.post.category_slug, relMeta.navLabel, false)}
+                      <span class="text-ink-faint font-tabular">${rel.post.reading_time_minutes || 1}m</span>
+                    </div>
+                    <a href="/blog/${encodeURIComponent(rel.post.slug)}" class="block font-editorial text-[0.98rem] font-semibold leading-snug text-ink hover:text-accent transition-colors">
+                      ${escapeHtml(rel.post.title)}
+                    </a>
+                  </li>`;
+                })
+                .join('')}
+            </ul>
+          </aside>`
+        : '';
 
-    leadSpreadHtml = `<section aria-labelledby="frontpage-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10 pb-4">
+    leadSpreadHtml = `<section aria-labelledby="featured-story-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10 pb-4">
   <div class="double-rule-top pt-3 pb-4 flex flex-wrap items-center justify-between gap-3">
-    <div class="flex items-center gap-2.5">
-      <span class="cat-dot" style="--cat-color:var(--accent)" aria-hidden="true"></span>
-      <h2 id="frontpage-heading" class="font-tabular text-[11px] uppercase tracking-[0.14em] text-ink font-bold">Front Page &middot; Lead Dispatch</h2>
+    <div class="flex items-center gap-2">
+      <span class="h-2 w-2 rounded-full bg-[var(--accent)]" aria-hidden="true"></span>
+      <h2 id="featured-story-heading" class="font-tabular text-[11px] uppercase tracking-[0.14em] text-ink font-bold">Featured Dispatch</h2>
     </div>
-    <span class="font-tabular text-xs text-ink-faint">${escapeHtml(formatDate(leadPost.published_at || leadPost.created_at))} &middot; ${leadPost.sources_json.length} Primary Sources</span>
+    <span class="font-tabular text-xs text-ink-faint">${escapeHtml(formatDate(leadPost.published_at || leadPost.created_at))}</span>
   </div>
 
   <div class="grid grid-cols-1 lg:grid-cols-12 gap-7 items-start">
-    <!-- Left 8 Columns: Lead Dossier (2-col internal split) -->
-    <article class="lg:col-span-8 editorial-card p-5 sm:p-7">
-      <div class="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
-        <div class="md:col-span-6 space-y-4">
-          <a href="${leadHref}" class="block rounded-[10px] overflow-hidden border border-hairline bg-subtle group">
-            <img src="/og/${encodeURIComponent(leadPost.slug)}.svg" alt="${escapeHtml(leadPost.title)}" width="1200" height="630" loading="eager" class="w-full aspect-[1200/630] object-cover block transition-transform duration-300 group-hover:scale-[1.02]">
-          </a>
-          <div class="p-3.5 rounded-[8px] bg-subtle/80 border border-hairline flex items-center justify-between gap-3">
-            <div class="min-w-0">
-              <p class="font-tabular text-[10px] uppercase tracking-[0.12em] text-ink-faint">Editorial Audit</p>
-              <p class="text-xs font-medium text-ink truncate">By ${escapeHtml(leadPost.author || settings.default_author)}</p>
-            </div>
-            <div class="flex items-center gap-2.5 shrink-0">
-              ${renderScoreRing(leadPost.quality_score)}
-              <a href="/blog/${encodeURIComponent(leadPost.slug)}.md" class="font-tabular text-[11px] text-ink-secondary hover:text-accent underline underline-offset-2">.md</a>
-            </div>
-          </div>
-        </div>
-
-        <div class="md:col-span-6 space-y-4">
-          <div class="flex flex-wrap items-center gap-2">
+    <!-- Lead Story Card -->
+    <article class="lg:col-span-8 story-card overflow-hidden">
+      <a href="${leadHref}" class="block focus:outline-none">
+        ${leadCoverHtml}
+      </a>
+      <div class="p-5 sm:p-7 space-y-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex flex-wrap items-center gap-2.5">
             ${renderCategoryTag(leadPost.category_slug)}
             <span class="badge-editorial">${escapeHtml(formatArchetype(leadPost.archetype))}</span>
-            ${renderScoreBadge(leadPost.quality_score)}
           </div>
-
-          <h3 class="font-masthead text-2xl sm:text-[1.85rem] font-bold leading-[1.14] text-ink">
-            <a href="${leadHref}" class="hover:text-accent transition-colors">${escapeHtml(leadPost.title)}</a>
-          </h3>
-
-          <p class="text-sm text-ink-secondary leading-relaxed">${escapeHtml(leadPost.description)}</p>
-
-          ${
-            leadSignals.length > 0
-              ? `<div class="pt-1 space-y-2 border-t border-hairline">
-            <p class="font-tabular text-[10px] uppercase tracking-[0.12em] text-ink-faint font-semibold pt-2">Key Signals</p>
-            <ul class="space-y-1.5 text-[13px] text-ink-secondary leading-snug">
-              ${leadSignals
-                .map(
-                  (sig) => `<li class="flex items-start gap-2">
-                <span class="cat-dot mt-1.5" style="--cat-color:${leadMeta.color}" aria-hidden="true"></span>
-                <span>${sig.label ? `<strong class="text-ink font-semibold">${escapeHtml(sig.label)}:</strong> ` : ''}${escapeHtml(sig.text)}</span>
-              </li>`,
-                )
-                .join('')}
-            </ul>
-          </div>`
-              : ''
-          }
-
-          <div class="pt-3 border-t border-hairline flex flex-wrap items-center justify-between gap-3">
-            <span class="font-tabular text-xs text-ink-faint">${leadPost.reading_time_minutes || 1} min read &middot; ${leadPost.word_count.toLocaleString('en-US')} words</span>
-            <a href="${leadHref}" class="btn-accent rounded-full px-4 py-2 text-xs sm:text-sm">
-              <span>Read Full Briefing</span>
-              <span aria-hidden="true">&rarr;</span>
-            </a>
-          </div>
-        </div>
-      </div>
-    </article>
-
-    <!-- Right 4 Columns: Secondary Lead + Live Relationship Wire -->
-    <div class="lg:col-span-4 space-y-5 broadsheet-divider">
-      ${secondaryCardHtml}
-
-      <aside class="editorial-card p-5 space-y-4" aria-label="Connected Intelligence Wire">
-        <div class="flex items-center justify-between gap-2 pb-2.5 border-b border-hairline">
-          <div class="flex items-center gap-2">
-            <span class="cat-dot" style="--cat-color:var(--accent)" aria-hidden="true"></span>
-            <h3 class="font-tabular text-[11px] uppercase tracking-[0.13em] font-bold text-ink">Connected Intelligence</h3>
-          </div>
-          <span class="font-tabular text-[10px] text-ink-faint">LIVE GRAPH</span>
+          <span class="font-tabular text-xs text-ink-muted">${leadPost.reading_time_minutes || 1} min read</span>
         </div>
 
-        ${wireItemsHtml}
+        <h3 class="font-masthead text-2xl sm:text-3xl lg:text-[2.1rem] font-bold leading-[1.13] text-ink">
+          <a href="${leadHref}" class="hover:text-accent transition-colors">${escapeHtml(leadPost.title)}</a>
+        </h3>
+
+        <p class="text-sm sm:text-base text-ink-secondary leading-relaxed">${escapeHtml(leadPost.description)}</p>
 
         ${
-          topicClusters.length > 0
-            ? `<div class="pt-3 border-t border-hairline space-y-2">
-          <p class="font-tabular text-[10px] uppercase tracking-[0.12em] text-ink-faint font-semibold">Trending Concepts</p>
-          <div class="flex flex-wrap gap-1.5">
-            ${renderTopicClusterChips(topicClusters, 6)}
-          </div>
-        </div>`
+          leadSignals.length > 0
+            ? `<div class="rounded-xl bg-subtle/75 border border-hairline p-4 space-y-2">
+                <p class="font-tabular text-[10px] uppercase tracking-[0.12em] text-ink-muted font-semibold">At a Glance</p>
+                <ul class="space-y-1.5 text-xs sm:text-[13.5px] text-ink-secondary leading-snug">
+                  ${leadSignals
+                    .map(
+                      (sig) => `<li class="topic-tone flex items-start gap-2" style="--topic-light:${leadMeta.color}; --topic-dark:${leadMeta.darkColor};">
+                        <span class="h-1.5 w-1.5 rounded-full topic-accent-dot mt-1.5 shrink-0" aria-hidden="true"></span>
+                        <span>${sig.label ? `<strong class="text-ink font-semibold">${escapeHtml(sig.label)}:</strong> ` : ''}${escapeHtml(sig.text)}</span>
+                      </li>`,
+                    )
+                    .join('')}
+                </ul>
+              </div>`
             : ''
         }
-      </aside>
-    </div>
-  </div>
-</section>`;
-  } else {
-    leadSpreadHtml = `<section aria-labelledby="frontpage-empty-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10 pb-4">
-  <div class="double-rule-top pt-6">
-    <div class="editorial-card p-8 sm:p-10 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
-      <div class="lg:col-span-7 space-y-4">
-        <span class="badge-editorial badge-accent">Autonomous Desk Ready</span>
-        <h2 id="frontpage-empty-heading" class="font-masthead text-3xl sm:text-4xl font-bold text-ink leading-tight">
-          Six primary-source intelligence tracks on standby.
-        </h2>
-        <p class="text-base text-ink-secondary leading-relaxed">
-          ${escapeHtml(siteName)} monitors official advisories, arXiv papers, cloud changelogs, and reproducible benchmarks—publishing only high-signal briefings that pass our deterministic audit gate.
-        </p>
-        <div class="pt-2 flex flex-wrap items-center gap-3">
-          <a href="#categories" class="btn-accent rounded-full px-5">Explore 6 Research Tracks &rarr;</a>
-          <a href="/editorial-policy" class="btn-ghost rounded-full">Editorial Verification Standard</a>
-        </div>
-      </div>
-      <div class="lg:col-span-5 grid grid-cols-2 gap-3">
-        ${enabledSkills
-          .slice(0, 6)
-          .map((skill) => {
-            const meta = getCategoryMeta(skill.slug);
-            return `<a href="/category/${encodeURIComponent(skill.slug)}" class="p-3.5 rounded-[10px] bg-subtle/80 border border-hairline hover:border-strong transition-colors space-y-1">
-              <div class="flex items-center gap-1.5 font-tabular text-[10px] font-bold tracking-[0.08em]" style="color:${meta.color}">
-                <span class="cat-dot" style="--cat-color:${meta.color}" aria-hidden="true"></span>
-                <span>${escapeHtml(meta.shortLabel)}</span>
-              </div>
-              <p class="font-editorial text-sm font-semibold text-ink line-clamp-1">${escapeHtml(skill.name)}</p>
-            </a>`;
-          })
-          .join('')}
-      </div>
-    </div>
-  </div>
-</section>`;
-  }
 
-  // 3. 3-Column Visual Story Cards Grid (PinVpn + Featured Times)
-  const recentGridHtml =
-    gridCandidates.length > 0
-      ? `<section aria-labelledby="recent-briefings-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-12">
-  <div class="double-rule-top pt-4 pb-5 flex flex-wrap items-end justify-between gap-4">
-    <div>
-      <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Briefing Archive</p>
-      <h2 id="recent-briefings-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1">Recent Briefings</h2>
-    </div>
-    <a href="/blog" class="font-tabular text-xs font-semibold text-ink-secondary hover:text-accent transition-colors">View full archive &rarr;</a>
-  </div>
-
-  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-    ${gridCandidates
-      .map((post) => {
-        const topRel = computePostRelationships(post, pool, 1)[0] || null;
-        return renderVisualStoryCard({ post, skills, topRelation: topRel, loading: 'lazy' });
-      })
-      .join('\n')}
-  </div>
-</section>`
-      : '';
-
-  // 4. Bold Broadsheet Editorial Spotlight Band ("THIS WEEK'S SIGNAL REPORT")
-  const spotlightBandHtml = `<section aria-labelledby="spotlight-heading" class="mt-16 bg-subtle/75 border-y border-hairline">
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16">
-    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
-      <!-- Left: Giant Stacked Condensed Display Typography -->
-      <div class="lg:col-span-3 flex flex-col justify-between gap-6">
-        <div class="space-y-4">
-          <span class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--accent)] text-white font-tabular text-[10px] font-bold uppercase tracking-[0.14em]">
-            Verified Edition
-          </span>
-          <h2 id="spotlight-heading" class="font-condensed uppercase font-bold text-5xl sm:text-6xl leading-[0.9] tracking-tight text-ink">
-            THIS WEEK&rsquo;S<br>
-            <span class="text-accent">SIGNAL</span><br>
-            REPORT
-          </h2>
-          <p class="text-sm text-ink-muted leading-relaxed">
-            Our highest-scoring primary-source dossier, selected deterministically by citation density, concrete metrics, and zero-filler cleanliness.
-          </p>
-        </div>
-
-        <div class="pt-4 border-t border-strong/20 font-tabular text-[11px] text-ink-faint space-y-1">
-          <p class="uppercase tracking-[0.12em] text-ink-secondary font-semibold">Formats Available</p>
-          <p>SSR HTML &middot; Raw .md &middot; JSON Feed 1.1 &middot; RSS 2.0</p>
-        </div>
-      </div>
-
-      <!-- Middle: High-Contrast Highlight Card for Highest-Quality Briefing -->
-      <div class="lg:col-span-5">
-        ${
-          spotlightPost
-            ? `<article class="h-full rounded-[14px] bg-surface border-2 border-strong p-6 sm:p-7 flex flex-col justify-between gap-5 shadow-[var(--shadow-lift)]">
-          <div class="space-y-4">
-            <div class="flex items-center justify-between gap-3">
-              ${renderCategoryTag(spotlightPost.category_slug)}
-              ${renderScoreBadge(spotlightPost.quality_score)}
-            </div>
-
-            <h3 class="font-masthead text-2xl sm:text-[1.75rem] font-bold leading-[1.15] text-ink">
-              <a href="/blog/${encodeURIComponent(spotlightPost.slug)}" class="hover:text-accent transition-colors">${escapeHtml(spotlightPost.title)}</a>
-            </h3>
-
-            ${
-              spotlightPost.tldr_summary
-                ? `<blockquote class="pl-4 border-l-2 border-[var(--accent)] text-sm text-ink-secondary leading-relaxed">
-              ${escapeHtml(spotlightPost.tldr_summary)}
-            </blockquote>`
-                : `<p class="text-sm text-ink-secondary leading-relaxed">${escapeHtml(spotlightPost.description)}</p>`
-            }
-
-            ${
-              spotlightPost.key_facts_json.length > 0
-                ? `<dl class="divide-y divide-[var(--border-hairline)] border-t border-b border-hairline">
-              ${spotlightPost.key_facts_json
-                .slice(0, 3)
-                .map(
-                  (fact) => `<div class="py-2.5 grid grid-cols-12 gap-2 text-xs">
-                <dt class="col-span-5 font-tabular text-ink-muted">${escapeHtml(fact.label)}</dt>
-                <dd class="col-span-7 font-semibold text-ink">${escapeHtml(fact.value)}</dd>
-              </div>`,
-                )
-                .join('')}
-            </dl>`
-                : ''
-            }
+        <div class="pt-3 border-t border-hairline flex flex-wrap items-center justify-between gap-4">
+          <div class="text-xs text-ink-secondary">
+            <span class="font-semibold text-ink">${escapeHtml(leadByline)}</span>
+            <span class="text-ink-faint"> &middot; ${leadPost.sources_json.length} primary sources</span>
           </div>
-
-          <div class="pt-3 border-t border-hairline flex flex-wrap items-center justify-between gap-3">
-            <span class="font-tabular text-xs text-ink-faint">${spotlightPost.sources_json.length} citations &middot; ${spotlightPost.reading_time_minutes || 1} min read</span>
-            <a href="/blog/${encodeURIComponent(spotlightPost.slug)}" class="btn-primary rounded-full px-4 py-2 text-xs">
-              <span>Read Full Dossier</span>
-              <span aria-hidden="true">&rarr;</span>
-            </a>
-          </div>
-        </article>`
-            : `<div class="h-full rounded-[14px] bg-surface border border-hairline p-6 flex flex-col justify-center gap-3">
-          <p class="font-masthead text-2xl font-bold text-ink">Next Signal Report In Preparation</p>
-          <p class="text-sm text-ink-muted leading-relaxed">Once the autonomous research desk completes primary-source verification, the highest-scoring briefing is spotlighted here.</p>
-          <div class="pt-2">
-            <a href="/editorial-policy" class="btn-ghost rounded-full text-xs">Inspect Quality Rubric &rarr;</a>
-          </div>
-        </div>`
-        }
-      </div>
-
-      <!-- Right: Research Desk & Topic Clusters Sidebar + Conditional AdSense -->
-      <div class="lg:col-span-4 flex flex-col gap-5">
-        <div class="editorial-card p-5 space-y-3">
-          <div class="flex items-center justify-between gap-2">
-            <p class="font-tabular text-[10px] uppercase tracking-[0.14em] text-accent font-bold">Research Desk</p>
-            <a href="/about" class="font-tabular text-[11px] text-ink-muted hover:text-accent underline underline-offset-2">Masthead</a>
-          </div>
-          <h3 class="font-masthead text-xl font-bold text-ink">${escapeHtml(settings.default_author || 'Editorial Desk')}</h3>
-          <p class="text-xs sm:text-sm text-ink-muted leading-relaxed">
-            ${escapeHtml(settings.author_bio || 'Independent technical researcher and editor focusing on primary-source engineering analysis, software security, and AI infrastructure.')}
-          </p>
-        </div>
-
-        <div class="editorial-card p-5 space-y-3 flex-1">
-          <div class="flex items-center justify-between gap-2">
-            <p class="font-tabular text-[10px] uppercase tracking-[0.14em] text-ink font-bold">Intelligence Graph &middot; Trending Concepts</p>
-          </div>
-          ${
-            topicClusters.length > 0
-              ? `<div class="flex flex-wrap gap-2">${renderTopicClusterChips(topicClusters, 10)}</div>`
-              : `<div class="flex flex-wrap gap-2">
-            ${enabledSkills
-              .map((s) => {
-                const meta = getCategoryMeta(s.slug);
-                return `<a href="/category/${encodeURIComponent(s.slug)}" class="rel-chip"><span class="cat-dot" style="--cat-color:${meta.color}" aria-hidden="true"></span><span>${escapeHtml(meta.shortLabel)}</span></a>`;
-              })
-              .join('')}
-          </div>`
-          }
-        </div>
-
-        ${renderAdSlot(settings, 'Sponsored')}
-      </div>
-    </div>
-  </div>
-</section>`;
-
-  // 5. 6 Autonomous Research Tracks + Editorial Rigor Strip
-  const tracksHtml =
-    enabledSkills.length > 0
-      ? `<section id="categories" aria-labelledby="tracks-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 scroll-mt-24">
-  <div class="double-rule-top pt-4 pb-5 flex flex-col sm:flex-row sm:items-end justify-between gap-3">
-    <div>
-      <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Coverage Index</p>
-      <h2 id="tracks-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1">Autonomous Research Tracks</h2>
-    </div>
-    <a href="/blog" class="font-tabular text-xs font-semibold text-ink-muted hover:text-accent transition-colors">View complete archive &rarr;</a>
-  </div>
-
-  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-    ${enabledSkills
-      .map((skill, idx) => {
-        const meta = getCategoryMeta(skill.slug);
-        return `<a href="/category/${encodeURIComponent(skill.slug)}" class="editorial-card p-6 flex flex-col justify-between gap-4 group">
-        <div class="space-y-2.5">
-          <div class="flex items-center justify-between gap-2">
-            <span class="inline-flex items-center gap-2 font-tabular text-[11px] font-bold uppercase tracking-[0.1em]" style="color:${meta.color}">
-              <span class="cat-dot" style="--cat-color:${meta.color}" aria-hidden="true"></span>
-              <span>${escapeHtml(meta.shortLabel)}</span>
-            </span>
-            <span class="font-tabular text-[11px] text-ink-faint">0${idx + 1}</span>
-          </div>
-          <h3 class="font-editorial text-xl font-semibold text-ink group-hover:text-accent transition-colors">${escapeHtml(skill.name)}</h3>
-          <p class="text-sm text-ink-muted leading-relaxed line-clamp-3">${escapeHtml(skill.description)}</p>
-        </div>
-        <div class="pt-3 border-t border-hairline flex items-center justify-between gap-2">
-          <span class="text-xs text-ink-faint truncate max-w-[75%]">For: ${escapeHtml(skill.target_audience)}</span>
-          <span class="font-tabular text-xs font-semibold text-accent group-hover:translate-x-0.5 transition-transform shrink-0">Track &rarr;</span>
-        </div>
-      </a>`;
-      })
-      .join('\n')}
-  </div>
-</section>`
-      : '';
-
-  const rigorHtml = `<section aria-labelledby="rigor-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-16">
-  <div class="editorial-card p-7 sm:p-10">
-    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
-      <div class="lg:col-span-4 space-y-3">
-        <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Editorial Rigor</p>
-        <h2 id="rigor-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink leading-tight">
-          Built to reject generic filler and unverified claims.
-        </h2>
-        <p class="text-sm text-ink-muted leading-relaxed">
-          Every ${escapeHtml(siteName)} dossier passes automated primary-source auditing and human editorial oversight before publication.
-        </p>
-        <div class="pt-1">
-          <a href="/editorial-policy" class="inline-flex items-center gap-1.5 text-sm font-semibold text-accent hover:text-[var(--accent-hover)]">
-            <span>Read Editorial Policy</span>
+          <a href="${leadHref}" class="btn-accent rounded-full px-5 py-2 text-xs sm:text-sm">
+            <span>Read Story</span>
             <span aria-hidden="true">&rarr;</span>
           </a>
         </div>
       </div>
+    </article>
 
-      <div class="lg:col-span-8 grid grid-cols-1 sm:grid-cols-3 gap-6 broadsheet-divider">
-        <div class="space-y-2">
-          <span class="font-tabular text-xs font-bold text-accent">01 / GROUNDING</span>
-          <h3 class="font-editorial text-lg font-semibold text-ink">Primary-Source Citations</h3>
-          <p class="text-sm text-ink-muted leading-relaxed">
-            Findings are anchored directly to official advisories, release notes, papers, and reproducible benchmark tables—never circular summaries.
-          </p>
+    <!-- Right Column: Second Story + Connected Reading -->
+    <div class="lg:col-span-4 space-y-5 broadsheet-divider">
+      ${secondaryCardHtml}
+      ${relatedWireHtml}
+    </div>
+  </div>
+</section>`;
+  } else {
+    leadSpreadHtml = `<section class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10 pb-4">
+      <div class="editorial-card p-8 sm:p-10 text-center space-y-4">
+        <h2 class="font-masthead text-2xl sm:text-3xl font-bold text-ink">Fresh stories are on the drafting desk.</h2>
+        <p class="text-sm sm:text-base text-ink-secondary max-w-xl mx-auto">Explore our six engineering topics below while the next primary-source story is prepared.</p>
+      </div>
+    </section>`;
+  }
+
+  // 3. Recent Stories (Touch-Snap Carousel on Mobile, 3-Column Grid on Desktop)
+  const recentStoriesHtml =
+    gridCandidates.length > 0
+      ? `<section aria-labelledby="recent-stories-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-12" data-carousel-root>
+  <div class="double-rule-top pt-4 pb-5 flex items-end justify-between gap-4">
+    <div>
+      <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Latest Dispatches</p>
+      <h2 id="recent-stories-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1">Recent Stories</h2>
+    </div>
+    <a href="/blog" class="font-tabular text-xs font-semibold text-ink-secondary hover:text-accent transition-colors shrink-0">View all &rarr;</a>
+  </div>
+
+  <div class="mobile-carousel md:grid md:grid-cols-2 lg:grid-cols-3 md:gap-6" data-carousel-track>
+    ${gridCandidates
+      .map((post) => {
+        const topRel = computePostRelationships(post, pool, 1)[0] || null;
+        return renderVisualStoryCard({
+          post,
+          defaultAuthor,
+          topRelation: topRel,
+          loading: 'lazy',
+          slideWrapper: true,
+        });
+      })
+      .join('\n')}
+  </div>
+  ${renderMobileCarouselControls(gridCandidates.length, 'story')}
+</section>`
+      : '';
+
+  // 4. 6 Bespoke Crew Topic Cards (Swipeable Mobile Carousel -> 3-Col Desktop Grid)
+  const topicsSectionHtml =
+    enabledSkills.length > 0
+      ? `<section id="categories" aria-labelledby="topics-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 scroll-mt-24" data-carousel-root>
+  <div class="double-rule-top pt-4 pb-5 flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+    <div>
+      <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Explore by Topic</p>
+      <h2 id="topics-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1">Six Beats, Six Crew Guides</h2>
+    </div>
+    <p class="text-xs sm:text-sm text-ink-muted max-w-md">Swipe on mobile or pick a beat — each topic is illustrated by its own member of the Pyvren sketchbook crew.</p>
+  </div>
+
+  <div class="mobile-carousel mobile-carousel--compact md:grid md:grid-cols-2 lg:grid-cols-3 md:gap-5" data-carousel-track>
+    ${enabledSkills
+      .map((skill) => {
+        const meta = getCategoryMeta(skill.slug);
+        const crewSvg = renderTopicCrewSvg(skill.slug, 'home');
+        return `<div class="mobile-carousel-slide">
+          <a href="/category/${encodeURIComponent(skill.slug)}" class="story-card topic-tone h-full p-5 flex flex-col justify-between gap-4 group block" style="--topic-light:${meta.color}; --topic-dark:${meta.darkColor};">
+            <div class="space-y-3">
+              <div class="rounded-xl bg-subtle/85 border border-hairline px-3 pt-3 pb-1 overflow-hidden">
+                <div class="flex items-center justify-between gap-2 mb-1">
+                  <span class="inline-flex items-center gap-1.5 font-tabular text-[10px] font-bold uppercase tracking-[0.09em] topic-accent-text">
+                    <span class="h-2 w-2 rounded-full topic-accent-dot" aria-hidden="true"></span>
+                    <span>${escapeHtml(meta.shortLabel)}</span>
+                  </span>
+                  <span class="font-tabular text-[10px] text-ink-faint">${escapeHtml(meta.crewName)}</span>
+                </div>
+                <div class="h-28 w-full max-w-[190px] mx-auto">
+                  ${crewSvg}
+                </div>
+              </div>
+              <h3 class="font-editorial text-xl font-semibold text-ink group-hover:text-accent transition-colors leading-snug">${escapeHtml(skill.name)}</h3>
+              <p class="text-sm text-ink-secondary leading-relaxed line-clamp-2">${escapeHtml(skill.description)}</p>
+            </div>
+            <div class="pt-3 border-t border-hairline flex items-center justify-between text-xs">
+              <span class="text-ink-muted truncate max-w-[72%]">${escapeHtml(skill.target_audience)}</span>
+              <span class="font-semibold text-accent group-hover:translate-x-0.5 transition-transform shrink-0">Explore &rarr;</span>
+            </div>
+          </a>
+        </div>`;
+      })
+      .join('\n')}
+  </div>
+  ${renderMobileCarouselControls(enabledSkills.length, 'topic')}
+</section>`
+      : '';
+
+  // 5. Human + Agent Co-Work Note & Hamdi Soudani Profile Card
+  const coWorkNoteHtml = `<section aria-labelledby="cowork-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-16">
+  <div class="editorial-card p-6 sm:p-9">
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+      <div class="lg:col-span-7 space-y-3">
+        <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">How We Write</p>
+        <h2 id="cowork-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink leading-tight">
+          Human taste &amp; engineering judgment, paired with tireless research.
+        </h2>
+        <p class="text-sm sm:text-base text-ink-secondary leading-relaxed">
+          ${escapeHtml(siteName)} is a collaborative publication by <strong>${escapeHtml(defaultAuthor)}</strong> and <strong>Pyvren</strong>. Together we track real advisories, benchmark repos, and systems papers — turning raw primary documentation into clear, practical stories with zero filler.
+        </p>
+        <div class="pt-2 flex flex-wrap items-center gap-3">
+          <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="btn-primary rounded-full px-5 text-xs sm:text-sm">
+            ${renderLinkedInIcon()}
+            <span>${escapeHtml(defaultAuthor)} on LinkedIn</span>
+          </a>
+          <a href="/about" class="btn-ghost rounded-full px-4 text-xs sm:text-sm">About the Co-Work</a>
         </div>
-        <div class="space-y-2">
-          <span class="font-tabular text-xs font-bold text-accent">02 / AUDIT</span>
-          <h3 class="font-editorial text-lg font-semibold text-ink">Deterministic Quality Gate</h3>
-          <p class="text-sm text-ink-muted leading-relaxed">
-            Every draft is scored against a strict structural rubric enforcing answer-first summaries, verified fact tables, and zero cliché padding.
-          </p>
+      </div>
+
+      <div class="lg:col-span-5 grid grid-cols-1 sm:grid-cols-2 gap-4 broadsheet-divider">
+        <div class="p-4 rounded-xl bg-subtle/70 border border-hairline space-y-1.5">
+          <p class="font-tabular text-[11px] font-bold text-accent">PRIMARY SOURCES</p>
+          <p class="text-xs sm:text-sm text-ink-secondary leading-relaxed">Every benchmark number, config snippet, and diagram links back to the original repo, paper, or advisory.</p>
         </div>
-        <div class="space-y-2">
-          <span class="font-tabular text-xs font-bold text-accent">03 / ACCOUNTABILITY</span>
-          <h3 class="font-editorial text-lg font-semibold text-ink">Human Editorial Review</h3>
-          <p class="text-sm text-ink-muted leading-relaxed">
-            Named editorial oversight by ${escapeHtml(settings.default_author || 'our desk')} with transparent corrections and direct Markdown/JSON provenance.
-          </p>
+        <div class="p-4 rounded-xl bg-subtle/70 border border-hairline space-y-1.5">
+          <p class="font-tabular text-[11px] font-bold text-accent">BUILT FOR READERS</p>
+          <p class="text-xs sm:text-sm text-ink-secondary leading-relaxed">Warm paper or dark mode, fast on every phone, and structured cleanly under the hood.</p>
         </div>
       </div>
     </div>
   </div>
+  ${renderAdSlot(settings, 'Sponsored')}
 </section>`;
 
-  const landingBody = `${commandHeroHtml}
+  const landingBody = `${heroHtml}
 ${leadSpreadHtml}
-${recentGridHtml}
-${spotlightBandHtml}
-${tracksHtml}
-${rigorHtml}
+${recentStoriesHtml}
+${topicsSectionHtml}
+${coWorkNoteHtml}
 ${renderCtaStrip(settings)}`;
 
   const baseUrl = normalizeBaseUrl(settings.base_url);
   return renderPublicLayout({
-    title: `${siteName} — Primary-Source Technical Briefings`,
+    title: `${siteName} — AI, Security & Cloud Engineering Stories`,
     description: tagline,
     canonicalUrl: `${baseUrl}/`,
     settings,
     ogType: 'website',
     currentPath: '/',
+    initialTheme,
     jsonLd: [
       {
         '@context': 'https://schema.org',
@@ -811,11 +682,24 @@ export function renderBlogIndexPage(opts: {
   page: number;
   totalPages: number;
   query?: string;
+  initialTheme?: 'light' | 'dark';
+  rateLimitRetrySeconds?: number;
 }): string {
-  const { settings, posts, skills, activeCategory, page, totalPages, query } = opts;
+  const {
+    settings,
+    posts,
+    skills,
+    activeCategory,
+    page,
+    totalPages,
+    query,
+    initialTheme,
+    rateLimitRetrySeconds,
+  } = opts;
   const activeSkill = activeCategory ? skills.find((s) => s.slug === activeCategory) : undefined;
   const trimmedQuery = (query || '').trim();
   const activeMeta = activeCategory ? getCategoryMeta(activeCategory) : null;
+  const defaultAuthor = settings.default_author || 'Hamdi Soudani';
 
   const buildIndexUrl = (targetPage: number, cat?: string, q?: string): string => {
     const params = new URLSearchParams();
@@ -827,36 +711,40 @@ export function renderBlogIndexPage(opts: {
   };
 
   const filterChips = [
-    `<a href="${escapeHtml(buildIndexUrl(1, undefined, trimmedQuery))}" class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full font-tabular text-xs border transition-colors ${
-      !activeCategory
-        ? 'bg-[var(--ink-primary)] text-[var(--bg-paper)] border-[var(--ink-primary)] font-semibold'
-        : 'bg-surface text-ink-secondary border-hairline hover:border-strong hover:text-ink'
-    }">All Tracks</a>`,
+    `<a href="${escapeHtml(buildIndexUrl(1, undefined, trimmedQuery))}" class="topic-pill ${
+      !activeCategory ? 'bg-[var(--ink-primary)] text-[var(--bg-paper)] border-[var(--ink-primary)]' : 'bg-surface border-hairline'
+    }"${!activeCategory ? ' aria-current="page"' : ''}>All Stories</a>`,
     ...skills
       .filter((s) => s.enabled || s.slug === activeCategory)
       .map((skill) => {
         const isActive = skill.slug === activeCategory;
         const meta = getCategoryMeta(skill.slug);
-        return `<a href="${escapeHtml(buildIndexUrl(1, skill.slug, trimmedQuery))}" class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full font-tabular text-xs border transition-colors ${
-          isActive
-            ? 'bg-[var(--accent)] text-white border-[var(--accent)] font-semibold'
-            : 'bg-surface text-ink-secondary border-hairline hover:border-strong hover:text-ink'
-        }">
-          <span class="cat-dot" style="--cat-color:${isActive ? '#FFFFFF' : meta.color}" aria-hidden="true"></span>
-          <span>${escapeHtml(meta.shortLabel)}</span>
+        return `<a href="${escapeHtml(buildIndexUrl(1, skill.slug, trimmedQuery))}" class="topic-pill topic-tone ${
+          isActive ? '' : 'bg-surface border-hairline'
+        }" style="--topic-light:${meta.color}; --topic-dark:${meta.darkColor};"${isActive ? ' aria-current="page"' : ''}>
+          ${isActive ? '' : `<span class="h-2 w-2 rounded-full topic-accent-dot shrink-0" aria-hidden="true"></span>`}
+          <span>${escapeHtml(meta.navLabel)}</span>
         </a>`;
       }),
   ].join('\n');
 
-  const cardsHtml =
-    posts.length > 0
+  const rateLimitBannerHtml = rateLimitRetrySeconds
+    ? `<div role="alert" class="mt-6 rounded-xl border border-[var(--accent)] bg-[var(--accent-soft)] p-5 text-sm text-ink space-y-1">
+        <p class="font-semibold text-accent">Whoa — slow down just a bit!</p>
+        <p class="text-ink-secondary">You’ve sent a burst of search queries. Please wait <strong>${rateLimitRetrySeconds}s</strong> and try your search again.</p>
+      </div>`
+    : '';
+
+  const cardsHtml = rateLimitRetrySeconds
+    ? ''
+    : posts.length > 0
       ? `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         ${posts
           .map((post, idx) => {
             const topRel = computePostRelationships(post, posts, 1)[0] || null;
             return renderVisualStoryCard({
               post,
-              skills,
+              defaultAuthor,
               topRelation: topRel,
               loading: idx < 3 ? 'eager' : 'lazy',
             });
@@ -864,15 +752,15 @@ export function renderBlogIndexPage(opts: {
           .join('\n')}
       </div>`
       : `<div class="editorial-card p-10 text-center space-y-3">
-        <p class="font-masthead text-2xl font-bold text-ink">No matching briefings found.</p>
-        <p class="text-sm text-ink-muted">Try clearing your search query or switching to another research track.</p>
+        <p class="font-masthead text-2xl font-bold text-ink">No matching stories found.</p>
+        <p class="text-sm text-ink-muted">Try another keyword or browse all topics below.</p>
         <div class="pt-2">
-          <a href="/blog" class="btn-ghost rounded-full">Reset filters</a>
+          <a href="/blog" class="btn-ghost rounded-full">Show all stories</a>
         </div>
       </div>`;
 
   const paginationHtml =
-    totalPages > 1
+    totalPages > 1 && !rateLimitRetrySeconds
       ? `<nav aria-label="Pagination" class="mt-10 flex items-center justify-between gap-4 border-t border-hairline pt-6">
         <div>
           ${
@@ -892,52 +780,65 @@ export function renderBlogIndexPage(opts: {
       </nav>`
       : '';
 
-  const indexBody = `<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-14">
-  <!-- Elevated Search + Category Filter Hub -->
-  <header class="editorial-card p-6 sm:p-8 space-y-6">
-    <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
-      <div class="space-y-2.5 max-w-2xl">
-        <p class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">
-          <span class="cat-dot" style="--cat-color:${activeMeta ? activeMeta.color : 'var(--accent)'}" aria-hidden="true"></span>
-          <span>${activeSkill ? `Research Track · ${escapeHtml(activeSkill.slug)}` : 'Complete Editorial Archive'}</span>
-        </p>
-        <h1 class="font-masthead text-3xl sm:text-5xl font-bold text-ink leading-[1.08]">
-          ${activeSkill ? escapeHtml(activeSkill.name) : 'Research Briefings'}
-        </h1>
-        <p class="text-sm sm:text-base text-ink-muted leading-relaxed">
-          ${
-            activeSkill
-              ? escapeHtml(activeSkill.description)
-              : 'Primary-source technical dossiers, advisory teardowns, and benchmark indexes structured for rapid engineering review.'
-          }
-        </p>
+  const categoryMascotHtml = activeSkill && activeMeta
+    ? `<div class="topic-tone hidden md:flex items-center justify-center w-44 h-28 rounded-xl bg-subtle border border-hairline p-2 shrink-0" style="--topic-light:${activeMeta.color}; --topic-dark:${activeMeta.darkColor};">
+        ${renderTopicCrewSvg(activeSkill.slug, 'archive-header')}
+      </div>`
+    : '';
+
+  const indexBody = `<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
+  <header class="editorial-card p-5 sm:p-8 space-y-6">
+    <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+      <div class="flex items-center gap-5 min-w-0">
+        ${categoryMascotHtml}
+        <div class="space-y-2 max-w-2xl min-w-0">
+          <p class="topic-tone inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.13em] topic-accent-text font-semibold" style="--topic-light:${activeMeta ? activeMeta.color : 'var(--accent)'}; --topic-dark:${activeMeta ? activeMeta.darkColor : 'var(--accent)'};">
+            <span class="h-2 w-2 rounded-full topic-accent-dot" aria-hidden="true"></span>
+            <span>${activeSkill ? `${escapeHtml(activeMeta?.crewName || 'Crew')}’s Beat` : 'All Published Stories'}</span>
+          </p>
+          <h1 class="font-masthead text-2xl sm:text-4xl lg:text-[2.65rem] font-bold text-ink leading-[1.1]">
+            ${activeSkill ? escapeHtml(activeSkill.name) : 'Stories & Benchmarks'}
+          </h1>
+          <p class="text-sm sm:text-base text-ink-secondary leading-relaxed">
+            ${
+              activeSkill
+                ? escapeHtml(activeSkill.description)
+                : 'Deep dives, security advisories, and reproducible engineering benchmarks — co-crafted by Hamdi Soudani & Pyvren.'
+            }
+          </p>
+        </div>
       </div>
 
-      <form id="search" method="GET" action="/blog" role="search" class="w-full lg:w-[24rem] p-1.5 rounded-full bg-paper border border-hairline focus-within:border-[var(--accent)] transition-colors flex items-center gap-2">
+      <form id="search" method="GET" action="/blog" role="search" data-live-search class="relative w-full lg:w-[23rem] shrink-0">
         ${activeCategory ? `<input type="hidden" name="category" value="${escapeHtml(activeCategory)}">` : ''}
-        <span class="pl-3 text-ink-faint shrink-0" aria-hidden="true">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
-        </span>
-        <label for="blog-search-input" class="sr-only">Search briefings</label>
-        <input id="blog-search-input" type="search" name="q" value="${escapeHtml(trimmedQuery)}" placeholder="Search titles, topics, CVEs..." class="w-full bg-transparent border-0 text-sm text-ink placeholder:text-ink-faint focus:outline-none py-1.5">
-        <button type="submit" class="btn-accent rounded-full px-4 py-1.5 text-xs shrink-0">Search</button>
+        <div class="p-1.5 rounded-full bg-paper border border-strong/75 focus-within:border-[var(--accent)] transition-colors flex items-center gap-2">
+          <span class="pl-3 text-ink-muted shrink-0" aria-hidden="true">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+          </span>
+          <label for="archive-search-input" class="sr-only">Search stories</label>
+          <input id="archive-search-input" type="search" name="q" autocomplete="off" value="${escapeHtml(trimmedQuery)}" placeholder="Search titles, topics, CVEs..." class="w-full min-w-0 bg-transparent border-0 text-sm text-ink placeholder:text-ink-faint focus:outline-none py-1.5">
+          <button type="submit" class="btn-accent rounded-full px-4 py-1.5 text-xs shrink-0">Search</button>
+        </div>
+        <div data-search-results class="search-dropdown hidden" role="listbox" aria-label="Search suggestions"></div>
       </form>
     </div>
 
-    <div class="pt-4 border-t border-hairline flex flex-wrap items-center justify-between gap-3">
-      <div class="flex flex-wrap items-center gap-2" role="navigation" aria-label="Filter by category">
+    <div class="pt-4 border-t border-hairline flex items-center justify-between gap-3">
+      <div class="topic-rail flex-1 py-0" role="navigation" aria-label="Filter by topic">
         ${filterChips}
       </div>
       ${
         trimmedQuery || activeCategory
-          ? `<a href="/blog" class="font-tabular text-xs text-ink-muted hover:text-accent underline underline-offset-2">Clear filters</a>`
+          ? `<a href="/blog" class="font-tabular text-xs text-ink-muted hover:text-accent underline underline-offset-2 shrink-0">Reset</a>`
           : ''
       }
     </div>
   </header>
 
+  ${rateLimitBannerHtml}
+
   ${
-    trimmedQuery
+    trimmedQuery && !rateLimitRetrySeconds
       ? `<p class="mt-6 font-tabular text-xs text-ink-muted">Showing results for <strong class="text-ink">&ldquo;${escapeHtml(trimmedQuery)}&rdquo;</strong>${activeSkill ? ` in ${escapeHtml(activeSkill.name)}` : ''}.</p>`
       : ''
   }
@@ -951,14 +852,16 @@ export function renderBlogIndexPage(opts: {
 </div>`;
 
   const baseUrl = normalizeBaseUrl(settings.base_url);
-  const siteName = settings.site_name || 'Pyvren Research';
+  const siteName = settings.site_name || 'The Pyvren Dispatch';
   const canonicalPath = activeSkill ? `/category/${encodeURIComponent(activeSkill.slug)}` : '/blog';
   const pageTitle = activeSkill
     ? `${activeSkill.name} — ${siteName}`
-    : `Research Briefings — ${siteName}`;
+    : trimmedQuery
+      ? `Search: ${trimmedQuery} — ${siteName}`
+      : `Stories & Benchmarks — ${siteName}`;
   const pageDesc = activeSkill
     ? activeSkill.description
-    : settings.site_tagline || 'Primary-source technical research briefings and benchmark indexes.';
+    : settings.site_tagline || 'Field notes, benchmarks, and deep dives into AI, security, and cloud craft.';
 
   return renderPublicLayout({
     title: pageTitle,
@@ -967,12 +870,14 @@ export function renderBlogIndexPage(opts: {
     settings,
     ogType: 'website',
     currentPath: canonicalPath,
+    robotsMeta: trimmedQuery || rateLimitRetrySeconds ? 'noindex, follow' : undefined,
+    initialTheme,
     bodyHtml: indexBody,
   });
 }
 
 /* ==========================================================================
-   3. Single Blog Post Page (Magazine Header + Cover Art + Connected Graph)
+   3. Single Blog Post Page (Clean Human Reader + Crawled Reference Figures)
    ========================================================================== */
 
 export function renderBlogPostPage(opts: {
@@ -981,11 +886,13 @@ export function renderBlogPostPage(opts: {
   skill?: CategorySkill | null;
   relatedPosts: PostRecord[];
   headings?: Array<{ id: string; level: number; text: string }>;
+  initialTheme?: 'light' | 'dark';
 }): string {
-  const { settings, post, skill, relatedPosts, headings = [] } = opts;
+  const { settings, post, skill, relatedPosts, headings = [], initialTheme } = opts;
   const catMeta = getCategoryMeta(post.category_slug);
-  const categoryName = skill?.name || post.category_slug.replace(/-/g, ' ');
-  const authorName = post.author || settings.default_author || 'Editorial Desk';
+  const categoryName = skill?.name || catMeta.navLabel || post.category_slug.replace(/-/g, ' ');
+  const authorName = post.author || settings.default_author || 'Hamdi Soudani';
+  const coWorkByline = formatCoWorkByline(authorName, settings.default_author || 'Hamdi Soudani', false);
   const publishedIso = post.published_at || post.created_at;
   const updatedIso = post.updated_at;
   const showUpdated =
@@ -993,15 +900,87 @@ export function renderBlogPostPage(opts: {
     formatDate(updatedIso) !== formatDate(publishedIso);
   const hasToc = headings.length >= 2;
   const markdownUrl = `/blog/${encodeURIComponent(post.slug)}.md`;
-  const coverArtSrc = `/og/${encodeURIComponent(post.slug)}.svg`;
 
   const relationships = computePostRelationships(post, relatedPosts, 3);
 
+  // Hero visual: real crawled primary reference image if available, otherwise clean theme-adaptive Crew banner
+  const hasRealCover = Boolean(post.cover_image_url && post.cover_image_url.trim().startsWith('https://'));
+  const coverSourceMatch = Array.isArray(post.images_json)
+    ? post.images_json.find((img) => img.url === post.cover_image_url)
+    : undefined;
+
+  const heroVisualHtml = hasRealCover
+    ? `<figure class="article-hero-figure max-w-4xl">
+        <img
+          src="${escapeHtml(post.cover_image_url!.trim())}"
+          alt="${escapeHtml(post.cover_image_alt || post.title)}"
+          loading="eager"
+          decoding="async"
+          referrerpolicy="no-referrer"
+        />
+        <figcaption class="article-hero-caption flex flex-wrap items-center justify-between gap-2">
+          <span>${escapeHtml(post.cover_image_alt || post.title)}</span>
+          ${
+            coverSourceMatch?.source_page_url
+              ? `<a href="${escapeHtml(safeHref(coverSourceMatch.source_page_url))}" target="_blank" rel="noopener noreferrer" class="font-tabular text-xs text-accent hover:underline">Source: ${escapeHtml(extractDomain(coverSourceMatch.source_page_url))} &nearr;</a>`
+              : ''
+          }
+        </figcaption>
+      </figure>`
+    : `<div class="mt-7 max-w-4xl rounded-2xl overflow-hidden border border-hairline bg-surface shadow-[var(--shadow-subtle)]">
+        ${renderStoryCoverMedia({
+          coverImageUrl: null,
+          categorySlug: post.category_slug,
+          archetype: formatArchetype(post.archetype),
+          title: post.title,
+          instanceKey: `post-hero-${post.id}`,
+          aspectClass: 'aspect-[21/9]',
+          eager: true,
+        })}
+      </div>`;
+
+  // Extra crawled reference images (not already used as cover or embedded inline in body_markdown)
+  const extraReferenceImages: PostImage[] = Array.isArray(post.images_json)
+    ? post.images_json.filter(
+        (img) =>
+          img?.url &&
+          img.url.startsWith('https://') &&
+          img.url !== post.cover_image_url &&
+          !post.body_markdown.includes(img.url),
+      )
+    : [];
+
+  const referenceGalleryHtml =
+    extraReferenceImages.length > 0
+      ? `<section aria-labelledby="ref-figures-heading" class="mt-12 pt-8 border-t border-hairline">
+          <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Visual References</p>
+          <h2 id="ref-figures-heading" class="font-masthead text-2xl font-bold text-ink mt-1 mb-4">Figures from Cited Sources</h2>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            ${extraReferenceImages
+              .slice(0, 4)
+              .map(
+                (img) => `<figure class="editorial-figure m-0 rounded-xl overflow-hidden border border-hairline bg-surface">
+                  <img src="${escapeHtml(img.url)}" alt="${escapeHtml(img.alt || post.title)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" class="w-full aspect-[16/10] object-cover bg-subtle">
+                  <figcaption class="editorial-caption flex items-center justify-between gap-2">
+                    <span class="truncate">${escapeHtml(img.caption || img.alt || 'Reference diagram')}</span>
+                    ${
+                      img.source_page_url
+                        ? `<a href="${escapeHtml(safeHref(img.source_page_url))}" target="_blank" rel="noopener noreferrer" class="font-tabular text-[11px] text-accent hover:underline shrink-0">${escapeHtml(extractDomain(img.source_page_url))} &nearr;</a>`
+                        : ''
+                    }
+                  </figcaption>
+                </figure>`,
+              )
+              .join('\n')}
+          </div>
+        </section>`
+      : '';
+
   const tldrHtml = post.tldr_summary
-    ? `<section aria-label="Executive Summary" class="mt-8 rounded-[10px] border border-hairline border-l-[4px] border-l-[var(--accent)] bg-surface p-5 sm:p-6 shadow-[var(--shadow-subtle)]">
+    ? `<section aria-label="Quick Summary" class="mt-8 rounded-2xl border border-hairline border-l-[4px] border-l-[var(--accent)] bg-surface p-5 sm:p-6 shadow-[var(--shadow-subtle)]">
       <div class="flex items-center justify-between gap-2 mb-2">
-        <span class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-bold">TL;DR &middot; Direct Answer</span>
-        <span class="font-tabular text-[11px] text-ink-faint">Key Takeaway</span>
+        <span class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-bold">TL;DR &middot; The Short Version</span>
+        <span class="font-tabular text-[11px] text-ink-faint">${post.reading_time_minutes} min read</span>
       </div>
       <p class="text-[0.98rem] sm:text-base leading-[1.7] text-ink font-medium">${escapeHtml(post.tldr_summary)}</p>
     </section>`
@@ -1009,10 +988,10 @@ export function renderBlogPostPage(opts: {
 
   const keyFactsHtml =
     post.key_facts_json.length > 0
-      ? `<section aria-labelledby="key-facts-heading" class="mt-6 rounded-[10px] border border-hairline bg-surface overflow-hidden shadow-[var(--shadow-subtle)]">
+      ? `<section aria-labelledby="key-facts-heading" class="mt-6 rounded-2xl border border-hairline bg-surface overflow-hidden shadow-[var(--shadow-subtle)]">
       <div class="px-5 py-3 bg-subtle border-b border-hairline flex items-center justify-between gap-3">
-        <h2 id="key-facts-heading" class="font-tabular text-[11px] uppercase tracking-[0.14em] text-ink-secondary font-bold">Verified Key Facts</h2>
-        <span class="font-tabular text-[11px] text-ink-faint">${post.key_facts_json.length} structured data points</span>
+        <h2 id="key-facts-heading" class="font-tabular text-[11px] uppercase tracking-[0.14em] text-ink-secondary font-bold">Key Numbers &amp; Specs</h2>
+        <span class="font-tabular text-[11px] text-ink-faint">${post.key_facts_json.length} verified points</span>
       </div>
       <div class="overflow-x-auto">
         <table class="w-full text-left border-collapse text-sm">
@@ -1021,12 +1000,12 @@ export function renderBlogPostPage(opts: {
               .map((fact) => {
                 const srcHref = fact.source_url ? safeHref(fact.source_url, '') : '';
                 return `<tr class="hover:bg-subtle/60 transition-colors">
-              <th scope="row" class="py-3 px-5 font-tabular text-xs font-medium text-ink-muted w-1/3 align-top">${escapeHtml(fact.label)}</th>
-              <td class="py-3 px-5 text-ink align-top">${escapeHtml(fact.value)}</td>
+              <th scope="row" class="py-3 px-4 sm:px-5 font-tabular text-xs font-medium text-ink-muted w-1/3 align-top">${escapeHtml(fact.label)}</th>
+              <td class="py-3 px-4 sm:px-5 text-ink align-top">${escapeHtml(fact.value)}</td>
               ${
                 srcHref
-                  ? `<td class="py-3 px-5 font-tabular text-xs text-right whitespace-nowrap align-top"><a href="${escapeHtml(srcHref)}" target="_blank" rel="noopener noreferrer" class="text-accent hover:underline underline-offset-2">${escapeHtml(extractDomain(srcHref))} &nearr;</a></td>`
-                  : `<td class="py-3 px-5"></td>`
+                  ? `<td class="py-3 px-4 sm:px-5 font-tabular text-xs text-right whitespace-nowrap align-top"><a href="${escapeHtml(srcHref)}" target="_blank" rel="noopener noreferrer" class="text-accent hover:underline underline-offset-2">${escapeHtml(extractDomain(srcHref))} &nearr;</a></td>`
+                  : `<td class="py-3 px-4 sm:px-5"></td>`
               }
             </tr>`;
               })
@@ -1040,7 +1019,7 @@ export function renderBlogPostPage(opts: {
   const tocHtml = hasToc
     ? `<aside aria-label="Table of contents" class="hidden lg:block lg:col-span-4 xl:col-span-3">
       <div class="sticky top-28 space-y-4">
-        <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-ink-faint font-semibold">On This Briefing</p>
+        <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-ink-faint font-semibold">In This Story</p>
         <nav class="space-y-0.5">
           ${headings
             .map((h) => {
@@ -1049,14 +1028,14 @@ export function renderBlogPostPage(opts: {
             })
             .join('\n          ')}
         </nav>
-        <div class="pt-4 border-t border-hairline space-y-2 font-tabular text-xs">
-          <a href="${markdownUrl}" class="flex items-center justify-between text-ink-muted hover:text-accent transition-colors">
-            <span>View Markdown (.md)</span>
-            <span aria-hidden="true">&rarr;</span>
-          </a>
-          <a href="#sources" class="flex items-center justify-between text-ink-muted hover:text-accent transition-colors">
-            <span>Primary Sources (${post.sources_json.length})</span>
+        <div class="pt-4 border-t border-hairline space-y-2.5 text-xs">
+          <a href="#sources" class="flex items-center justify-between font-tabular text-ink-muted hover:text-accent transition-colors">
+            <span>Cited Sources (${post.sources_json.length})</span>
             <span aria-hidden="true">&darr;</span>
+          </a>
+          <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="flex items-center justify-between font-medium text-ink-secondary hover:text-accent transition-colors">
+            <span>Connect with ${escapeHtml(authorName)}</span>
+            <span aria-hidden="true">&nearr;</span>
           </a>
         </div>
       </div>
@@ -1066,7 +1045,7 @@ export function renderBlogPostPage(opts: {
   const tagsHtml =
     post.tags_json.length > 0
       ? `<div class="mt-10 pt-6 border-t border-hairline flex flex-wrap items-center gap-2">
-      <span class="font-tabular text-[11px] uppercase tracking-[0.12em] text-ink-faint mr-1">Topics:</span>
+      <span class="font-tabular text-[11px] uppercase tracking-[0.12em] text-ink-faint mr-1">Filed under:</span>
       ${post.tags_json
         .map(
           (tag) =>
@@ -1079,7 +1058,7 @@ export function renderBlogPostPage(opts: {
   const faqHtml =
     post.faq_json.length > 0
       ? `<section id="faq" aria-labelledby="faq-heading" class="mt-14 pt-8 double-rule-top">
-      <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Reference Q&amp;A</p>
+      <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Common Questions</p>
       <h2 id="faq-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1 mb-5">Frequently Asked Questions</h2>
       <div>
         ${post.faq_json
@@ -1097,12 +1076,12 @@ export function renderBlogPostPage(opts: {
   const sourcesHtml =
     post.sources_json.length > 0
       ? `<section id="sources" aria-labelledby="sources-heading" class="mt-14 pt-8 double-rule-top scroll-mt-24">
-      <div class="flex items-baseline justify-between gap-3 mb-4">
+      <div class="flex flex-wrap items-baseline justify-between gap-3 mb-4">
         <div>
-          <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">Provenance</p>
-          <h2 id="sources-heading" class="font-masthead text-2xl font-bold text-ink mt-1">Primary Sources &amp; Citations</h2>
+          <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">References</p>
+          <h2 id="sources-heading" class="font-masthead text-2xl font-bold text-ink mt-1">Primary Sources &amp; Links</h2>
         </div>
-        <span class="font-tabular text-xs text-ink-faint">${post.sources_json.length} verified references</span>
+        <span class="font-tabular text-xs text-ink-faint">${post.sources_json.length} references</span>
       </div>
       <ol class="space-y-2.5 text-sm">
         ${post.sources_json
@@ -1121,123 +1100,144 @@ export function renderBlogPostPage(opts: {
     </section>`
       : '';
 
-  const authorCardHtml = `<section aria-label="Author and verification" class="mt-12 editorial-card p-6">
-    <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+  // Bottom Creator & Co-Work Card with Hamdi Soudani's LinkedIn
+  const authorCardHtml = `<section aria-label="About the authors" class="mt-12 rounded-2xl border border-strong/40 bg-surface p-6 sm:p-7 shadow-[var(--shadow-subtle)]">
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-5">
       <div class="space-y-2">
-        <p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-ink-faint font-semibold">Editorial Verification</p>
-        <h2 class="font-masthead text-xl font-bold text-ink">
-          <a href="/about" class="hover:text-accent transition-colors">${escapeHtml(authorName)}</a>
+        <p class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.12em] text-accent font-semibold">
+          <span class="h-2 w-2 rounded-full bg-[var(--accent)]" aria-hidden="true"></span>
+          <span>Co-crafted Story</span>
+        </p>
+        <h2 class="font-masthead text-xl sm:text-2xl font-bold text-ink">
+          ${escapeHtml(authorName)} <span class="text-ink-muted font-normal text-base sm:text-lg">&middot; in collaboration with Pyvren</span>
         </h2>
-        <p class="text-sm text-ink-muted leading-relaxed max-w-2xl">
-          ${escapeHtml(settings.author_bio || 'Independent technical researcher and editor focusing on primary-source engineering analysis, software security, and AI infrastructure.')}
+        <p class="text-sm text-ink-secondary leading-relaxed max-w-2xl">
+          ${escapeHtml(settings.author_bio || 'Systems engineer & technical writer exploring AI infrastructure, security, and edge craft in daily collaboration with Pyvren.')}
         </p>
       </div>
-      <div class="shrink-0 flex sm:flex-col items-center sm:items-end gap-2">
-        ${renderScoreRing(post.quality_score)}
-        <span class="font-tabular text-[11px] text-ink-faint">Audit Score</span>
+      <div class="shrink-0">
+        <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="btn-accent rounded-full px-5 py-2.5 text-xs sm:text-sm">
+          ${renderLinkedInIcon()}
+          <span>Connect on LinkedIn</span>
+        </a>
       </div>
     </div>
-    <div class="mt-4 pt-4 border-t border-hairline flex flex-wrap items-center gap-4 text-xs font-tabular">
-      <a href="/about" class="text-ink-secondary hover:text-accent underline underline-offset-2">About the Editor</a>
-      <a href="/editorial-policy" class="text-ink-secondary hover:text-accent underline underline-offset-2">Verification &amp; Correction Policy</a>
-      <a href="/contact" class="text-ink-secondary hover:text-accent underline underline-offset-2">Report an Issue</a>
+    <div class="mt-4 pt-4 border-t border-hairline flex flex-wrap items-center gap-4 text-xs text-ink-muted">
+      <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="font-medium text-ink hover:text-accent underline underline-offset-2">linkedin.com/in/hamdisoudani</a>
+      <span aria-hidden="true">&middot;</span>
+      <a href="/about" class="hover:text-accent">About the Co-Work</a>
+      <span aria-hidden="true">&middot;</span>
+      <a href="/contact" class="hover:text-accent">Send a note or correction</a>
     </div>
   </section>`;
 
+  // Related Stories (Swipeable Mobile Carousel -> 3-Col Desktop Grid)
   const relatedHtml =
     relationships.length > 0
-      ? `<section aria-labelledby="related-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-16 pt-8 double-rule-top">
+      ? `<section aria-labelledby="related-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-16 pt-8 double-rule-top" data-carousel-root>
       <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
         <div>
           <p class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">
-            <span class="cat-dot" style="--cat-color:var(--accent)" aria-hidden="true"></span>
-            <span>Connected Intelligence</span>
+            <span class="h-2 w-2 rounded-full bg-[var(--accent)]" aria-hidden="true"></span>
+            <span>Keep Reading</span>
           </p>
-          <h2 id="related-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1">Related Briefings</h2>
+          <h2 id="related-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1">Related Stories</h2>
         </div>
         <a href="/category/${encodeURIComponent(post.category_slug)}" class="font-tabular text-xs font-semibold text-ink-muted hover:text-accent transition-colors">More in ${escapeHtml(categoryName)} &rarr;</a>
       </div>
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div class="mobile-carousel md:grid md:grid-cols-3 md:gap-6" data-carousel-track>
         ${relationships
           .map((rel) =>
             renderVisualStoryCard({
               post: rel.post,
+              defaultAuthor: settings.default_author || 'Hamdi Soudani',
               reasonBadge: rel.reasonLabel,
               loading: 'lazy',
+              slideWrapper: true,
             }),
           )
           .join('\n')}
       </div>
+      ${renderMobileCarouselControls(relationships.length, 'related story')}
     </section>`
       : '';
 
-  const articleBody = `<article class="pt-8 sm:pt-12">
+  const mobileQuickTocHtml = hasToc
+    ? `<details class="mt-6 lg:hidden rounded-xl border border-hairline bg-surface p-4">
+        <summary class="font-tabular text-xs uppercase tracking-[0.1em] font-semibold text-ink cursor-pointer flex items-center justify-between">
+          <span>Jump to section (${headings.length})</span>
+          <span class="text-accent">+</span>
+        </summary>
+        <nav class="mt-3 pt-3 border-t border-hairline space-y-2 text-sm">
+          ${headings
+            .map(
+              (h) =>
+                `<a href="#${escapeHtml(h.id)}" class="block text-ink-secondary hover:text-accent ${h.level >= 3 ? 'pl-4 text-xs' : 'font-medium'}">${escapeHtml(h.text)}</a>`,
+            )
+            .join('\n')}
+        </nav>
+      </details>`
+    : '';
+
+  const articleBody = `<article class="pt-6 sm:pt-10">
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-    <nav aria-label="Breadcrumb" class="mb-6 flex flex-wrap items-center gap-2 font-tabular text-xs text-ink-faint">
+    <nav aria-label="Breadcrumb" class="mb-5 flex flex-wrap items-center gap-2 font-tabular text-xs text-ink-faint">
       <a href="/" class="hover:text-ink transition-colors">Home</a>
       <span aria-hidden="true">/</span>
-      <a href="/blog" class="hover:text-ink transition-colors">Briefings</a>
+      <a href="/blog" class="hover:text-ink transition-colors">Stories</a>
       <span aria-hidden="true">/</span>
       <a href="/category/${encodeURIComponent(post.category_slug)}" class="hover:text-ink transition-colors">${escapeHtml(categoryName)}</a>
-      <span aria-hidden="true">/</span>
-      <span class="text-ink-muted truncate max-w-[240px] sm:max-w-md" aria-current="page">${escapeHtml(post.title)}</span>
     </nav>
 
-    <header class="max-w-4xl pb-8 border-b border-strong space-y-5">
+    <header class="max-w-4xl pb-7 border-b border-strong space-y-4 sm:space-y-5">
       <div class="flex flex-wrap items-center gap-2.5">
-        <a href="/category/${encodeURIComponent(post.category_slug)}" class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-hairline bg-surface font-tabular text-[11px] font-bold uppercase tracking-[0.09em]" style="color:${catMeta.color}">
-          <span class="cat-dot" style="--cat-color:${catMeta.color}" aria-hidden="true"></span>
+        <a href="/category/${encodeURIComponent(post.category_slug)}" class="topic-tone inline-flex items-center gap-2 px-3 py-1 rounded-full border border-hairline bg-surface font-tabular text-[11px] font-bold uppercase tracking-[0.08em] topic-accent-text" style="--topic-light:${catMeta.color}; --topic-dark:${catMeta.darkColor};">
+          <span class="h-2 w-2 rounded-full topic-accent-dot" aria-hidden="true"></span>
           <span>${escapeHtml(categoryName)}</span>
         </a>
         <span class="badge-editorial">${escapeHtml(formatArchetype(post.archetype))}</span>
-        ${renderScoreBadge(post.quality_score)}
       </div>
 
-      <h1 class="font-masthead text-3xl sm:text-4xl lg:text-[2.95rem] font-bold leading-[1.08] text-ink">
+      <h1 class="font-masthead text-2xl sm:text-4xl lg:text-[2.85rem] font-bold leading-[1.1] text-ink">
         ${escapeHtml(post.title)}
       </h1>
 
-      <p class="text-lg sm:text-[1.1875rem] text-ink-secondary leading-relaxed">
+      <p class="text-base sm:text-[1.15rem] text-ink-secondary leading-relaxed">
         ${escapeHtml(post.description)}
       </p>
 
-      <div class="pt-2 flex flex-wrap items-center justify-between gap-4 font-tabular text-xs text-ink-muted">
-        <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          <span>By <a href="/about" class="text-ink font-semibold hover:text-accent underline underline-offset-2">${escapeHtml(authorName)}</a></span>
+      <div class="pt-1 flex flex-wrap items-center justify-between gap-3 text-xs text-ink-muted">
+        <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+          <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="font-semibold text-ink hover:text-accent transition-colors">${escapeHtml(coWorkByline)}</a>
           <span aria-hidden="true">&middot;</span>
-          <time datetime="${escapeHtml(publishedIso)}">${escapeHtml(formatDate(publishedIso))}</time>
+          <time datetime="${escapeHtml(publishedIso)}" class="font-tabular">${escapeHtml(formatDate(publishedIso))}</time>
           ${
             showUpdated
-              ? `<span aria-hidden="true">&middot;</span><span>Updated <time datetime="${escapeHtml(updatedIso)}">${escapeHtml(formatDate(updatedIso))}</time></span>`
+              ? `<span aria-hidden="true">&middot;</span><span class="font-tabular">Updated <time datetime="${escapeHtml(updatedIso)}">${escapeHtml(formatDate(updatedIso))}</time></span>`
               : ''
           }
           <span aria-hidden="true">&middot;</span>
-          <span>${post.reading_time_minutes} min read (${post.word_count.toLocaleString('en-US')} words)</span>
+          <span class="font-tabular">${post.reading_time_minutes} min read</span>
         </div>
-
-        <a href="${markdownUrl}" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-hairline bg-surface hover:border-strong hover:text-accent transition-colors text-ink-secondary" title="Raw Markdown edition for developers and AI agents">
-          <span>View Markdown (.md)</span>
-        </a>
       </div>
     </header>
 
-    <!-- Full-Bleed Framed Editorial Cover Illustration -->
-    <figure class="mt-8 max-w-4xl rounded-[14px] overflow-hidden border border-hairline bg-surface shadow-[var(--shadow-subtle)]">
-      <img src="${coverArtSrc}" alt="${escapeHtml(post.title)}" width="1200" height="630" loading="eager" class="w-full aspect-[1200/630] object-cover block">
-    </figure>
+    ${heroVisualHtml}
 
     <div class="max-w-4xl">
       ${tldrHtml}
       ${keyFactsHtml}
+      ${mobileQuickTocHtml}
       ${renderAdSlot(settings, 'Advertisement')}
     </div>
 
-    <div class="mt-10 grid grid-cols-1 ${hasToc ? 'lg:grid-cols-12 gap-10 xl:gap-12' : ''} items-start">
+    <div class="mt-9 grid grid-cols-1 ${hasToc ? 'lg:grid-cols-12 gap-10 xl:gap-12' : ''} items-start">
       <div class="${hasToc ? 'lg:col-span-8 xl:col-span-9' : 'max-w-3xl'} min-w-0">
         <div class="prose-editorial max-w-[70ch]">
           ${post.body_html}
         </div>
         <div class="max-w-[70ch]">
+          ${referenceGalleryHtml}
           ${tagsHtml}
           ${faqHtml}
           ${sourcesHtml}
@@ -1254,9 +1254,12 @@ export function renderBlogPostPage(opts: {
 </article>`;
 
   const baseUrl = normalizeBaseUrl(settings.base_url);
-  const siteName = settings.site_name || 'Pyvren Research';
+  const siteName = settings.site_name || 'The Pyvren Dispatch';
   const postUrl = `${baseUrl}/blog/${encodeURIComponent(post.slug)}`;
-  const postOgImageUrl = `${baseUrl}/og/${encodeURIComponent(post.slug)}.svg`;
+  const postOgImageUrl = hasRealCover
+    ? post.cover_image_url!.trim()
+    : `${baseUrl}/og/${encodeURIComponent(post.slug)}.svg`;
+
   const combinedKeywords: string[] = [];
   const seenKeywords = new Set<string>();
   for (const raw of [...(post.keywords_json || []), ...(post.tags_json || [])]) {
@@ -1267,6 +1270,7 @@ export function renderBlogPostPage(opts: {
     seenKeywords.add(key);
     combinedKeywords.push(trimmed);
   }
+
   const jsonLd: unknown[] = [
     {
       '@context': 'https://schema.org',
@@ -1286,7 +1290,8 @@ export function renderBlogPostPage(opts: {
       author: {
         '@type': 'Person',
         name: authorName,
-        url: `${baseUrl}/about`,
+        url: HAMDI_LINKEDIN_URL,
+        sameAs: [HAMDI_LINKEDIN_URL],
       },
       publisher: {
         '@type': 'Organization',
@@ -1300,7 +1305,7 @@ export function renderBlogPostPage(opts: {
       '@type': 'BreadcrumbList',
       itemListElement: [
         { '@type': 'ListItem', position: 1, name: 'Home', item: `${baseUrl}/` },
-        { '@type': 'ListItem', position: 2, name: 'Briefings', item: `${baseUrl}/blog` },
+        { '@type': 'ListItem', position: 2, name: 'Stories', item: `${baseUrl}/blog` },
         {
           '@type': 'ListItem',
           position: 3,
@@ -1341,6 +1346,7 @@ export function renderBlogPostPage(opts: {
     jsonLd,
     currentPath: `/blog/${post.slug}`,
     markdownAlternateUrl: `${baseUrl}${markdownUrl}`,
+    initialTheme,
     bodyHtml: articleBody,
   });
 }
@@ -1352,13 +1358,14 @@ export function renderBlogPostPage(opts: {
 export function renderTrustPage(opts: {
   settings: SiteSettings;
   kind: 'about' | 'privacy' | 'contact' | 'editorial-policy';
+  initialTheme?: 'light' | 'dark';
 }): string {
-  const { settings, kind } = opts;
-  const siteName = settings.site_name || 'Pyvren';
-  const author = settings.default_author || 'Editorial Desk';
+  const { settings, kind, initialTheme } = opts;
+  const siteName = settings.site_name || 'The Pyvren Dispatch';
+  const author = settings.default_author || 'Hamdi Soudani';
   const authorBio =
     settings.author_bio ||
-    'Independent technical writer and systems engineer curating primary-source briefings across AI engineering, security advisories, and cloud infrastructure.';
+    'Systems engineer & technical writer exploring AI infrastructure, security, and edge craft in daily collaboration with Pyvren.';
   const contactEmail = settings.contact_email || 'editorial@pyvren.com';
   const mailtoHref = safeHref(`mailto:${contactEmail}`, `mailto:${contactEmail}`);
 
@@ -1367,109 +1374,88 @@ export function renderTrustPage(opts: {
     { eyebrow: string; title: string; lead: string; bodyHtml: string }
   > = {
     about: {
-      eyebrow: 'About & Masthead',
+      eyebrow: 'About the Co-Work',
       title: `About ${siteName}`,
       lead:
         settings.site_tagline ||
-        'Independent technical intelligence grounded in primary sources, reproducible benchmarks, and structured editorial verification.',
+        'Field notes, benchmarks, and deep dives into AI systems, security, and cloud craft — co-crafted by Hamdi Soudani & Pyvren.',
       bodyHtml: `
-        <h2>Editorial Mission</h2>
-        <p>${escapeHtml(siteName)} publishes concise, deeply cited technical briefings for engineers, security practitioners, and technical leaders. Rather than rewriting press releases or repeating generic commentary, every briefing synthesizes primary documentation—security advisories, release changelogs, benchmark methodologies, and architectural papers—into clear, verifiable reference documents.</p>
+        <h2>Why We Built ${escapeHtml(siteName)}</h2>
+        <p>${escapeHtml(siteName)} is an engineering publication for builders who care about real numbers, reproducible configurations, and primary sources. Instead of rehashing press releases, every piece digs into official advisories, benchmark repositories, changelogs, and technical papers.</p>
 
-        <h2>Human Editorship &amp; Responsibility</h2>
-        <p><strong>Lead Editor:</strong> ${escapeHtml(author)}</p>
+        <h2>Human &times; Agent Collaboration</h2>
+        <p><strong>Creator &amp; Editor:</strong> <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer">${escapeHtml(author)}</a> — in daily collaboration with <strong>Pyvren</strong>.</p>
         <p>${escapeHtml(authorBio)}</p>
-        <p>Every published briefing on ${escapeHtml(siteName)} is governed by explicit quality standards and human editorial accountability. We maintain full transparency around how automated research tools assist our desk; read our complete <a href="/editorial-policy">Editorial &amp; Verification Policy</a> for details.</p>
+        <p>We believe the best technical writing happens when human engineering taste and skepticism guide deep research tools. Pyvren helps gather primary documentation, benchmark data, and visual figures; ${escapeHtml(author)} shapes the editorial bar, standards, and accountability.</p>
 
-        <h2>Built for Humans and Open Knowledge Systems</h2>
-        <p>We believe high-signal technical journalism should load instantaneously, remain readable without client-side scripts, and expose clean structured metadata. Every briefing is available as server-rendered HTML, raw Markdown (<code>.md</code>), RSS (<code>/rss.xml</code>), and structured JSON (<code>/api/v1/posts</code>), alongside our publisher index at <a href="/llms.txt">/llms.txt</a>.</p>
-
-        <h2>Contact the Masthead</h2>
-        <p>For editorial inquiries, factual corrections, or technical feedback, reach our desk at <a href="${escapeHtml(mailtoHref)}">${escapeHtml(contactEmail)}</a> or visit our <a href="/contact">Contact page</a>.</p>
+        <h2>Connect with ${escapeHtml(author)}</h2>
+        <p>Want to collaborate, discuss AI systems &amp; edge architecture, or share feedback on a story? Connect directly on LinkedIn at <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer">linkedin.com/in/hamdisoudani</a> or write to <a href="${escapeHtml(mailtoHref)}">${escapeHtml(contactEmail)}</a>.</p>
       `,
     },
 
     'editorial-policy': {
-      eyebrow: 'Standards & Provenance',
-      title: 'Editorial & Verification Policy',
+      eyebrow: 'Editorial Craft',
+      title: 'Editorial & Verification Standards',
       lead:
-        'How we research, audit, score, and human-verify every technical dossier before it reaches readers.',
+        'How we research, fact-check, and co-craft every technical story before publication.',
       bodyHtml: `
-        <h2>1. Primary-Source Grounding First</h2>
-        <p>Every briefing published on ${escapeHtml(siteName)} must trace its claims to primary sources: official vendor security advisories, CVE entries, upstream release notes, academic papers, or publicly reproducible benchmark repositories. Claims without verifiable provenance are rejected during review.</p>
+        <h2>1. Primary Sources First</h2>
+        <p>Every story published on ${escapeHtml(siteName)} links directly to its primary sources: vendor security advisories, CVE records, upstream commits, academic papers, and reproducible benchmark repositories.</p>
 
-        <h2>2. Multi-Stage Verification &amp; Anti-Slop Standard</h2>
-        <p>To keep our archive dense with real engineering value, our editorial workflow uses a multi-stage verification pipeline:</p>
-        <ol>
-          <li><strong>Structured Source Collection:</strong> Research tools retrieve primary feeds, advisories, and documentation with full URL provenance logging.</li>
-          <li><strong>Deterministic Quality &amp; Citation Linting:</strong> Each draft is audited for answer-first clarity, structured key facts, valid primary-source citations, and strict exclusion of hollow AI clichés, filler introductions, or unsupported superlatives.</li>
-          <li><strong>Rubric Scoring &amp; Human Editorial Review:</strong> Briefings are scored across source grounding, information gain, structural clarity, and reader safety. Lead editor ${escapeHtml(author)} oversees editorial standards, spot-checks flagged claims, and retains final authority to edit, hold, or unpublish any piece.</li>
-        </ol>
+        <h2>2. Practical Engineering Honesty</h2>
+        <p>We test ideas against real operational constraints — latency budgets, memory ceilings, token costs, and security boundaries — and always document when <em>not</em> to adopt a tool or pattern.</p>
 
-        <h2>3. Disclosure on Automation Assistance</h2>
-        <p>${escapeHtml(siteName)} transparently uses structured AI research workflows to assist with primary-source discovery, draft structuring, and rubric auditing. Automation never replaces factual accountability: all published pages expose their primary source URLs so readers can independently verify every technical claim.</p>
+        <h2>3. Transparent Human + AI Co-Creation</h2>
+        <p>${escapeHtml(siteName)} pairs ${escapeHtml(author)}’s editorial direction with Pyvren’s research and verification workflow. Every draft is checked for source grounding, concrete metrics, defensive safety, and clear prose before going live.</p>
 
-        <h2>4. Corrections &amp; Updates Policy</h2>
-        <p>Technical ecosystems evolve rapidly. When an upstream patch changes, a benchmark is revised, or a reader identifies an inaccuracy, we update the briefing promptly and reflect the modification timestamp in the article header and structured metadata. To request a correction, email <a href="${escapeHtml(mailtoHref)}">${escapeHtml(contactEmail)}</a> with the article URL and supporting primary source.</p>
+        <h2>4. Corrections &amp; Updates</h2>
+        <p>When upstream versions or benchmarks change, we update stories promptly and display the revision date. Spot something that needs an update? Reach out via <a href="${escapeHtml(mailtoHref)}">${escapeHtml(contactEmail)}</a> or <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer">LinkedIn</a>.</p>
 
-        <h2>5. Editorial Independence &amp; Advertising</h2>
-        <p>Editorial coverage is strictly separated from advertising. Sponsored slots or programmatic ads (such as Google AdSense, when enabled) never influence topic selection, benchmark conclusions, or security recommendations.</p>
+        <h2>5. Editorial Independence</h2>
+        <p>Editorial opinions and benchmark conclusions are completely independent of any sponsorship or programmatic advertising.</p>
       `,
     },
 
     privacy: {
-      eyebrow: 'Privacy & Advertising Disclosure',
+      eyebrow: 'Reader Privacy',
       title: 'Privacy & Cookie Policy',
       lead:
-        `How ${siteName} handles server logs, cookies, reader privacy, and advertising partners.`,
+        `How ${siteName} respects your privacy, remembers your reading theme, and handles advertising disclosures.`,
       bodyHtml: `
         <h2>1. Minimal Data Collection</h2>
-        <p>${escapeHtml(siteName)} is engineered to operate with minimal data collection. Public readers can browse all briefings without creating an account, logging in, or executing third-party analytics trackers. Standard edge server logs (such as anonymized request metadata and HTTP status codes) may be processed briefly by our infrastructure provider to prevent abuse and ensure reliability.</p>
+        <p>You can read all stories on ${escapeHtml(siteName)} without creating an account. Standard server logs (such as anonymized IP rate-limiting for search protection and HTTP status codes) are processed transiently on the edge to keep the site fast and reliable.</p>
 
-        <h2>2. Cookies &amp; Local Preferences</h2>
+        <h2>2. Theme Preference Cookie &amp; Storage</h2>
         <ul>
-          <li><strong>Appearance Preference:</strong> If you toggle light or dark mode, your browser saves a local preference key (<code>pyvren-theme</code>) strictly on your device.</li>
-          <li><strong>Administrative Cookies:</strong> Strictly necessary, HttpOnly authentication cookies are used solely for authorized editorial staff accessing the private admin interface.</li>
+          <li><strong>Light / Dark Mode:</strong> When you switch between warm paper and dark mode, we save your preference in <code>localStorage</code> (<code>pyvren-theme</code>) and a first-party cookie (<code>pyvren_theme</code>) so pages render immediately in your chosen theme without flashing.</li>
+          <li><strong>Editorial Session Cookie:</strong> Strictly necessary <code>HttpOnly</code> session cookies are used only for the site owner.</li>
         </ul>
 
-        <h2>3. Google AdSense &amp; Third-Party Advertising</h2>
-        <p>When advertising is active on ${escapeHtml(siteName)}, we may partner with Google AdSense and certified third-party vendors to display contextual or personalized advertisements:</p>
+        <h2>3. Google AdSense &amp; Advertising Partners</h2>
+        <p>When advertising is enabled on ${escapeHtml(siteName)}, Google AdSense and certified vendors may use cookies to display contextual or personalized ads:</p>
         <ul>
-          <li>Third-party vendors, including Google, use cookies to serve ads based on a visitor&rsquo;s prior visits to this website or other websites on the internet.</li>
-          <li>Google&rsquo;s use of advertising cookies enables it and its partners to serve ads to users based on their visits to ${escapeHtml(siteName)} and/or other sites across the web.</li>
-          <li>You may opt out of personalized advertising at any time by visiting <a href="https://myadcenter.google.com/" target="_blank" rel="noopener noreferrer">Google My Ad Center (https://myadcenter.google.com/)</a>.</li>
-          <li>You can also manage third-party vendor cookies for personalized advertising via <a href="https://optout.aboutads.info/" target="_blank" rel="noopener noreferrer">aboutads.info</a>.</li>
+          <li>You can manage or opt out of personalized Google ads anytime at <a href="https://myadcenter.google.com/" target="_blank" rel="noopener noreferrer">Google My Ad Center</a> or <a href="https://optout.aboutads.info/" target="_blank" rel="noopener noreferrer">aboutads.info</a>.</li>
         </ul>
 
-        <h2>4. Your Privacy Rights</h2>
-        <p>Depending on your jurisdiction (including EEA/UK GDPR and California CCPA/CPRA), you may request information about any personal data associated with direct email correspondence you have sent to our desk, or request its deletion.</p>
-
-        <h2>5. Contact Regarding Privacy</h2>
-        <p>For privacy inquiries or data deletion requests, contact us directly at <a href="${escapeHtml(mailtoHref)}">${escapeHtml(contactEmail)}</a>.</p>
+        <h2>4. Contact</h2>
+        <p>For any privacy questions, email <a href="${escapeHtml(mailtoHref)}">${escapeHtml(contactEmail)}</a>.</p>
       `,
     },
 
     contact: {
-      eyebrow: 'Editorial Desk',
+      eyebrow: 'Say Hello',
       title: `Contact ${siteName}`,
       lead:
-        'Reach our editorial desk for factual corrections, technical tips, security disclosures, or syndication inquiries.',
+        'Reach out for collaborations, story tips, factual corrections, or engineering conversations.',
       bodyHtml: `
-        <h2>Direct Editorial Desk</h2>
-        <p>Email: <a href="${escapeHtml(mailtoHref)}">${escapeHtml(contactEmail)}</a></p>
-        <p>Lead Editor: ${escapeHtml(author)}</p>
-
-        <h2>Corrections &amp; Technical Tips</h2>
-        <p>If you spot an outdated version number, a broken primary citation, or an emerging security advisory worth an in-depth teardown, please include the relevant article URL and primary-source documentation in your message. Verified corrections are prioritized and logged promptly.</p>
-
-        <h2>Syndication &amp; Machine-Readable Access</h2>
-        <p>Developers, researchers, and feed readers can consume our published briefings directly via standard open endpoints:</p>
+        <h2>Connect Directly</h2>
         <ul>
-          <li>RSS Feed: <a href="/rss.xml">/rss.xml</a></li>
-          <li>Sitemap: <a href="/sitemap.xml">/sitemap.xml</a></li>
-          <li>LLM &amp; Agent Index: <a href="/llms.txt">/llms.txt</a></li>
-          <li>Public JSON API: <a href="/api/v1/posts">/api/v1/posts</a></li>
+          <li><strong>LinkedIn:</strong> <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer">Hamdi Soudani (linkedin.com/in/hamdisoudani)</a></li>
+          <li><strong>Email:</strong> <a href="${escapeHtml(mailtoHref)}">${escapeHtml(contactEmail)}</a></li>
         </ul>
+
+        <h2>Story Tips &amp; Corrections</h2>
+        <p>Spotted an updated benchmark, a newly patched CVE, or an inaccuracy in a published piece? Send over the article link and primary source — we appreciate sharp-eyed readers and update stories quickly.</p>
       `,
     },
   };
@@ -1478,26 +1464,37 @@ export function renderTrustPage(opts: {
   const baseUrl = normalizeBaseUrl(settings.base_url);
   const path = `/${kind}`;
 
-  const trustBody = `<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16">
+  const trustBody = `<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-16">
   <header class="pb-8 border-b border-strong space-y-4">
     <p class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">
-      <span class="cat-dot" style="--cat-color:var(--accent)" aria-hidden="true"></span>
+      <span class="h-2 w-2 rounded-full bg-[var(--accent)]" aria-hidden="true"></span>
       <span>${escapeHtml(page.eyebrow)}</span>
     </p>
     <h1 class="font-masthead text-3xl sm:text-5xl font-bold text-ink leading-[1.08]">${escapeHtml(page.title)}</h1>
-    <p class="text-lg text-ink-secondary leading-relaxed">${escapeHtml(page.lead)}</p>
+    <p class="text-base sm:text-lg text-ink-secondary leading-relaxed">${escapeHtml(page.lead)}</p>
   </header>
 
   <div class="mt-10 prose-editorial max-w-[70ch]">
     ${page.bodyHtml}
   </div>
 
-  <div class="mt-12 pt-6 border-t border-hairline flex flex-wrap items-center gap-4 font-tabular text-xs text-ink-muted">
+  <div class="mt-12 rounded-2xl border border-hairline bg-surface p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div>
+      <p class="font-masthead text-lg font-bold text-ink">${escapeHtml(author)} &middot; Co-crafted with Pyvren</p>
+      <p class="text-xs sm:text-sm text-ink-muted">Follow new stories or connect directly on LinkedIn.</p>
+    </div>
+    <a href="${HAMDI_LINKEDIN_URL}" target="_blank" rel="noopener noreferrer" class="btn-accent rounded-full px-5 text-xs sm:text-sm shrink-0">
+      ${renderLinkedInIcon()}
+      <span>Connect on LinkedIn</span>
+    </a>
+  </div>
+
+  <div class="mt-8 pt-6 border-t border-hairline flex flex-wrap items-center gap-4 font-tabular text-xs text-ink-muted">
     <a href="/about" class="hover:text-accent ${kind === 'about' ? 'text-accent font-semibold' : ''}">About</a>
     <span aria-hidden="true">&middot;</span>
-    <a href="/editorial-policy" class="hover:text-accent ${kind === 'editorial-policy' ? 'text-accent font-semibold' : ''}">Editorial Policy</a>
+    <a href="/editorial-policy" class="hover:text-accent ${kind === 'editorial-policy' ? 'text-accent font-semibold' : ''}">Editorial Standards</a>
     <span aria-hidden="true">&middot;</span>
-    <a href="/privacy" class="hover:text-accent ${kind === 'privacy' ? 'text-accent font-semibold' : ''}">Privacy &amp; Ad Policy</a>
+    <a href="/privacy" class="hover:text-accent ${kind === 'privacy' ? 'text-accent font-semibold' : ''}">Privacy</a>
     <span aria-hidden="true">&middot;</span>
     <a href="/contact" class="hover:text-accent ${kind === 'contact' ? 'text-accent font-semibold' : ''}">Contact</a>
   </div>
@@ -1510,6 +1507,7 @@ export function renderTrustPage(opts: {
     settings,
     ogType: 'website',
     currentPath: path,
+    initialTheme,
     bodyHtml: trustBody,
   });
 }
@@ -1518,31 +1516,38 @@ export function renderTrustPage(opts: {
    5. 404 Not Found Page
    ========================================================================== */
 
-export function renderNotFoundPage(opts: { settings: SiteSettings }): string {
-  const siteName = opts.settings.site_name || 'Pyvren';
+export function renderNotFoundPage(opts: {
+  settings: SiteSettings;
+  initialTheme?: 'light' | 'dark';
+}): string {
+  const siteName = opts.settings.site_name || 'The Pyvren Dispatch';
   const baseUrl = normalizeBaseUrl(opts.settings.base_url);
-  const notFoundBody = `<div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-24 text-center space-y-6">
+  const notFoundBody = `<div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-20 sm:py-24 text-center space-y-6">
+  <div class="mx-auto w-44 h-28">
+    ${renderTopicCrewSvg('agentic-browser-web-data', '404')}
+  </div>
   <p class="inline-flex items-center gap-2 font-tabular text-xs uppercase tracking-[0.16em] text-accent font-semibold">
-    <span class="cat-dot" style="--cat-color:var(--accent)" aria-hidden="true"></span>
-    <span>Error 404</span>
+    <span class="h-2 w-2 rounded-full bg-[var(--accent)]" aria-hidden="true"></span>
+    <span>404 &middot; Off the Map</span>
   </p>
-  <h1 class="font-masthead text-4xl sm:text-5xl font-bold text-ink">Briefing Not Found</h1>
+  <h1 class="font-masthead text-3xl sm:text-5xl font-bold text-ink">We couldn’t find that page</h1>
   <p class="text-base text-ink-muted max-w-lg mx-auto leading-relaxed">
-    The requested dossier on ${escapeHtml(siteName)} may have been moved, unpublished, or the URL may contain a typo.
+    Boo looked everywhere on ${escapeHtml(siteName)}, but this story may have moved or the link has a typo.
   </p>
   <div class="pt-2 flex flex-wrap items-center justify-center gap-3">
-    <a href="/" class="btn-accent rounded-full px-5">Return Home</a>
-    <a href="/blog" class="btn-ghost rounded-full px-5">Browse All Briefings</a>
+    <a href="/" class="btn-accent rounded-full px-5">Back to Home</a>
+    <a href="/blog" class="btn-ghost rounded-full px-5">Browse All Stories</a>
   </div>
 </div>`;
 
   return renderPublicLayout({
-    title: `404 Briefing Not Found — ${siteName}`,
+    title: `Page Not Found — ${siteName}`,
     description: `The requested page could not be found on ${siteName}.`,
     canonicalUrl: `${baseUrl}/404`,
     settings: opts.settings,
     ogType: 'website',
     robotsMeta: 'noindex, follow',
+    initialTheme: opts.initialTheme,
     bodyHtml: notFoundBody,
   });
 }

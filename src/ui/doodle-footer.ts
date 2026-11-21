@@ -3,7 +3,7 @@ import type { SiteSettings } from '../types';
 
 interface DoodleLinkColumn {
   heading: string;
-  links: { label: string; href: string; mono?: boolean }[];
+  links: { label: string; href: string; external?: boolean }[];
 }
 
 interface FloaterSpec {
@@ -17,39 +17,38 @@ interface FloaterSpec {
 
 const LINK_COLUMNS: DoodleLinkColumn[] = [
   {
-    heading: 'Briefings',
+    heading: 'Stories',
     links: [
-      { label: 'All Briefings', href: '/blog' },
-      { label: 'AI Coding & MCP', href: '/category/ai-coding-agents-mcp' },
-      { label: 'AI Security & Jailbreaks', href: '/category/ai-security-jailbreaks' },
+      { label: 'All Stories', href: '/blog' },
+      { label: 'Coding & MCP', href: '/category/ai-coding-agents-mcp' },
+      { label: 'AI Security', href: '/category/ai-security-jailbreaks' },
       { label: 'Frontier LLMs', href: '/category/ai-llms' },
     ],
   },
   {
-    heading: 'Tracks',
+    heading: 'Topics',
     links: [
-      { label: 'Cloud & GPU Infra', href: '/category/cloud-gpu-infra' },
-      { label: 'Web Data & GEO', href: '/category/agentic-browser-web-data' },
-      { label: 'CVEs & Benchmarks', href: '/category/dev-tooling-benchmarks' },
+      { label: 'Cloud & GPU', href: '/category/cloud-gpu-infra' },
+      { label: 'Web & Search', href: '/category/agentic-browser-web-data' },
+      { label: 'CVEs & Patches', href: '/category/dev-tooling-benchmarks' },
       { label: 'Search Archive', href: '/blog#search' },
     ],
   },
   {
-    heading: 'Machine API',
+    heading: 'The Desk',
     links: [
-      { label: '/llms.txt', href: '/llms.txt', mono: true },
-      { label: '/llms-full.txt', href: '/llms-full.txt', mono: true },
-      { label: '/feed.json', href: '/feed.json', mono: true },
-      { label: '/api/v1/posts', href: '/api/v1/posts', mono: true },
+      { label: 'About the Co-Work', href: '/about' },
+      { label: 'Editorial Standards', href: '/editorial-policy' },
+      { label: 'Privacy Policy', href: '/privacy' },
+      { label: 'Contact', href: '/contact' },
     ],
   },
   {
-    heading: 'Publication',
+    heading: 'Connect',
     links: [
-      { label: 'About & Masthead', href: '/about' },
-      { label: 'Editorial Policy', href: '/editorial-policy' },
-      { label: 'Privacy Policy', href: '/privacy' },
-      { label: 'Contact Desk', href: '/contact' },
+      { label: 'Hamdi on LinkedIn ↗', href: 'https://www.linkedin.com/in/hamdisoudani/', external: true },
+      { label: 'RSS Feed', href: '/rss.xml' },
+      { label: 'Latest Dispatches', href: '/blog' },
     ],
   },
 ];
@@ -649,11 +648,11 @@ const DOODLE_FOOTER_INLINE_SCRIPT = `(function(){
 })();`;
 
 export function renderDoodleCrewFooter(settings: SiteSettings): string {
-  const siteName = settings.site_name || 'Pyvren';
+  const siteName = settings.site_name || 'The Pyvren Dispatch';
   const tagline =
     settings.site_tagline ||
-    'Independent AI systems reporting, primary-source security teardowns, and reproducible engineering benchmarks.';
-  const author = settings.default_author || 'Editorial Desk';
+    'Field notes, benchmarks, and deep dives into AI systems, security, and cloud craft — co-crafted by Hamdi Soudani & Pyvren.';
+  const author = settings.default_author || 'Hamdi Soudani';
   const year = new Date().getUTCFullYear();
 
   const columnsHtml = LINK_COLUMNS.map(
@@ -663,7 +662,7 @@ export function renderDoodleCrewFooter(settings: SiteSettings): string {
           ${col.links
             .map(
               (l) =>
-                `<li><a href="${escapeHtml(l.href)}" class="dcf-link${l.mono ? ' font-tabular text-[13px]' : ''}">${escapeHtml(l.label)}</a></li>`,
+                `<li><a href="${escapeHtml(l.href)}"${l.external ? ' target="_blank" rel="noopener noreferrer"' : ''} class="dcf-link">${escapeHtml(l.label)}</a></li>`,
             )
             .join('\n          ')}
         </ul>
@@ -679,7 +678,7 @@ export function renderDoodleCrewFooter(settings: SiteSettings): string {
           <span class="dcf-brand-name font-masthead">${escapeHtml(siteName)}</span>
         </a>
         <p class="dcf-brand-blurb">${escapeHtml(tagline)}</p>
-        <p class="dcf-brand-meta font-tabular">Primary-source verified · Zero hype · Built on the edge</p>
+        <p class="dcf-brand-meta font-tabular">Co-crafted by ${escapeHtml(author)} &amp; Pyvren · Primary sources &amp; real code</p>
       </div>
 
       <nav class="dcf-cols" aria-label="Footer navigation">
@@ -690,16 +689,16 @@ export function renderDoodleCrewFooter(settings: SiteSettings): string {
     <div class="dcf-cta-band">
       <div class="dcf-cta-copy">
         <span class="cat-dot" style="--cat-color:var(--dcf-accent)" aria-hidden="true"></span>
-        <span>Tap any character below for a desk note — or pop a drifting doodle.</span>
+        <span>Tap any crew member below for a desk note — or connect with ${escapeHtml(author)} on LinkedIn.</span>
       </div>
       <div class="dcf-cta-actions">
         <a href="/blog" class="dcf-pill dcf-pill--outline">
           ${renderBoltIcon()}
-          <span>Explore Briefings</span>
+          <span>Read Stories</span>
         </a>
-        <a href="/rss.xml" class="dcf-pill dcf-pill--solid">
+        <a href="https://www.linkedin.com/in/hamdisoudani/" target="_blank" rel="noopener noreferrer" class="dcf-pill dcf-pill--solid">
           ${renderFlameIcon()}
-          <span>Subscribe RSS</span>
+          <span>Connect on LinkedIn</span>
         </a>
       </div>
     </div>
@@ -713,15 +712,15 @@ export function renderDoodleCrewFooter(settings: SiteSettings): string {
     </div>
 
     <div class="dcf-bottom">
-      <p class="dcf-copy">&copy; ${year} ${escapeHtml(siteName)}. Edited by ${escapeHtml(author)}.</p>
+      <p class="dcf-copy">&copy; ${year} ${escapeHtml(siteName)} &middot; Co-crafted by <a href="https://www.linkedin.com/in/hamdisoudani/" target="_blank" rel="noopener noreferrer" class="underline decoration-[var(--dcf-accent)] underline-offset-4 hover:text-[var(--dcf-accent)]">${escapeHtml(author)}</a> &amp; Pyvren.</p>
       <div class="dcf-bottom-links">
-        <a href="/privacy" class="dcf-bottom-link">Privacy</a>
-        <a href="/editorial-policy" class="dcf-bottom-link">Editorial Policy</a>
-        <a href="/contact" class="dcf-bottom-link">Contact</a>
+        <a href="https://www.linkedin.com/in/hamdisoudani/" target="_blank" rel="noopener noreferrer" class="dcf-bottom-link font-medium">LinkedIn ↗</a>
         <span class="dcf-sep" aria-hidden="true">&middot;</span>
-        <a href="/sitemap.xml" class="dcf-bottom-link font-tabular">/sitemap.xml</a>
-        <a href="/news-sitemap.xml" class="dcf-bottom-link font-tabular">/news-sitemap.xml</a>
-        <a href="/llms.txt" class="dcf-bottom-link font-tabular">/llms.txt</a>
+        <a href="/about" class="dcf-bottom-link">About</a>
+        <a href="/editorial-policy" class="dcf-bottom-link">Editorial</a>
+        <a href="/privacy" class="dcf-bottom-link">Privacy</a>
+        <a href="/contact" class="dcf-bottom-link">Contact</a>
+        <a href="/rss.xml" class="dcf-bottom-link">RSS</a>
       </div>
       <button type="button" class="dcf-top-btn" data-dcf-top aria-label="Back to top">
         <span>Back to top</span>

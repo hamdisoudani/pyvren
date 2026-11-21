@@ -6,6 +6,8 @@ import type {
   Archetype,
   CategorySkill,
   DatabaseAdapter,
+  PostCreateRecord,
+  PostImage,
   PostMutationContext,
   PostRecord,
   PostStatus,
@@ -33,15 +35,15 @@ export const DEFAULT_SEEDED_SETTINGS: SiteSettings = {
     'CLI coding agents & MCP, LLM security & prompt injection defense, open-weights & local SLMs, Cloudflare Workers & GPU economics, CISA KEV advisories, and live web-data browser agents',
   default_author: 'Hamdi Soudani',
   author_bio:
-    'Systems engineer and technical editor researching AI infrastructure, model security, and edge web performance.',
-  site_name: 'Pyvren Research',
+    'Systems engineer & technical writer exploring AI infrastructure, security, and edge craft in daily collaboration with Pyvren.',
+  site_name: 'The Pyvren Dispatch',
   site_tagline:
-    'Primary-source technical research on AI systems, LLM security, and cloud infrastructure.',
+    'Field notes, benchmarks, and deep dives into AI systems, security, and cloud craft — co-crafted by Hamdi Soudani & Pyvren.',
   base_url: 'https://pyvren.com',
   adsense_client_id: null,
-  cta_headline: 'Get verified technical briefings without the noise',
+  cta_headline: 'Honest engineering stories — co-crafted with primary benchmarks & real code',
   cta_body:
-    'Every briefing cites primary benchmarks, advisories, and reproducible configurations—reviewed by engineers before publication.',
+    'Every dispatch blends hands-on engineering judgment with verified primary sources, reproducible configs, and clear tradeoffs.',
   cta_url: '/about',
   contact_email: 'editorial@pyvren.com',
   last_scheduled_run_at: null,
@@ -490,7 +492,28 @@ function normalizeSkillRow(row: CategorySkill): CategorySkill {
   };
 }
 
-function normalizePostRow(row: PostRecord): PostRecord {
+function normalizePostImages(raw: unknown): PostImage[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PostImage[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const obj = item as Partial<PostImage>;
+    if (typeof obj.url !== 'string' || !obj.url.trim()) continue;
+    out.push({
+      url: obj.url.trim(),
+      alt: typeof obj.alt === 'string' ? obj.alt.trim() : '',
+      ...(typeof obj.caption === 'string' && obj.caption.trim()
+        ? { caption: obj.caption.trim() }
+        : {}),
+      ...(typeof obj.source_page_url === 'string' && obj.source_page_url.trim()
+        ? { source_page_url: obj.source_page_url.trim() }
+        : {}),
+    });
+  }
+  return out;
+}
+
+function normalizePostRow(row: PostCreateRecord & { id: number; created_at: string; updated_at: string }): PostRecord {
   return {
     ...row,
     id: Number(row.id),
@@ -499,6 +522,15 @@ function normalizePostRow(row: PostRecord): PostRecord {
     faq_json: Array.isArray(row.faq_json) ? row.faq_json : [],
     body_markdown: row.body_markdown ?? '',
     body_html: row.body_html ?? '',
+    cover_image_url:
+      typeof row.cover_image_url === 'string' && row.cover_image_url.trim()
+        ? row.cover_image_url.trim()
+        : null,
+    cover_image_alt:
+      typeof row.cover_image_alt === 'string' && row.cover_image_alt.trim()
+        ? row.cover_image_alt.trim()
+        : null,
+    images_json: normalizePostImages(row.images_json),
     tags_json: Array.isArray(row.tags_json) ? row.tags_json : [],
     keywords_json: Array.isArray(row.keywords_json) ? row.keywords_json : [],
     sources_json: Array.isArray(row.sources_json) ? row.sources_json : [],
@@ -566,7 +598,7 @@ const SUPABASE_READ_CACHE_TTL_MS = 25_000;
 const MAX_SUPABASE_CACHE_ENTRIES = 64;
 
 const LIGHTWEIGHT_POST_COLUMNS =
-  'id,slug,title,description,tldr_summary,key_facts_json,faq_json,body_markdown,author,category_slug,archetype,tags_json,keywords_json,sources_json,review_notes_json,lint_passed,lint_errors_json,quality_score,quality_breakdown_json,reading_time_minutes,word_count,status,admin_locked,last_edited_by,published_at,created_at,updated_at';
+  'id,slug,title,description,tldr_summary,key_facts_json,faq_json,body_markdown,cover_image_url,cover_image_alt,images_json,author,category_slug,archetype,tags_json,keywords_json,sources_json,review_notes_json,lint_passed,lint_errors_json,quality_score,quality_breakdown_json,reading_time_minutes,word_count,status,admin_locked,last_edited_by,published_at,created_at,updated_at';
 
 interface CacheEntry<T> {
   value: T;
@@ -955,7 +987,7 @@ export class SupabaseRestDatabase implements DatabaseAdapter {
       if (cleaned) {
         const pattern = encodeURIComponent(`*${cleaned}*`);
         params.push(
-          `or=(title.ilike.${pattern},description.ilike.${pattern},tldr_summary.ilike.${pattern})`,
+          `or=(title.ilike.${pattern},description.ilike.${pattern},tldr_summary.ilike.${pattern},category_slug.ilike.${pattern},body_markdown.ilike.${pattern})`,
         );
       }
     }
@@ -1021,11 +1053,18 @@ export class SupabaseRestDatabase implements DatabaseAdapter {
     return Array.isArray(data) && data.length > 0;
   }
 
-  async createPost(
-    record: Omit<PostRecord, 'id' | 'created_at' | 'updated_at'>,
-  ): Promise<PostRecord> {
+  async createPost(record: PostCreateRecord): Promise<PostRecord> {
     const payload = {
       ...record,
+      cover_image_url:
+        typeof record.cover_image_url === 'string' && record.cover_image_url.trim()
+          ? record.cover_image_url.trim()
+          : null,
+      cover_image_alt:
+        typeof record.cover_image_alt === 'string' && record.cover_image_alt.trim()
+          ? record.cover_image_alt.trim()
+          : null,
+      images_json: normalizePostImages(record.images_json),
       keywords_json: Array.isArray(record.keywords_json) ? record.keywords_json : [],
       admin_locked: Boolean(record.admin_locked ?? false),
       last_edited_by: record.last_edited_by ?? null,
@@ -1368,6 +1407,7 @@ export class InMemoryDatabase implements DatabaseAdapter {
           p.title.toLowerCase().includes(query) ||
           p.description.toLowerCase().includes(query) ||
           p.tldr_summary.toLowerCase().includes(query) ||
+          p.category_slug.toLowerCase().includes(query) ||
           p.body_markdown.toLowerCase().includes(query) ||
           p.tags_json.some((t) => t.toLowerCase().includes(query)) ||
           p.keywords_json.some((k) => k.toLowerCase().includes(query)),
@@ -1437,9 +1477,7 @@ export class InMemoryDatabase implements DatabaseAdapter {
     return false;
   }
 
-  async createPost(
-    record: Omit<PostRecord, 'id' | 'created_at' | 'updated_at'>,
-  ): Promise<PostRecord> {
+  async createPost(record: PostCreateRecord): Promise<PostRecord> {
     if (await this.slugExists(record.slug)) {
       throw new Error(`Post with slug "${record.slug}" already exists`);
     }

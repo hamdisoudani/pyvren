@@ -15,17 +15,25 @@ export interface SearchSourceItem {
   snippet: string;
 }
 
+export interface ExtractedWebImage {
+  url: string;
+  alt: string;
+  caption?: string;
+  source_page_url: string;
+}
+
 export interface WebpageReadResult {
   ok: boolean;
   url: string;
   title: string;
   markdown: string;
   chars: number;
+  images?: ExtractedWebImage[];
   error?: string;
 }
 
 const MAX_EXTRACTED_CHARS = 14_000;
-const BOT_USER_AGENT = 'Pyvren-Research-Bot/1.0 (+https://pyvren.com)';
+const BOT_USER_AGENT = 'Pyvren-Dispatch/1.0 (+https://pyvren.com)';
 
 function pushTrace(trace: TraceEntry[] | undefined, entry: Omit<TraceEntry, 'timestamp'>): void {
   if (!trace) return;
@@ -1125,7 +1133,266 @@ function htmlTableToMarkdown(tableHtml: string): string {
   return `\n\n${[header, separator, ...body].join('\n')}\n\n`;
 }
 
-function convertHtmlToMarkdown(html: string): { title: string; markdown: string } {
+const BLOCKED_IMAGE_HOST_PATTERNS = [
+  'shields.io',
+  'badge.fury.io',
+  'codecov.io',
+  'coveralls.io',
+  'travis-ci.',
+  'doubleclick.net',
+  'google-analytics.com',
+  'googletagmanager.com',
+  'facebook.com',
+  'bat.bing.com',
+  'gravatar.com',
+  'avatars.githubusercontent.com',
+  'camo.githubusercontent.com',
+  'github.githubassets.com',
+];
+
+const JUNK_IMAGE_PATH_RE =
+  /(?:\/favicon|apple-touch-icon|\/avatars?\/|\/badges?\/|\/icons?\/|\/emojis?\/|\/sprites?\/|1x1|spacer\.|pixel\.|spinner\.|loader\.|\.ico(?:$|\?))/i;
+
+const JUNK_IMAGE_ALT_RE =
+  /^(?:logo|site logo|company logo|icon|avatar|profile(?:\s+picture|\s+photo)?|badge|build status|coverage|sponsor|advertisement|ad)$/i;
+
+export function isValidReferenceImageUrl(
+  rawUrl: string,
+  altText = '',
+  baseUrl?: string,
+): { ok: boolean; url: string } {
+  const cleanedRaw = decodeHtmlEntities((rawUrl || '').trim());
+  if (!cleanedRaw) return { ok: false, url: '' };
+
+  const lowerRaw = cleanedRaw.toLowerCase();
+  if (
+    lowerRaw.startsWith('data:') ||
+    lowerRaw.startsWith('blob:') ||
+    lowerRaw.startsWith('javascript:')
+  ) {
+    return { ok: false, url: '' };
+  }
+
+  let candidate = cleanedRaw;
+  if (baseUrl && !/^https?:\/\//i.test(candidate)) {
+    try {
+      candidate = new URL(candidate, baseUrl).toString();
+    } catch {
+      return { ok: false, url: '' };
+    }
+  }
+
+  const safeCheck = isSafePublicUrl(candidate);
+  if (!safeCheck.ok || !safeCheck.url) {
+    return { ok: false, url: '' };
+  }
+
+  const parsed = safeCheck.url;
+  const host = parsed.hostname.toLowerCase();
+  if (BLOCKED_IMAGE_HOST_PATTERNS.some((pat) => host.includes(pat))) {
+    return { ok: false, url: '' };
+  }
+
+  const fullPath = `${parsed.pathname}${parsed.search}`;
+  if (JUNK_IMAGE_PATH_RE.test(fullPath)) {
+    return { ok: false, url: '' };
+  }
+
+  // Block generic UI .svg icons unless explicitly labeled as a diagram/architecture/chart/figure
+  if (/\.svg(?:$|\?)/i.test(parsed.pathname)) {
+    const signal = `${parsed.pathname} ${altText}`.toLowerCase();
+    if (!/(diagram|architecture|chart|figure|benchmark|flow|topology|graph)/.test(signal)) {
+      return { ok: false, url: '' };
+    }
+  }
+
+  // Block obvious nav/brand wordmark filenames
+  const filename = parsed.pathname.split('/').pop()?.toLowerCase() || '';
+  if (/(?:^|[-_])(logo|wordmark|favicon|avatar|badge)(?:[-_.]|$)/.test(filename)) {
+    return { ok: false, url: '' };
+  }
+
+  const cleanAlt = altText.trim();
+  if (cleanAlt && JUNK_IMAGE_ALT_RE.test(cleanAlt)) {
+    return { ok: false, url: '' };
+  }
+
+  return { ok: true, url: parsed.toString() };
+}
+
+function getHtmlAttr(tagHtml: string, attrName: string): string {
+  const rx = new RegExp(`\\b${attrName}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>"']+))`, 'i');
+  const m = rx.exec(tagHtml);
+  return decodeHtmlEntities((m?.[1] ?? m?.[2] ?? m?.[3] ?? '').trim());
+}
+
+function hasTinyImageDimensions(imgTag: string): boolean {
+  const w = Number.parseInt(getHtmlAttr(imgTag, 'width'), 10);
+  const h = Number.parseInt(getHtmlAttr(imgTag, 'height'), 10);
+  if (Number.isFinite(w) && w > 0 && w < 120) return true;
+  if (Number.isFinite(h) && h > 0 && h < 90) return true;
+  return false;
+}
+
+export function extractReferenceImagesFromHtml(
+  html: string,
+  pageUrl: string,
+): ExtractedWebImage[] {
+  const results: ExtractedWebImage[] = [];
+  const seen = new Set<string>();
+
+  const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
+  const pageTitle = normalizeWhitespace(decodeHtmlEntities(titleMatch?.[1] || ''));
+
+  const pushCandidate = (rawUrl: string, rawAlt: string, rawCaption?: string) => {
+    if (results.length >= 8) return;
+    const altCleaned = normalizeWhitespace(rawAlt || rawCaption || pageTitle || 'Reference figure')
+      .replace(/^Image\s+\d+:\s*/i, '')
+      .slice(0, 220);
+    const check = isValidReferenceImageUrl(rawUrl, altCleaned, pageUrl);
+    if (!check.ok || seen.has(check.url)) return;
+    seen.add(check.url);
+    const captionCleaned = rawCaption ? normalizeWhitespace(rawCaption).slice(0, 240) : undefined;
+    results.push({
+      url: check.url,
+      alt: altCleaned || 'Technical reference figure',
+      ...(captionCleaned ? { caption: captionCleaned } : {}),
+      source_page_url: pageUrl,
+    });
+  };
+
+  // 1. OpenGraph & Twitter card images from <head>
+  const metaRegex = /<meta\b[^>]+>/gi;
+  let metaMatch: RegExpExecArray | null;
+  let ogImage = '';
+  let ogAlt = '';
+  let twitterImage = '';
+  while ((metaMatch = metaRegex.exec(html)) !== null) {
+    const tag = metaMatch[0];
+    const prop = (getHtmlAttr(tag, 'property') || getHtmlAttr(tag, 'name')).toLowerCase();
+    const content = getHtmlAttr(tag, 'content');
+    if (!content) continue;
+    if ((prop === 'og:image' || prop === 'og:image:url' || prop === 'og:image:secure_url') && !ogImage) {
+      ogImage = content;
+    } else if (prop === 'og:image:alt' && !ogAlt) {
+      ogAlt = content;
+    } else if ((prop === 'twitter:image' || prop === 'twitter:image:src') && !twitterImage) {
+      twitterImage = content;
+    }
+  }
+  if (ogImage) {
+    pushCandidate(ogImage, ogAlt || pageTitle);
+  }
+  if (twitterImage && twitterImage !== ogImage) {
+    pushCandidate(twitterImage, ogAlt || pageTitle);
+  }
+
+  // Strip nav/header/footer/script before scanning editorial figures & images
+  const bodyScope = html
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<(script|style|nav|header|footer|aside|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ');
+
+  // 2. <figure> blocks with <figcaption>
+  const figureRegex = /<figure\b[^>]*>([\s\S]*?)<\/figure>/gi;
+  let figMatch: RegExpExecArray | null;
+  while ((figMatch = figureRegex.exec(bodyScope)) !== null && results.length < 8) {
+    const inner = figMatch[1];
+    const imgMatch = /<img\b[^>]*>/i.exec(inner);
+    if (!imgMatch || hasTinyImageDimensions(imgMatch[0])) continue;
+    const src =
+      getHtmlAttr(imgMatch[0], 'src') ||
+      getHtmlAttr(imgMatch[0], 'data-src') ||
+      getHtmlAttr(imgMatch[0], 'data-lazy-src');
+    if (!src) continue;
+    const alt = getHtmlAttr(imgMatch[0], 'alt');
+    const capMatch = /<figcaption\b[^>]*>([\s\S]*?)<\/figcaption>/i.exec(inner);
+    const caption = capMatch ? normalizeWhitespace(stripTags(capMatch[1])) : undefined;
+    pushCandidate(src, alt || caption || pageTitle, caption);
+  }
+
+  // 3. Standalone editorial <img> tags
+  const imgRegex = /<img\b[^>]*>/gi;
+  let imgMatch: RegExpExecArray | null;
+  while ((imgMatch = imgRegex.exec(bodyScope)) !== null && results.length < 8) {
+    const tag = imgMatch[0];
+    if (hasTinyImageDimensions(tag)) continue;
+    const src =
+      getHtmlAttr(tag, 'src') ||
+      getHtmlAttr(tag, 'data-src') ||
+      getHtmlAttr(tag, 'data-lazy-src');
+    if (!src) continue;
+    const alt = getHtmlAttr(tag, 'alt') || getHtmlAttr(tag, 'title');
+    pushCandidate(src, alt || pageTitle);
+  }
+
+  return results;
+}
+
+export function extractReferenceImagesFromMarkdown(
+  markdown: string,
+  pageUrl: string,
+  fallbackTitle = '',
+): ExtractedWebImage[] {
+  const results: ExtractedWebImage[] = [];
+  const seen = new Set<string>();
+
+  const mdImgRegex = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
+  let match: RegExpExecArray | null;
+  while ((match = mdImgRegex.exec(markdown)) !== null && results.length < 8) {
+    const rawAlt = normalizeWhitespace(match[1] || match[3] || '')
+      .replace(/^Image\s+\d+:\s*/i, '')
+      .trim();
+    const rawUrl = (match[2] || '').trim();
+    const check = isValidReferenceImageUrl(rawUrl, rawAlt, pageUrl);
+    if (!check.ok || seen.has(check.url)) continue;
+    seen.add(check.url);
+    const cleanAlt = (rawAlt || fallbackTitle || 'Technical reference diagram').slice(0, 220);
+    results.push({
+      url: check.url,
+      alt: cleanAlt,
+      ...(rawAlt ? { caption: rawAlt.slice(0, 240) } : {}),
+      source_page_url: pageUrl,
+    });
+  }
+
+  // Deterministic GitHub repository OpenGraph preview fallback (zero extra network requests)
+  if (results.length === 0) {
+    try {
+      const parsed = new URL(pageUrl);
+      if (parsed.hostname.toLowerCase() === 'github.com') {
+        const segs = parsed.pathname.split('/').filter(Boolean);
+        if (
+          segs.length >= 2 &&
+          !['orgs', 'topics', 'trending', 'advisories', 'settings', 'marketplace'].includes(
+            segs[0].toLowerCase(),
+          )
+        ) {
+          const owner = segs[0];
+          const repo = segs[1].replace(/\.git$/i, '');
+          const ogUrl = `https://opengraph.githubassets.com/1/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+          const check = isValidReferenceImageUrl(ogUrl, `${owner}/${repo} repository preview`);
+          if (check.ok) {
+            results.push({
+              url: check.url,
+              alt: fallbackTitle || `${owner}/${repo} — GitHub repository overview`,
+              caption: `${owner}/${repo} primary repository reference`,
+              source_page_url: pageUrl,
+            });
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return results;
+}
+
+function convertHtmlToMarkdown(
+  html: string,
+  pageUrl?: string,
+): { title: string; markdown: string } {
   const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
   const title = normalizeWhitespace(decodeHtmlEntities(titleMatch?.[1] || ''));
 
@@ -1163,6 +1430,19 @@ function convertHtmlToMarkdown(html: string): { title: string; markdown: string 
   cleaned = cleaned.replace(/<table\b[^>]*>[\s\S]*?<\/table>/gi, (tableHtml: string) => {
     const mdTable = htmlTableToMarkdown(tableHtml).trim();
     return mdTable ? stash(mdTable) : '';
+  });
+
+  // Preserve valid editorial images as Markdown ![alt](https://...)
+  cleaned = cleaned.replace(/<img\b[^>]*>/gi, (imgTag: string) => {
+    if (hasTinyImageDimensions(imgTag)) return ' ';
+    const src =
+      getHtmlAttr(imgTag, 'src') ||
+      getHtmlAttr(imgTag, 'data-src') ||
+      getHtmlAttr(imgTag, 'data-lazy-src');
+    const alt = normalizeWhitespace(getHtmlAttr(imgTag, 'alt') || getHtmlAttr(imgTag, 'title'));
+    const check = isValidReferenceImageUrl(src, alt, pageUrl);
+    if (!check.ok) return ' ';
+    return stash(`![${(alt || title || 'Reference diagram').replace(/[\[\]]/g, '')}](${check.url})`);
   });
 
   // Inline code
@@ -1210,7 +1490,7 @@ function convertHtmlToMarkdown(html: string): { title: string; markdown: string 
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
-  // Restore stashed code blocks and tables
+  // Restore stashed code blocks, tables, and figures
   md = md.replace(/@@PYVREN_STASH_(\d+)@@/g, (_m, idxStr: string) => {
     const idx = Number.parseInt(idxStr, 10);
     return stashedBlocks[idx] ?? '';
@@ -1231,7 +1511,7 @@ function extractJinaTitle(markdown: string): string {
 /**
  * Reads a primary webpage with strict SSRF pre-validation via isSafePublicUrl.
  * Uses Jina Reader first for high-fidelity Markdown, falling back to direct safeFetch
- * with HTML->Markdown conversion preserving <table>, <pre>, and <code>.
+ * with HTML->Markdown conversion preserving <table>, <pre>, <code>, and verified reference images.
  */
 export async function readPrimaryWebpage(
   url: string,
@@ -1257,6 +1537,7 @@ export async function readPrimaryWebpage(
       title: '',
       markdown: '',
       chars: 0,
+      images: [],
       error: errorMsg,
     };
   }
@@ -1283,13 +1564,14 @@ export async function readPrimaryWebpage(
       const rawText = jinaRes.text.trim();
       if (rawText.length >= 200) {
         const title = extractJinaTitle(rawText);
+        const images = extractReferenceImagesFromMarkdown(rawText, safeUrl, title);
         const markdown = truncateText(rawText, MAX_EXTRACTED_CHARS);
         pushTrace(trace, {
           stage: 'deep_research',
           tool_name: 'readPrimaryWebpage',
           input: safeUrl,
           url: safeUrl,
-          summary: `Extracted via Jina Reader (${markdown.length} chars)`,
+          summary: `Extracted via Jina Reader (${markdown.length} chars, ${images.length} ref image(s))`,
           chars_extracted: markdown.length,
           ok: true,
         });
@@ -1299,6 +1581,7 @@ export async function readPrimaryWebpage(
           title,
           markdown,
           chars: markdown.length,
+          images,
         };
       }
     }
@@ -1306,7 +1589,7 @@ export async function readPrimaryWebpage(
     // Fall through cleanly to direct safeFetch
   }
 
-  // 2. Direct safeFetch fallback with HTML->Markdown preserving <table>, <pre>, <code>
+  // 2. Direct safeFetch fallback with HTML->Markdown preserving <table>, <pre>, <code>, and reference images
   try {
     const directRes = await safeFetch(safeUrl, {
       headers: {
@@ -1321,30 +1604,33 @@ export async function readPrimaryWebpage(
       throw new Error(`HTTP ${directRes.status}`);
     }
 
+    const finalUrl = directRes.url || safeUrl;
     const ct = (directRes.contentType || '').toLowerCase();
     let title = '';
     let markdown = '';
+    let images: ExtractedWebImage[] = [];
 
     if (ct.includes('text/plain') || ct.includes('text/markdown') || ct.includes('application/json')) {
       markdown = truncateText(directRes.text.trim(), MAX_EXTRACTED_CHARS);
       title = extractJinaTitle(markdown);
+      images = extractReferenceImagesFromMarkdown(directRes.text, finalUrl, title);
     } else {
-      const converted = convertHtmlToMarkdown(directRes.text);
+      const converted = convertHtmlToMarkdown(directRes.text, finalUrl);
       title = converted.title;
       markdown = truncateText(converted.markdown, MAX_EXTRACTED_CHARS);
+      images = extractReferenceImagesFromHtml(directRes.text, finalUrl);
     }
 
     if (!markdown) {
       throw new Error('Extracted empty content from page');
     }
 
-    const finalUrl = directRes.url || safeUrl;
     pushTrace(trace, {
       stage: 'deep_research',
       tool_name: 'readPrimaryWebpage',
       input: safeUrl,
       url: finalUrl,
-      summary: `Extracted via direct safeFetch (${markdown.length} chars)`,
+      summary: `Extracted via direct safeFetch (${markdown.length} chars, ${images.length} ref image(s))`,
       chars_extracted: markdown.length,
       ok: true,
     });
@@ -1355,6 +1641,7 @@ export async function readPrimaryWebpage(
       title,
       markdown,
       chars: markdown.length,
+      images,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -1373,6 +1660,7 @@ export async function readPrimaryWebpage(
       title: '',
       markdown: '',
       chars: 0,
+      images: [],
       error: message,
     };
   }

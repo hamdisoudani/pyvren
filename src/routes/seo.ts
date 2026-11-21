@@ -129,9 +129,9 @@ function wrapSvgLines(rawText: string, maxCharsPerLine: number, maxLines: number
 function renderFaviconSvg(): string {
   return [
     '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none">',
-    '  <rect x="1" y="1" width="22" height="22" rx="4" fill="#FAF9F5" stroke="#141413" stroke-width="1.5"/>',
-    '  <path d="M7.5 16.5V7.5H13.25C15.1 7.5 16.25 8.55 16.25 10.2C16.25 11.85 15.1 12.9 13.25 12.9H7.5" stroke="#141413" stroke-width="1.8" stroke-linecap="square"/>',
-    '  <path d="M13.5 16.5L17 13" stroke="#B4431C" stroke-width="1.9" stroke-linecap="square"/>',
+    '  <rect x="1.5" y="1.5" width="21" height="21" rx="5" fill="#FAF5EA" stroke="#171512" stroke-width="1.8"/>',
+    '  <path d="M7.5 16.8V7.2H13.1C15.1 7.2 16.35 8.28 16.35 10C16.35 11.72 15.1 12.8 13.1 12.8H7.5" stroke="#171512" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>',
+    '  <circle cx="16.2" cy="16.2" r="2.1" fill="#D63333"/>',
     '</svg>',
   ].join('\n');
 }
@@ -374,18 +374,21 @@ function buildLlmsTxt(settings: SiteSettings, skills: CategorySkill[], posts: Po
     '',
     `> ${settings.site_tagline}`,
     '',
-    '## Publication & Editorial Standards',
+    '## Publication & Agent Navigation',
     '',
-    `- [About ${settings.site_name}](${baseUrl}/about): Publication mission, author credentials, and technical focus.`,
+    `- [Agent Navigation Map (JSON)](${baseUrl}/api/v1/map): Structured directory of topics, recent stories, Markdown mirrors, and API endpoints.`,
+    `- [Headless Posts API](${baseUrl}/api/v1/posts): Paginated JSON feed of published stories (supports ?category= and ?q=).`,
+    `- [Instant Search API](${baseUrl}/api/v1/search?q=mcp): Rate-limited full-text search across published articles.`,
+    `- [Full Machine-Readable Corpus](${baseUrl}/llms-full.txt): Complete Markdown stories with key facts, FAQs, and citations.`,
+    `- [About ${settings.site_name}](${baseUrl}/about): Co-crafted by ${settings.default_author} (https://www.linkedin.com/in/hamdisoudani/) & Pyvren.`,
     `- [Editorial Policy](${baseUrl}/editorial-policy): Primary-source verification, anti-slop standards, and review workflow.`,
     `- [Contact](${baseUrl}/contact): Corrections, disclosures, and editorial inquiries (${settings.contact_email}).`,
-    `- [Full Machine-Readable Corpus](${baseUrl}/llms-full.txt): Complete Markdown briefings with key facts, FAQs, and citations.`,
-    `- [RSS 2.0 Feed](${baseUrl}/rss.xml): Latest published briefings in XML.`,
-    `- [JSON Feed 1.1](${baseUrl}/feed.json): Latest published briefings in JSON Feed format.`,
+    `- [RSS 2.0 Feed](${baseUrl}/rss.xml): Latest published stories in XML.`,
+    `- [JSON Feed 1.1](${baseUrl}/feed.json): Latest published stories in JSON Feed format.`,
     `- [XML Sitemap](${baseUrl}/sitemap.xml): Canonical URL index.`,
-    `- [Google News Sitemap](${baseUrl}/news-sitemap.xml): Breaking briefings from the past 48 hours.`,
+    `- [Google News Sitemap](${baseUrl}/news-sitemap.xml): Stories from the past 48 hours.`,
     '',
-    '## Research Tracks',
+    '## Topics',
     '',
   ];
 
@@ -393,10 +396,10 @@ function buildLlmsTxt(settings: SiteSettings, skills: CategorySkill[], posts: Po
     lines.push(`- [${skill.name}](${baseUrl}/category/${skill.slug}): ${skill.description}`);
   }
 
-  lines.push('', '## Published Briefings', '');
+  lines.push('', '## Published Stories', '');
 
   if (posts.length === 0) {
-    lines.push('- No published briefings yet.');
+    lines.push('- No published stories yet.');
   } else {
     for (const post of posts) {
       const summary = (post.tldr_summary || post.description || '').replace(/\s+/g, ' ').trim();
@@ -418,6 +421,7 @@ function buildLlmsFullTxt(settings: SiteSettings, posts: PostRecord[], baseUrl: 
     `> ${settings.site_tagline}`,
     '',
     `Source Index: ${baseUrl}/llms.txt`,
+    `Agent Map: ${baseUrl}/api/v1/map`,
     `Canonical Site: ${baseUrl}`,
     `Generated At: ${new Date().toISOString()}`,
     `Included Articles: ${posts.length}`,
@@ -437,10 +441,11 @@ function buildLlmsFullTxt(settings: SiteSettings, posts: PostRecord[], baseUrl: 
       '',
       `- **URL:** ${canonicalUrl}`,
       `- **Markdown:** ${markdownUrl}`,
-      `- **Author:** ${post.author || settings.default_author}`,
+      `- **Author:** ${post.author || settings.default_author} (Co-crafted with Pyvren)`,
       `- **Published:** ${dateStr}`,
       `- **Category:** ${post.category_slug}`,
       `- **Archetype:** ${post.archetype}`,
+      `- **Quality Score:** ${post.quality_score}/100`,
     ];
 
     if (post.tags_json && post.tags_json.length > 0) {
@@ -508,22 +513,22 @@ export function createSeoRoutes(): Hono<{ Bindings: WorkerEnv }> {
     const db = createDatabase(c.env);
     const settings = await db.getSettings();
     const baseUrl = resolveBaseUrl(settings, c.env);
-    const siteName = settings.site_name || 'Pyvren Research';
+    const siteName = settings.site_name || 'The Pyvren Dispatch';
 
     const svg = renderOgCardSvg({
       siteName,
       baseUrl,
-      category: 'Primary-Source Technical Briefings',
+      category: 'Field Notes & Engineering Craft',
       categorySlug: 'ai-coding-agents-mcp',
-      title: `${siteName} — Verified Engineering & Security Intelligence`,
+      title: `${siteName} — Deep Dives into AI, Security & Cloud Craft`,
       subtitle:
         settings.site_tagline ||
-        'Primary-source technical research, security teardowns, and reproducible engineering benchmarks.',
-      author: settings.default_author || 'Editorial Desk',
-      readingTimeLabel: 'SSR · Markdown · JSON · RSS',
-      badgeText: 'PRIMARY SOURCES',
+        'Field notes, benchmarks, and deep dives into AI systems, security, and cloud craft.',
+      author: `${settings.default_author || 'Hamdi Soudani'} · with Pyvren`,
+      readingTimeLabel: 'Field Notes & Benchmarks',
+      badgeText: 'CO-CRAFTED',
       badgeTone: 'accent',
-      dateLabel: 'Human-Edited',
+      dateLabel: 'Primary Sources',
     });
 
     return new Response(svg, {
@@ -560,8 +565,8 @@ export function createSeoRoutes(): Hono<{ Bindings: WorkerEnv }> {
 
     const skill = await db.getSkillBySlug(post.category_slug);
     const baseUrl = resolveBaseUrl(settings, c.env);
-    const siteName = settings.site_name || 'Pyvren Research';
-    const score = Math.max(0, Math.min(100, Math.round(post.quality_score || 0)));
+    const siteName = settings.site_name || 'The Pyvren Dispatch';
+    const archetypeBadge = (post.archetype || 'dispatch').replace(/-/g, ' ').toUpperCase();
 
     const svg = renderOgCardSvg({
       siteName,
@@ -570,10 +575,10 @@ export function createSeoRoutes(): Hono<{ Bindings: WorkerEnv }> {
       categorySlug: post.category_slug,
       title: post.title,
       subtitle: post.tldr_summary || post.description,
-      author: post.author || settings.default_author || 'Editorial Desk',
+      author: `${post.author || settings.default_author || 'Hamdi Soudani'} · with Pyvren`,
       readingTimeLabel: `${post.reading_time_minutes || 1} min read`,
-      badgeText: `QS ${score}/100`,
-      badgeTone: score >= 85 ? 'success' : score >= 70 ? 'warning' : 'accent',
+      badgeText: archetypeBadge,
+      badgeTone: 'accent',
       dateLabel: formatIsoDate(post.published_at || post.created_at),
     });
 

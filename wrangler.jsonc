@@ -25,7 +25,7 @@
     }
   ],
   "vars": {
-    "SITE_NAME": "Pyvren Research",
+    "SITE_NAME": "The Pyvren Dispatch",
     "DEFAULT_OPENROUTER_MODEL": "openrouter/free",
     "ENVIRONMENT": "production"
   }

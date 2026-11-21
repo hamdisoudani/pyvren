@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { normalizeBaseUrl, type WorkerEnv } from '../env';
 import { createDatabase } from '../lib/db';
+import { checkRateLimit, extractClientIp } from '../lib/security';
 import type { Archetype, CategorySkill, PostRecord } from '../types';
 
 const VALID_ARCHETYPES: ReadonlySet<Archetype> = new Set([
@@ -14,6 +15,26 @@ function withPublicUrls(post: PostRecord, baseUrl: string) {
   return {
     ...post,
     keywords_json: Array.isArray(post.keywords_json) ? post.keywords_json : [],
+    canonical_url: `${baseUrl}/blog/${post.slug}`,
+    markdown_url: `${baseUrl}/blog/${post.slug}.md`,
+  };
+}
+
+function toSearchHit(post: PostRecord, baseUrl: string) {
+  return {
+    slug: post.slug,
+    title: post.title,
+    description: post.description,
+    tldr_summary: post.tldr_summary,
+    category_slug: post.category_slug,
+    archetype: post.archetype,
+    author: post.author,
+    reading_time_minutes: post.reading_time_minutes,
+    published_at: post.published_at,
+    cover_image_url: post.cover_image_url,
+    cover_image_alt: post.cover_image_alt,
+    tags: post.tags_json.slice(0, 5),
+    url: `/blog/${post.slug}`,
     canonical_url: `${baseUrl}/blog/${post.slug}`,
     markdown_url: `${baseUrl}/blog/${post.slug}.md`,
   };
@@ -67,6 +88,121 @@ export function createHeadlessRoutes(): Hono<{ Bindings: WorkerEnv }> {
     });
   });
 
+  // Rate-limited instant search endpoint for human live-search UI & AI agents
+  app.get('/api/v1/search', async (c) => {
+    const rl = checkRateLimit(`search:${extractClientIp(c.req.raw)}`, 30, 60_000);
+    c.header('X-RateLimit-Remaining', String(rl.remaining));
+    if (!rl.allowed) {
+      c.header('Retry-After', String(rl.retryAfterSeconds));
+      c.header('Cache-Control', 'no-store');
+      return c.json(
+        {
+          error: 'Search rate limit exceeded. Please wait briefly before searching again.',
+          retry_after_seconds: rl.retryAfterSeconds,
+        },
+        429,
+      );
+    }
+
+    const rawQ = (c.req.query('q') || '').trim().slice(0, 160);
+    const category = (c.req.query('category') || '').trim() || undefined;
+    const rawLimit = Number.parseInt(c.req.query('limit') || '10', 10);
+    const limit = Number.isFinite(rawLimit) ? Math.min(25, Math.max(1, rawLimit)) : 10;
+
+    if (!rawQ) {
+      c.header('Cache-Control', 'no-store');
+      return c.json({
+        query: '',
+        results: [],
+        total: 0,
+        limit,
+      });
+    }
+
+    const db = createDatabase(c.env);
+    const [settings, matched] = await Promise.all([
+      db.getSettings(),
+      db.listPosts({
+        status: 'published',
+        category_slug: category,
+        search: rawQ,
+        limit: 100,
+        offset: 0,
+        excludeHeavyHtml: true,
+      }),
+    ]);
+
+    const baseUrl = normalizeBaseUrl(settings.base_url || c.env.BASE_URL);
+    const published = matched.filter((p) => p.status === 'published');
+    const results = published.slice(0, limit).map((p) => toSearchHit(p, baseUrl));
+
+    c.header('Cache-Control', 'public, max-age=30, s-maxage=120');
+    return c.json({
+      query: rawQ,
+      results,
+      total: published.length,
+      limit,
+    });
+  });
+
+  // Structured machine navigation map specifically designed for AI agents & crawlers
+  app.get('/api/v1/map', async (c) => {
+    const db = createDatabase(c.env);
+    const [settings, skills, recentRaw] = await Promise.all([
+      db.getSettings(),
+      db.listSkills(true),
+      db.listPosts({ status: 'published', limit: 25, excludeHeavyHtml: true }),
+    ]);
+
+    const baseUrl = normalizeBaseUrl(settings.base_url || c.env.BASE_URL);
+    const published = recentRaw.filter((p) => p.status === 'published');
+
+    c.header('Cache-Control', 'public, max-age=120, s-maxage=600, stale-while-revalidate=3600');
+    return c.json({
+      publication: {
+        name: settings.site_name,
+        tagline: settings.site_tagline,
+        author: settings.default_author,
+        collaboration: `Co-crafted by ${settings.default_author} & Pyvren`,
+        linkedin_url: 'https://www.linkedin.com/in/hamdisoudani/',
+        url: baseUrl,
+      },
+      agent_navigation: {
+        llms_txt: `${baseUrl}/llms.txt`,
+        llms_full_txt: `${baseUrl}/llms-full.txt`,
+        posts_api: `${baseUrl}/api/v1/posts`,
+        search_api: `${baseUrl}/api/v1/search?q={query}`,
+        markdown_mirror_pattern: `${baseUrl}/blog/{slug}.md`,
+        content_negotiation: 'Send Accept: text/markdown to any /blog/{slug} URL',
+        rss_xml: `${baseUrl}/rss.xml`,
+        json_feed: `${baseUrl}/feed.json`,
+        sitemap_xml: `${baseUrl}/sitemap.xml`,
+      },
+      categories: skills
+        .filter((s) => s.enabled)
+        .map((s) => ({
+          slug: s.slug,
+          name: s.name,
+          description: s.description,
+          url: `${baseUrl}/category/${s.slug}`,
+          api_url: `${baseUrl}/api/v1/posts?category=${encodeURIComponent(s.slug)}`,
+        })),
+      recent_posts: published.map((p) => ({
+        slug: p.slug,
+        title: p.title,
+        description: p.description,
+        tldr_summary: p.tldr_summary,
+        category_slug: p.category_slug,
+        archetype: p.archetype,
+        quality_score: p.quality_score,
+        reading_time_minutes: p.reading_time_minutes,
+        published_at: p.published_at,
+        canonical_url: `${baseUrl}/blog/${p.slug}`,
+        markdown_url: `${baseUrl}/blog/${p.slug}.md`,
+      })),
+    });
+  });
+
   app.get('/api/v1/posts', async (c) => {
     const db = createDatabase(c.env);
     const category = (c.req.query('category') || '').trim() || undefined;
@@ -74,7 +210,23 @@ export function createHeadlessRoutes(): Hono<{ Bindings: WorkerEnv }> {
     const archetype = VALID_ARCHETYPES.has(archetypeRaw as Archetype)
       ? (archetypeRaw as Archetype)
       : undefined;
-    const q = (c.req.query('q') || '').trim() || undefined;
+    const q = (c.req.query('q') || '').trim().slice(0, 160) || undefined;
+
+    if (q) {
+      const rl = checkRateLimit(`search:${extractClientIp(c.req.raw)}`, 30, 60_000);
+      c.header('X-RateLimit-Remaining', String(rl.remaining));
+      if (!rl.allowed) {
+        c.header('Retry-After', String(rl.retryAfterSeconds));
+        c.header('Cache-Control', 'no-store');
+        return c.json(
+          {
+            error: 'Search rate limit exceeded. Please wait briefly before searching again.',
+            retry_after_seconds: rl.retryAfterSeconds,
+          },
+          429,
+        );
+      }
+    }
 
     const rawLimit = Number.parseInt(c.req.query('limit') || '20', 10);
     const limit = Number.isFinite(rawLimit) ? Math.min(50, Math.max(1, rawLimit)) : 20;

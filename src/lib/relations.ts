@@ -2,7 +2,10 @@ import type { CategorySkill, PostRecord } from '../types';
 
 export interface CategoryMeta {
   shortLabel: string;
+  navLabel: string;
+  crewName: string;
   color: string;
+  darkColor: string;
   bgTint: string;
   motif: string;
 }
@@ -10,48 +13,66 @@ export interface CategoryMeta {
 export const CATEGORY_META: Record<string, CategoryMeta> = {
   'ai-coding-agents-mcp': {
     shortLabel: 'CODING & MCP',
-    color: '#2563EB',
+    navLabel: 'Coding & MCP',
+    crewName: 'Bruno',
+    color: '#1D4ED8',
+    darkColor: '#60A5FA',
     bgTint: '#EFF6FF',
     motif: 'nodes',
   },
   'ai-security-jailbreaks': {
     shortLabel: 'AI SECURITY',
+    navLabel: 'AI Security',
+    crewName: 'Patch',
     color: '#DC2626',
+    darkColor: '#F87171',
     bgTint: '#FEF2F2',
     motif: 'shield',
   },
   'ai-llms': {
     shortLabel: 'FRONTIER LLMS',
-    color: '#D97706',
+    navLabel: 'Frontier LLMs',
+    crewName: 'Pip',
+    color: '#B45309',
+    darkColor: '#FBBF24',
     bgTint: '#FFFBEB',
     motif: 'bars',
   },
   'cloud-gpu-infra': {
     shortLabel: 'CLOUD & GPU',
-    color: '#0D9488',
+    navLabel: 'Cloud & GPU',
+    crewName: 'Juno',
+    color: '#0F766E',
+    darkColor: '#2DD4BF',
     bgTint: '#F0FDFA',
     motif: 'arcs',
   },
   'agentic-browser-web-data': {
-    shortLabel: 'WEB DATA & GEO',
+    shortLabel: 'WEB & SEARCH',
+    navLabel: 'Web & Search',
+    crewName: 'Boo',
     color: '#6D28D9',
+    darkColor: '#C084FC',
     bgTint: '#F5F3FF',
     motif: 'web',
   },
   'dev-tooling-benchmarks': {
     shortLabel: 'CVES & PATCHES',
-    color: '#EA580C',
+    navLabel: 'CVEs & Patches',
+    crewName: 'Morel',
+    color: '#C2410C',
+    darkColor: '#FB923C',
     bgTint: '#FFF7ED',
     motif: 'radar',
   },
 };
 
-const FALLBACK_PALETTE: Array<Omit<CategoryMeta, 'shortLabel'>> = [
-  { color: '#D63333', bgTint: '#FEF2F2', motif: 'nodes' },
-  { color: '#1D4ED8', bgTint: '#EFF6FF', motif: 'bars' },
-  { color: '#0F766E', bgTint: '#F0FDFA', motif: 'arcs' },
-  { color: '#7C3AED', bgTint: '#F5F3FF', motif: 'web' },
-  { color: '#C2410C', bgTint: '#FFF7ED', motif: 'radar' },
+const FALLBACK_PALETTE: Array<Omit<CategoryMeta, 'shortLabel' | 'navLabel'>> = [
+  { crewName: 'Bruno', color: '#D63333', darkColor: '#F87171', bgTint: '#FEF2F2', motif: 'nodes' },
+  { crewName: 'Pip', color: '#1D4ED8', darkColor: '#60A5FA', bgTint: '#EFF6FF', motif: 'bars' },
+  { crewName: 'Juno', color: '#0F766E', darkColor: '#2DD4BF', bgTint: '#F0FDFA', motif: 'arcs' },
+  { crewName: 'Boo', color: '#7C3AED', darkColor: '#C084FC', bgTint: '#F5F3FF', motif: 'web' },
+  { crewName: 'Morel', color: '#C2410C', darkColor: '#FB923C', bgTint: '#FFF7ED', motif: 'radar' },
 ];
 
 export function getCategoryMeta(slug: string): CategoryMeta {
@@ -59,11 +80,12 @@ export function getCategoryMeta(slug: string): CategoryMeta {
   if (normalized && CATEGORY_META[normalized]) {
     return CATEGORY_META[normalized];
   }
-  const cleanLabel = (normalized || 'technical-briefing')
+  const cleanWords = (normalized || 'dispatch')
     .replace(/[-_]+/g, ' ')
     .trim()
-    .toUpperCase()
     .slice(0, 18);
+  const cleanLabel = cleanWords.toUpperCase();
+  const titleLabel = cleanWords.replace(/\b\w/g, (ch) => ch.toUpperCase());
 
   let hash = 0;
   for (let i = 0; i < normalized.length; i++) {
@@ -71,7 +93,8 @@ export function getCategoryMeta(slug: string): CategoryMeta {
   }
   const palette = FALLBACK_PALETTE[hash % FALLBACK_PALETTE.length];
   return {
-    shortLabel: cleanLabel || 'BRIEFING',
+    shortLabel: cleanLabel || 'DISPATCH',
+    navLabel: titleLabel || 'Dispatch',
     ...palette,
   };
 }
@@ -91,6 +114,7 @@ export interface TopicCluster {
   query: string;
   count: number;
   color: string;
+  darkColor: string;
   categorySlug: string;
 }
 
@@ -284,7 +308,7 @@ export function computePostRelationships(
       sharedDomains.length * 14 +
       overlappingTitleTokens * 10;
 
-    let reasonLabel = 'Latest on the research wire';
+    let reasonLabel = 'Recent dispatch';
     const topicLabels: string[] = [];
     for (const term of [...sharedTags, ...sharedKeywords]) {
       const clean = term.trim();
@@ -296,13 +320,13 @@ export function computePostRelationships(
     }
 
     if (topicLabels.length > 0) {
-      reasonLabel = `Shared topics: ${topicLabels.join(', ')}`;
+      reasonLabel = `Related on ${topicLabels.join(', ')}`;
     } else if (sharedDomains.length > 0) {
-      reasonLabel = `Shared primary source: ${sharedDomains[0]}`;
+      reasonLabel = `Also cites ${sharedDomains[0]}`;
     } else if (sameCategory) {
-      reasonLabel = 'Same research track';
+      reasonLabel = 'Same topic';
     } else if (score > 0) {
-      reasonLabel = 'Cross-track intelligence';
+      reasonLabel = 'Related reading';
     }
 
     scored.push({
@@ -396,6 +420,7 @@ export function buildTopicClusters(
       query: bucket.query,
       count: bucket.count,
       color: meta.color,
+      darkColor: meta.darkColor,
       categorySlug: bestCat,
     });
   }

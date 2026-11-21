@@ -16,9 +16,10 @@
 
 :root {
   --bg-paper: #FAF5EA;
+  --bg-canvas: #FAF5EA;
   --bg-surface: #FFFDF8;
   --bg-subtle: #F2EBD9;
-  --bg-elevated: #FFFDF8;
+  --bg-elevated: #F5EFE2;
   --bg-header: rgba(250, 245, 234, 0.94);
 
   --ink-primary: #171512;
@@ -27,6 +28,7 @@
   --ink-faint: #8A8071;
 
   --border-hairline: #E0D7C5;
+  --border-subtle: #E0D7C5;
   --border-strong: #1F1C18;
 
   --accent: #D63333;
@@ -57,10 +59,11 @@
 
 [data-theme="dark"] {
   --bg-paper: #0F1013;
+  --bg-canvas: #0F1013;
   --bg-surface: #16181E;
   --bg-subtle: #1E2129;
-  --bg-elevated: #1E2129;
-  --bg-header: rgba(15, 16, 19, 0.92);
+  --bg-elevated: #20242E;
+  --bg-header: rgba(15, 16, 19, 0.93);
 
   --ink-primary: #F3EFE6;
   --ink-secondary: #D4CEC2;
@@ -68,7 +71,8 @@
   --ink-faint: #706A60;
 
   --border-hairline: #272B35;
-  --border-strong: #464C5C;
+  --border-subtle: #272B35;
+  --border-strong: #52596B;
 
   --accent: #EF5350;
   --accent-hover: #FF6E6B;
@@ -89,8 +93,8 @@
   --danger: #EA6D65;
   --danger-soft: rgba(234, 109, 101, 0.14);
 
-  --shadow-subtle: 0 1px 2px rgba(0, 0, 0, 0.32), 0 6px 18px rgba(0, 0, 0, 0.26);
-  --shadow-lift: 0 6px 16px rgba(0, 0, 0, 0.42), 0 18px 36px rgba(0, 0, 0, 0.44);
+  --shadow-subtle: 0 1px 2px rgba(0, 0, 0, 0.34), 0 8px 22px rgba(0, 0, 0, 0.28);
+  --shadow-lift: 0 8px 20px rgba(0, 0, 0, 0.45), 0 20px 38px rgba(0, 0, 0, 0.48);
 
   color-scheme: dark;
 }
@@ -108,12 +112,14 @@
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
     scroll-behavior: smooth;
+    overflow-x: clip;
   }
 
   body {
     background-color: var(--bg-paper);
     color: var(--ink-primary);
     min-height: 100vh;
+    overflow-x: clip;
     transition: background-color 180ms var(--ease-editorial), color 180ms var(--ease-editorial);
   }
 
@@ -1462,6 +1468,273 @@
 @keyframes dcf-squiggle {
   from { -webkit-mask-position-x: 0; mask-position-x: 0; }
   to { -webkit-mask-position-x: 20px; mask-position-x: 20px; }
+}
+
+/* ==========================================================================
+   Dark/Light Adaptive Topic Accents & Sketchbook Crew Art
+   ========================================================================== */
+
+.topic-tone,
+.story-media,
+[data-topic-tone] {
+  --topic-accent: var(--topic-light, var(--accent));
+}
+
+[data-theme="dark"] .topic-tone,
+[data-theme="dark"] .story-media,
+[data-theme="dark"] [data-topic-tone] {
+  --topic-accent: var(--topic-dark, var(--accent));
+}
+
+.topic-accent-text {
+  color: var(--topic-accent);
+}
+
+.topic-accent-dot {
+  background-color: var(--topic-accent);
+}
+
+.story-media {
+  background-color: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.story-crew-plate {
+  background:
+    radial-gradient(circle at 82% 18%, color-mix(in srgb, var(--topic-accent) 13%, transparent), transparent 55%),
+    var(--bg-subtle);
+}
+
+.story-real-img {
+  background-color: var(--bg-subtle);
+}
+
+.story-card:hover .story-real-img,
+.story-card:hover .crew-topic-svg {
+  transform: scale(1.035);
+}
+
+.crew-topic-svg {
+  transition: transform 280ms var(--ease-editorial);
+}
+
+@keyframes crew-bob {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-4px); }
+}
+
+@keyframes crew-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  96% { transform: scaleY(0.12); }
+}
+
+.crew-bob {
+  animation: crew-bob 4.2s ease-in-out infinite;
+}
+
+.crew-bob-delayed {
+  animation: crew-bob 4.8s ease-in-out 1.1s infinite;
+}
+
+.crew-float-slow {
+  animation: crew-bob 5.6s ease-in-out 0.5s infinite;
+}
+
+.crew-blink {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: crew-blink 5.4s ease-in-out infinite;
+}
+
+/* ==========================================================================
+   Responsive Category Topic Rail (All Phones, Tablets & Desktops)
+   ========================================================================== */
+
+.topic-rail-wrap {
+  position: relative;
+}
+
+.topic-rail {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  padding: 0.45rem 0.25rem;
+}
+
+.topic-rail::-webkit-scrollbar {
+  display: none;
+}
+
+@media (min-width: 1024px) {
+  .topic-rail {
+    justify-content: center;
+    flex-wrap: wrap;
+    overflow-x: visible;
+    gap: 0.5rem;
+  }
+}
+
+.topic-pill {
+  scroll-snap-align: start;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  padding: 0.36rem 0.78rem;
+  border-radius: 9999px;
+  border: 1px solid transparent;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--ink-secondary);
+  white-space: nowrap;
+  text-decoration: none;
+  transition:
+    background-color 150ms var(--ease-editorial),
+    color 150ms var(--ease-editorial),
+    border-color 150ms var(--ease-editorial);
+}
+
+.topic-pill:hover {
+  background-color: var(--bg-subtle);
+  border-color: var(--border-hairline);
+  color: var(--ink-primary);
+}
+
+.topic-pill[aria-current="page"] {
+  background-color: var(--ink-primary);
+  color: var(--bg-paper);
+  border-color: var(--ink-primary);
+}
+
+/* ==========================================================================
+   Editorial Figures & Crawled Reference Images
+   ========================================================================== */
+
+.prose-editorial .editorial-figure,
+.article-hero-figure {
+  margin: 2rem 0;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid var(--border-hairline);
+  background-color: var(--bg-surface);
+  box-shadow: var(--shadow-subtle);
+}
+
+.prose-editorial .editorial-figure .editorial-img,
+.article-hero-figure img {
+  display: block;
+  width: 100%;
+  max-height: 520px;
+  object-fit: cover;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background-color: var(--bg-subtle);
+}
+
+.prose-editorial .editorial-caption,
+.article-hero-caption {
+  padding: 0.7rem 1rem;
+  border-top: 1px solid var(--border-hairline);
+  background-color: var(--bg-subtle);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--ink-muted);
+}
+
+/* ==========================================================================
+   Live Instant Search Dropdown
+   ========================================================================== */
+
+.search-dropdown {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  max-height: 24rem;
+  overflow-y: auto;
+  border-radius: 14px;
+  border: 1px solid var(--border-strong);
+  background-color: var(--bg-surface);
+  box-shadow: var(--shadow-lift);
+}
+
+.search-hit-link {
+  display: block;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-hairline);
+  text-decoration: none;
+  transition: background-color 130ms var(--ease-editorial);
+}
+
+.search-hit-link:last-child {
+  border-bottom: 0;
+}
+
+.search-hit-link:hover,
+.search-hit-link:focus-visible {
+  background-color: var(--bg-subtle);
+}
+
+/* ==========================================================================
+   Creative Mobile Touch-Snap Carousels (Expands to Grid on md+)
+   ========================================================================== */
+
+@media (max-width: 767px) {
+  .mobile-carousel {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 0.875rem;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: 0.25rem;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    padding-bottom: 0.35rem;
+  }
+
+  .mobile-carousel::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobile-carousel > .mobile-carousel-slide {
+    flex: 0 0 84vw;
+    max-width: 340px;
+    scroll-snap-align: start;
+  }
+
+  .mobile-carousel--compact > .mobile-carousel-slide {
+    flex: 0 0 78vw;
+    max-width: 300px;
+  }
+}
+
+.carousel-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background-color: var(--border-strong);
+  opacity: 0.32;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  transition: width 180ms var(--ease-editorial), opacity 180ms var(--ease-editorial), background-color 180ms var(--ease-editorial);
+}
+
+.carousel-dot[aria-selected="true"] {
+  width: 20px;
+  opacity: 1;
+  background-color: var(--accent);
 }
 
 /* Reduced Motion Respect */

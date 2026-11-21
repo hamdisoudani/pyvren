@@ -483,7 +483,7 @@ const ALLOWED_TAGS = new Set([
 ]);
 
 const VOID_TAGS = new Set(['hr', 'br', 'img']);
-const CLASS_ALLOWED_TAGS = new Set(['code', 'pre', 'span', 'div', 'table']);
+const CLASS_ALLOWED_TAGS = new Set(['code', 'pre', 'span', 'div', 'table', 'figure', 'figcaption', 'img']);
 const HEADING_TAGS = new Set(['h2', 'h3', 'h4', 'h5', 'h6']);
 const TABLE_CELL_TAGS = new Set(['th', 'td']);
 
@@ -700,6 +700,24 @@ function sanitizeAllowedTag(tagName: string, rawAttrs: ParsedAttr[]): string {
         if (lower === 'lazy' || lower === 'eager') {
           seen.add(name);
           safeAttrs.push(['loading', lower]);
+        }
+      } else if (name === 'decoding') {
+        const lower = value.trim().toLowerCase();
+        if (lower === 'async' || lower === 'sync' || lower === 'auto') {
+          seen.add(name);
+          safeAttrs.push(['decoding', lower]);
+        }
+      } else if (name === 'referrerpolicy') {
+        const lower = value.trim().toLowerCase();
+        if (lower === 'no-referrer' || lower === 'strict-origin-when-cross-origin') {
+          seen.add(name);
+          safeAttrs.push(['referrerpolicy', lower]);
+        }
+      } else if (name === 'class') {
+        const trimmed = value.trim();
+        if (trimmed && SAFE_CLASS_RE.test(trimmed)) {
+          seen.add(name);
+          safeAttrs.push(['class', trimmed]);
         }
       }
     } else if (CLASS_ALLOWED_TAGS.has(tagName) && name === 'class') {

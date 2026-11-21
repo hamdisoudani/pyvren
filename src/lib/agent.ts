@@ -8,6 +8,7 @@ import type {
   FaqItem,
   KeyFact,
   LintResult,
+  PostImage,
   PostRecord,
   PostStatus,
   QualityBreakdown,
@@ -34,8 +35,10 @@ import { isSafePublicUrl, slugify } from './security';
 import { buildSkillSystemPrompt, selectArchetype, selectSkillForRun } from './skills';
 import {
   fetchAuthoritativeFeed,
+  isValidReferenceImageUrl,
   readPrimaryWebpage,
   searchWebSources,
+  type ExtractedWebImage,
   type FeedItem,
   type SearchSourceItem,
 } from './tools';
@@ -78,6 +81,7 @@ export interface PrimarySourceDoc {
   markdown: string;
   chars: number;
   snippet?: string;
+  images?: ExtractedWebImage[];
 }
 
 export interface DraftArticlePayload {
@@ -85,6 +89,9 @@ export interface DraftArticlePayload {
   slug: string;
   description: string;
   tldr_summary: string;
+  cover_image_url: string | null;
+  cover_image_alt: string | null;
+  images: PostImage[];
   key_facts: KeyFact[];
   faq: FaqItem[];
   body_markdown: string;
@@ -248,6 +255,28 @@ function deriveCleanKeywords(
   return normalized.slice(0, 8);
 }
 
+function collectCrawledImages(primarySources: PrimarySourceDoc[]): ExtractedWebImage[] {
+  const seen = new Set<string>();
+  const out: ExtractedWebImage[] = [];
+  for (const doc of primarySources) {
+    if (!Array.isArray(doc.images)) continue;
+    for (const img of doc.images) {
+      if (!img?.url || seen.has(img.url)) continue;
+      const check = isValidReferenceImageUrl(img.url, img.alt);
+      if (!check.ok) continue;
+      seen.add(check.url);
+      out.push({
+        url: check.url,
+        alt: (img.alt || doc.title || 'Primary source figure').trim().slice(0, 220),
+        ...(img.caption ? { caption: img.caption.trim().slice(0, 240) } : {}),
+        source_page_url: img.source_page_url || doc.url,
+      });
+      if (out.length >= 10) return out;
+    }
+  }
+  return out;
+}
+
 function normalizeDraftPayload(
   raw: Partial<DraftArticlePayload>,
   fallbackTopic: string,
@@ -258,7 +287,114 @@ function normalizeDraftPayload(
   const slug = slugify(slugSource, 80) || slugify(title, 80) || 'technical-briefing';
   const description = typeof raw.description === 'string' ? raw.description.trim() : '';
   const tldr_summary = typeof raw.tldr_summary === 'string' ? raw.tldr_summary.trim() : '';
-  const body_markdown = typeof raw.body_markdown === 'string' ? raw.body_markdown.trim() : '';
+  let body_markdown = typeof raw.body_markdown === 'string' ? raw.body_markdown.trim() : '';
+
+  const crawledImages = collectCrawledImages(primarySources);
+  const crawledUrlMap = new Map<string, ExtractedWebImage>(
+    crawledImages.map((img) => [img.url, img]),
+  );
+  const allowedSourceHosts = new Set<string>();
+  for (const doc of primarySources) {
+    try {
+      allowedSourceHosts.add(new URL(doc.url).hostname.toLowerCase());
+    } catch {
+      // ignore
+    }
+  }
+
+  const isTrustedDraftImage = (rawUrl: string, altText = ''): { ok: boolean; url: string } => {
+    const check = isValidReferenceImageUrl(rawUrl, altText);
+    if (!check.ok) return { ok: false, url: '' };
+    if (crawledUrlMap.has(check.url)) return { ok: true, url: check.url };
+    // Allow images hosted on the same domain/CDN as a crawled primary source or opengraph.githubassets.com
+    try {
+      const host = new URL(check.url).hostname.toLowerCase();
+      if (host === 'opengraph.githubassets.com' || allowedSourceHosts.has(host)) {
+        return { ok: true, url: check.url };
+      }
+      for (const srcHost of allowedSourceHosts) {
+        const rootParts = srcHost.split('.').slice(-2).join('.');
+        if (rootParts.length >= 4 && host.endsWith(rootParts)) {
+          return { ok: true, url: check.url };
+        }
+      }
+    } catch {
+      return { ok: false, url: '' };
+    }
+    return crawledUrlMap.size === 0 && allowedSourceHosts.size === 0
+      ? { ok: true, url: check.url }
+      : { ok: false, url: '' };
+  };
+
+  // Sanitize inline ![alt](url) in body_markdown so hallucinated/broken image URLs never appear
+  body_markdown = body_markdown
+    .replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g, (full, alt: string, url: string) => {
+      const trusted = isTrustedDraftImage(url, alt);
+      if (!trusted.ok) return '';
+      const cleanAlt = (alt || title).trim().replace(/[\[\]]/g, '');
+      return `![${cleanAlt}](${trusted.url})`;
+    })
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  const images: PostImage[] = [];
+  const seenImgUrls = new Set<string>();
+  if (Array.isArray(raw.images)) {
+    for (const item of raw.images) {
+      if (!item || typeof item !== 'object') continue;
+      const candidateUrl = typeof item.url === 'string' ? item.url.trim() : '';
+      const candidateAlt = typeof item.alt === 'string' ? item.alt.trim() : '';
+      const trusted = isTrustedDraftImage(candidateUrl, candidateAlt);
+      if (!trusted.ok || seenImgUrls.has(trusted.url)) continue;
+      seenImgUrls.add(trusted.url);
+      const crawledMeta = crawledUrlMap.get(trusted.url);
+      images.push({
+        url: trusted.url,
+        alt: (candidateAlt || crawledMeta?.alt || title).slice(0, 220),
+        ...(typeof item.caption === 'string' && item.caption.trim()
+          ? { caption: item.caption.trim().slice(0, 240) }
+          : crawledMeta?.caption
+            ? { caption: crawledMeta.caption }
+            : {}),
+        ...(typeof item.source_page_url === 'string' && isDeepUrl(item.source_page_url)
+          ? { source_page_url: item.source_page_url.trim() }
+          : crawledMeta?.source_page_url
+            ? { source_page_url: crawledMeta.source_page_url }
+            : {}),
+      });
+      if (images.length >= 6) break;
+    }
+  }
+
+  // Backfill up to 4 verified crawled reference images if the LLM omitted the images array
+  if (images.length === 0 && crawledImages.length > 0) {
+    for (const crawled of crawledImages.slice(0, 4)) {
+      if (seenImgUrls.has(crawled.url)) continue;
+      seenImgUrls.add(crawled.url);
+      images.push({
+        url: crawled.url,
+        alt: crawled.alt,
+        ...(crawled.caption ? { caption: crawled.caption } : {}),
+        source_page_url: crawled.source_page_url,
+      });
+    }
+  }
+
+  let cover_image_url: string | null = null;
+  let cover_image_alt: string | null = null;
+  if (typeof raw.cover_image_url === 'string' && raw.cover_image_url.trim()) {
+    const rawCoverAlt = typeof raw.cover_image_alt === 'string' ? raw.cover_image_alt.trim() : '';
+    const trustedCover = isTrustedDraftImage(raw.cover_image_url, rawCoverAlt);
+    if (trustedCover.ok) {
+      cover_image_url = trustedCover.url;
+      cover_image_alt =
+        (rawCoverAlt || crawledUrlMap.get(trustedCover.url)?.alt || title).slice(0, 220);
+    }
+  }
+  if (!cover_image_url && images.length > 0) {
+    cover_image_url = images[0].url;
+    cover_image_alt = images[0].alt || title;
+  }
 
   const key_facts: KeyFact[] = Array.isArray(raw.key_facts)
     ? raw.key_facts
@@ -340,6 +476,9 @@ function normalizeDraftPayload(
     slug,
     description,
     tldr_summary,
+    cover_image_url,
+    cover_image_alt,
+    images,
     key_facts,
     faq,
     body_markdown,
@@ -922,6 +1061,7 @@ export async function stageDeepResearch(
         markdown: read.markdown,
         chars: read.chars,
         snippet: candidate.snippet,
+        images: read.images || [],
       });
     }
   }
@@ -939,16 +1079,18 @@ export async function stageDeepResearch(
         markdown: `${candidate.title}\n\n${candidate.snippet}`,
         chars: candidate.snippet.length,
         snippet: candidate.snippet,
+        images: [],
       });
       alreadyAdded.add(candidate.url);
     }
   }
 
+  const totalCrawledImages = collectCrawledImages(primarySources).length;
   pushTrace(trace, {
     stage: 'deep_research',
     tool_name: 'stageDeepResearch',
     input: topic,
-    summary: `Collected ${primarySources.length} primary sources from ${maxReadsToAttempt} attempted reads`,
+    summary: `Collected ${primarySources.length} primary sources and ${totalCrawledImages} verified reference image(s) from ${maxReadsToAttempt} attempted reads`,
     ok: primarySources.length >= 3,
   });
 
@@ -979,6 +1121,18 @@ export async function stageDraftAndRefine(
           .join('\n\n')
       : 'No external full-page excerpts were fetched. Cite only verified deep primary documentation URLs and note any verification caveats in review_notes.';
 
+  const crawledImages = collectCrawledImages(sources);
+  const crawledImageList =
+    crawledImages.length > 0
+      ? crawledImages
+          .slice(0, 8)
+          .map(
+            (img, idx) =>
+              `[IMG ${idx + 1}] URL: ${img.url}\nAlt/Caption: ${img.alt}\nFrom Primary Source: ${img.source_page_url}`,
+          )
+          .join('\n\n')
+      : '(none extracted — leave cover_image_url empty and images as [])';
+
   const userPrompt = `TOPIC TO COVER:
 ${topic}
 
@@ -987,10 +1141,13 @@ HUMAN AUTHOR BYLINE: ${ctx.settings.default_author}
 RECENT ARTICLES ON THIS SITE (do not repeat):
 ${ctx.recentTitles.slice(0, 10).map((t) => `- ${t}`).join('\n') || '(none)'}
 
+VERIFIED CRAWLED REFERENCE IMAGES (ONLY use exact URLs from this list for cover_image_url, images, or ![Caption](https://...) in body_markdown):
+${crawledImageList}
+
 PRIMARY SOURCE DOSSIER (ground every factual claim, benchmark, version, and inline citation in these URLs):
 ${sourceDossier}
 
-Write the complete publication-ready article now as a single valid JSON object adhering strictly to all schema, GEO/AEO, citation, and anti-slop rules.`;
+Write the complete publication-ready article now as a single valid JSON object adhering strictly to all schema, GEO/AEO, citation, reference image, and anti-slop rules.`;
 
   const freeModelsOnly = ctx.settings.free_models_only !== false;
 
@@ -1422,6 +1579,9 @@ export async function stagePersistWithGate(
     faq_json: draft.faq,
     body_markdown: draft.body_markdown,
     body_html: compiled.html,
+    cover_image_url: draft.cover_image_url,
+    cover_image_alt: draft.cover_image_alt,
+    images_json: draft.images,
     author: ctx.settings.default_author,
     category_slug: ctx.skill.slug,
     archetype: ctx.archetype,

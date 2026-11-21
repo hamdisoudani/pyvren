@@ -67,6 +67,30 @@ export function compileMarkdown(markdown: string): CompiledMarkdown {
 
       return `<h${depth}>${innerHtml}</h${depth}>\n`;
     },
+    image({ href, title, text }: Tokens.Image): string {
+      const safeSrc = (href || '').trim();
+      const safeAlt = stripTagsAndDecodeBasicEntities(text || '');
+      const titleAttr = title ? ` title="${title.replace(/"/g, '&quot;')}"` : '';
+      return `<img class="editorial-img" src="${safeSrc.replace(/"/g, '&quot;')}" alt="${safeAlt.replace(/"/g, '&quot;')}"${titleAttr} loading="lazy" decoding="async" referrerpolicy="no-referrer">`;
+    },
+    paragraph({ tokens }: Tokens.Paragraph): string {
+      if (tokens.length === 1 && tokens[0].type === 'image') {
+        const imgToken = tokens[0] as Tokens.Image;
+        const safeSrc = (imgToken.href || '').trim();
+        const captionText = stripTagsAndDecodeBasicEntities(imgToken.text || imgToken.title || '');
+        const titleAttr = imgToken.title
+          ? ` title="${imgToken.title.replace(/"/g, '&quot;')}"`
+          : '';
+        const captionHtml = captionText
+          ? `<figcaption class="editorial-caption">${captionText
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')}</figcaption>`
+          : '';
+        return `<figure class="editorial-figure"><img class="editorial-img" src="${safeSrc.replace(/"/g, '&quot;')}" alt="${captionText.replace(/"/g, '&quot;')}"${titleAttr} loading="lazy" decoding="async" referrerpolicy="no-referrer">${captionHtml}</figure>\n`;
+      }
+      return `<p>${this.parser.parseInline(tokens)}</p>\n`;
+    },
   };
 
   const instance = new Marked();

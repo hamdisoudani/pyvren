@@ -21,7 +21,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
   <link rel="stylesheet" href="${GOOGLE_FONTS_HREF}" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="${GOOGLE_FONTS_HREF}"></noscript>
   <link rel="stylesheet" href="/assets/app.css">
-  <script>(function(){try{var s=localStorage.getItem('pyvren-theme');var t=(s==='dark'||s==='light')?s:(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}}catch(e){}})();</script>
+  <script>(function(){try{var c=(document.cookie.match(/(?:^|;\\s*)pyvren_theme=(dark|light)(?:;|$)/)||[])[1];var s=localStorage.getItem('pyvren-theme');var t=(s==='dark'||s==='light')?s:((c==='dark'||c==='light')?c:(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 </head>
 <body class="min-h-screen bg-paper text-ink antialiased">
   <div id="toast-root" class="fixed bottom-5 right-5 z-[60] flex flex-col gap-2 max-w-sm pointer-events-none"></div>
@@ -1190,6 +1190,14 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
                 '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Keywords (SEO / GEO, comma-separated)</label>' +
                 '<input name="keywords" type="text" value="' + esc(Array.isArray(p.keywords_json) ? p.keywords_json.join(', ') : '') + '" placeholder="cli coding agents, mcp token overhead, prompt injection defense, context rot" class="admin-input">' +
               '</div>' +
+              '<div class="space-y-1">' +
+                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Cover Image URL <span class="normal-case text-ink-faint">(https:// crawled reference or empty for Crew SVG)</span></label>' +
+                '<input name="cover_image_url" type="url" value="' + esc(p.cover_image_url || '') + '" placeholder="https://..." class="admin-input font-tabular">' +
+              '</div>' +
+              '<div class="space-y-1">' +
+                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Cover Image Alt / Caption</label>' +
+                '<input name="cover_image_alt" type="text" value="' + esc(p.cover_image_alt || '') + '" placeholder="Benchmark diagram or reference figure caption" class="admin-input">' +
+              '</div>' +
             '</div>' +
 
             '<div class="space-y-1">' +
@@ -1285,6 +1293,8 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         category_slug: String(fd.get('category_slug') || '').trim(),
         archetype: String(fd.get('archetype') || 'architecture-analysis'),
         status: String(fd.get('status') || 'draft'),
+        cover_image_url: String(fd.get('cover_image_url') || '').trim() || null,
+        cover_image_alt: String(fd.get('cover_image_alt') || '').trim() || null,
         description: String(fd.get('description') || '').trim(),
         tldr_summary: String(fd.get('tldr_summary') || '').trim(),
         body_markdown: String(fd.get('body_markdown') || ''),

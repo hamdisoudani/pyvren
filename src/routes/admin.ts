@@ -110,11 +110,22 @@ const SKILL_UPSERT_SCHEMA = z.object({
 
 const SKILL_UPDATE_SCHEMA = SKILL_UPSERT_SCHEMA.partial();
 
+const POST_IMAGE_SCHEMA = z.object({
+  url: z.string().trim().url().max(1200),
+  alt: z.string().trim().max(300).default(''),
+  caption: z.string().trim().max(400).optional(),
+  source_page_url: z.string().trim().url().optional().or(z.literal('')),
+});
+
 const POST_CREATE_SCHEMA = z.object({
   slug: z.string().trim().max(120).optional(),
   title: z.string().trim().min(1).max(300),
   description: z.string().trim().min(1).max(600),
   tldr_summary: z.string().trim().max(1000).optional(),
+  cover_image_url: z.string().trim().max(1200).nullable().optional(),
+  cover_image_alt: z.string().trim().max(300).nullable().optional(),
+  images: z.array(POST_IMAGE_SCHEMA).optional(),
+  images_json: z.array(POST_IMAGE_SCHEMA).optional(),
   key_facts: z.array(KEY_FACT_SCHEMA).optional(),
   key_facts_json: z.array(KEY_FACT_SCHEMA).optional(),
   faq: z.array(FAQ_ITEM_SCHEMA).optional(),
@@ -715,6 +726,20 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
     const sources = body.sources ?? body.sources_json ?? [];
     const reviewNotes = body.review_notes ?? body.review_notes_json ?? [];
     const tldrSummary = (body.tldr_summary || '').trim();
+    const coverImageUrl =
+      typeof body.cover_image_url === 'string' && body.cover_image_url.trim().startsWith('https://')
+        ? body.cover_image_url.trim()
+        : null;
+    const coverImageAlt =
+      typeof body.cover_image_alt === 'string' && body.cover_image_alt.trim()
+        ? body.cover_image_alt.trim()
+        : null;
+    const imagesJson = (body.images ?? body.images_json ?? []).map((img) => ({
+      url: img.url,
+      alt: img.alt || '',
+      ...(img.caption ? { caption: img.caption } : {}),
+      ...(img.source_page_url ? { source_page_url: img.source_page_url } : {}),
+    }));
 
     const compiled = compileMarkdown(body.body_markdown);
     const lint = lintPostPayload({
@@ -751,6 +776,9 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
       faq_json: faq,
       body_markdown: body.body_markdown,
       body_html: compiled.html,
+      cover_image_url: coverImageUrl,
+      cover_image_alt: coverImageAlt,
+      images_json: imagesJson,
       author,
       category_slug: categorySlug,
       archetype: body.archetype,
@@ -805,6 +833,28 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
     const categorySlug = (body.category_slug ?? existing.category_slug).trim();
     const archetype: Archetype = body.archetype ?? existing.archetype;
 
+    const coverImageUrl =
+      body.cover_image_url !== undefined
+        ? typeof body.cover_image_url === 'string' && body.cover_image_url.trim().startsWith('https://')
+          ? body.cover_image_url.trim()
+          : null
+        : existing.cover_image_url;
+    const coverImageAlt =
+      body.cover_image_alt !== undefined
+        ? typeof body.cover_image_alt === 'string' && body.cover_image_alt.trim()
+          ? body.cover_image_alt.trim()
+          : null
+        : existing.cover_image_alt;
+    const imagesJson =
+      body.images !== undefined || body.images_json !== undefined
+        ? (body.images ?? body.images_json ?? []).map((img) => ({
+            url: img.url,
+            alt: img.alt || '',
+            ...(img.caption ? { caption: img.caption } : {}),
+            ...(img.source_page_url ? { source_page_url: img.source_page_url } : {}),
+          }))
+        : existing.images_json;
+
     const keyFacts =
       body.key_facts !== undefined || body.key_facts_json !== undefined
         ? normalizeKeyFacts(body.key_facts ?? body.key_facts_json)
@@ -855,6 +905,9 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
         faq_json: faq,
         body_markdown: bodyMarkdown,
         body_html: compiled.html,
+        cover_image_url: coverImageUrl,
+        cover_image_alt: coverImageAlt,
+        images_json: imagesJson,
         author,
         category_slug: categorySlug,
         archetype,
