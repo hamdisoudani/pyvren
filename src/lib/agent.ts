@@ -640,13 +640,17 @@ export async function stageHuntTopics(
     ? [cleanRequested]
     : (ctx.skill.search_queries_json || []).slice(0, 2);
 
-  const rawSearchHits: SearchSourceItem[] = (
-    await Promise.all(
-      seedQueries.map((q) =>
-        searchWebSources(q, env, trace, { freshness: 'week', mode: 'news' }),
-      ),
-    )
-  ).flat();
+  const shouldSearchSeed =
+    hasExplicitTopic || Boolean(env.SERPER_API_KEY?.trim()) || rawFeedItems.length < 3;
+  const rawSearchHits: SearchSourceItem[] = shouldSearchSeed
+    ? (
+        await Promise.all(
+          seedQueries.map((q) =>
+            searchWebSources(q, env, trace, { freshness: 'week', mode: 'news' }),
+          ),
+        )
+      ).flat()
+    : [];
 
   type TaggedCandidate =
     | ({ _sourceKind: 'feed' } & FeedItem)
@@ -1004,13 +1008,17 @@ export async function stageDeepResearch(
   feedItems: FeedItem[],
   trace: TraceEntry[],
 ): Promise<PrimarySourceDoc[]> {
+  const hasSerperKey = Boolean(env.SERPER_API_KEY?.trim());
   const queries = Array.from(
     new Set([topic, ...searchQueries].map((q) => q.trim()).filter(Boolean)),
-  ).slice(0, 4);
+  ).slice(0, hasSerperKey ? 3 : 2);
 
-  const searchBatches = await Promise.all(
-    queries.map((q) => searchWebSources(q, env, trace)),
-  );
+  // Conserve Cloudflare Workers Free-plan subrequest budget: skip DuckDuckGo HTML scraping when
+  // authoritative feeds already supply >= 3 deep candidates and SERPER_API_KEY is not configured.
+  const searchBatches =
+    hasSerperKey || feedItems.length < 3
+      ? await Promise.all(queries.map((q) => searchWebSources(q, env, trace)))
+      : [];
   const searchResults = searchBatches.flat();
 
   // Build deduplicated candidate list prioritizing deep https:// URLs
@@ -1081,8 +1089,8 @@ export async function stageDeepResearch(
   candidates.sort((a, b) => b.score - a.score);
 
   const primarySources: PrimarySourceDoc[] = [];
-  const maxReadsToAttempt = Math.min(candidates.length, 10);
-  const targetSourceCount = 5;
+  const maxReadsToAttempt = Math.min(candidates.length, 6);
+  const targetSourceCount = 4;
 
   for (let i = 0; i < maxReadsToAttempt && primarySources.length < targetSourceCount; i++) {
     const candidate = candidates[i];

@@ -1479,6 +1479,11 @@ export function isValidReferenceImageUrl(
     return { ok: false, url: '' };
   }
 
+  // Reject HTML/document page URLs that are clearly not images (e.g. .html article links)
+  if (/\.(?:html?|php|aspx?|jsp|xml|json|pdf|txt|md|rss|atom|js|css)$/i.test(parsed.pathname)) {
+    return { ok: false, url: '' };
+  }
+
   // Block generic UI .svg icons unless explicitly labeled as a diagram/architecture/chart/figure
   if (/\.svg(?:$|\?)/i.test(parsed.pathname)) {
     const signal = `${parsed.pathname} ${altText}`.toLowerCase();

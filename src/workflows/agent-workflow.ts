@@ -231,6 +231,11 @@ export class EditorialAgentWorkflow extends WorkflowEntrypoint<WorkerEnv, AgentD
         },
       );
 
+      // Reset Cloudflare Workers Free-plan 50-subrequest invocation budget before drafting
+      if (typeof step.sleep === 'function') {
+        await step.sleep('yield-budget-draft', '1 second');
+      }
+
       // Stage 4: Draft structured JSON & deterministic self-correction loop
       const drafted = await step.do<DraftRefineStepOutput>(
         'draft-and-refine',
@@ -265,7 +270,12 @@ export class EditorialAgentWorkflow extends WorkflowEntrypoint<WorkerEnv, AgentD
         },
       );
 
-      // Stage 5: Blended deterministic + LLM editorial quality assessment
+      // Reset Cloudflare Workers Free-plan 50-subrequest invocation budget before dual-critic + persist
+      if (typeof step.sleep === 'function') {
+        await step.sleep('yield-budget-critic', '1 second');
+      }
+
+      // Stage 5: Cross-family dual-model critic review & revision loop
       const assessed = await step.do<QualityAssessmentStepOutput>(
         'quality-assessment',
         STAGE_STEP_CONFIG,
