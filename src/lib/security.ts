@@ -1093,16 +1093,28 @@ export function verifyCsrfOrigin(req: Request): CsrfOriginResult {
     return { ok: true };
   }
 
-  let targetHost: string;
   let sourceHost: string;
+  const allowedTargetHosts = new Set<string>();
   try {
-    targetHost = new URL(req.url).host.toLowerCase();
     sourceHost = new URL(candidate).host.toLowerCase();
   } catch {
     return { ok: false, reason: 'Origin mismatch (CSRF guard).' };
   }
 
-  if (!sourceHost || sourceHost !== targetHost) {
+  try {
+    const reqHost = new URL(req.url).host.toLowerCase();
+    if (reqHost) allowedTargetHosts.add(reqHost);
+  } catch {
+    // ignore malformed url
+  }
+
+  const hostHeader = req.headers.get('host')?.trim().toLowerCase();
+  if (hostHeader) allowedTargetHosts.add(hostHeader);
+
+  const forwardedHost = req.headers.get('x-forwarded-host')?.split(',')[0]?.trim().toLowerCase();
+  if (forwardedHost) allowedTargetHosts.add(forwardedHost);
+
+  if (!sourceHost || allowedTargetHosts.size === 0 || !allowedTargetHosts.has(sourceHost)) {
     return { ok: false, reason: 'Origin mismatch (CSRF guard).' };
   }
 

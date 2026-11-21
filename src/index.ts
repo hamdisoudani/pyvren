@@ -102,10 +102,15 @@ export function createApp(): Hono<{ Bindings: WorkerEnv }> {
   });
 
   // Admin SPA registered LAST with strict noindex & no-store headers
-  const serveAdminSpa = async (c: { env: WorkerEnv; req: { path: string } }) => {
+  const serveAdminSpa = async (c: { env: WorkerEnv; req: { path: string; raw: Request } }) => {
     const db = createDatabase(c.env);
     const settings = await db.getSettings();
-    const html = renderAdminSpaHtml(settings);
+    const cookieHeader = c.req.raw.headers.get('cookie') || '';
+    const themeMatch = /(?:^|;\s*)pyvren_theme=(dark|light)(?:;|$)/i.exec(cookieHeader);
+    const initialTheme = themeMatch
+      ? (themeMatch[1].toLowerCase() as 'dark' | 'light')
+      : undefined;
+    const html = renderAdminSpaHtml(settings, initialTheme);
     return new Response(html, {
       status: 200,
       headers: {

@@ -1,19 +1,74 @@
 import { escapeHtml } from '../lib/security';
 import type { SiteSettings } from '../types';
+import {
+  renderHeroCrewSceneSvg,
+  renderPySnakeMark,
+  renderPyvrenWordmark,
+  renderTopicSketchIcon,
+  renderUiSketchIcon,
+} from './crew-art';
 
 const GOOGLE_FONTS_HREF =
-  'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap';
+  'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;0,6..72,700&family=Oswald:wght@600;700&family=Playfair+Display:ital,wght@0,700;0,900;1,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap';
 
-export function renderAdminSpaHtml(settings: SiteSettings): string {
-  const siteName = settings.site_name || 'Pyvren';
+function safeInlineJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+export function renderAdminSpaHtml(
+  settings: SiteSettings,
+  initialTheme?: 'light' | 'dark',
+): string {
+  const siteName = settings.site_name || 'The Pyvren Dispatch';
+  const defaultAuthor = settings.default_author || 'Hamdi Soudani';
+  const htmlThemeAttr =
+    initialTheme === 'dark'
+      ? ' data-theme="dark"'
+      : initialTheme === 'light'
+        ? ' data-theme="light"'
+        : '';
+
+  const wordmarkAdmin = renderPyvrenWordmark({ siteName, variant: 'header', href: '/admin' }).replace(
+    'pyvren-wordmark--header',
+    'pyvren-wordmark--header pyvren-wordmark--static',
+  );
+  const wordmarkHome = renderPyvrenWordmark({ siteName, variant: 'header', href: '/' });
+  const heroScene = renderHeroCrewSceneSvg();
+  const snakeMini = renderPySnakeMark({ height: 28 });
+
+  const uiIcons = {
+    pen: renderUiSketchIcon('pen', 14),
+    spark: renderUiSketchIcon('spark', 14),
+    layers: renderUiSketchIcon('layers', 14),
+    ledger: renderUiSketchIcon('ledger', 14),
+    note: renderUiSketchIcon('note', 14),
+    clock: renderUiSketchIcon('clock', 13),
+    external: renderUiSketchIcon('external', 13),
+    search: renderUiSketchIcon('search', 14),
+  };
+
+  const topicIcons: Record<string, string> = {
+    'ai-coding-agents-mcp': renderTopicSketchIcon('ai-coding-agents-mcp', 15),
+    'ai-security-jailbreaks': renderTopicSketchIcon('ai-security-jailbreaks', 15),
+    'ai-llms': renderTopicSketchIcon('ai-llms', 15),
+    'cloud-gpu-infra': renderTopicSketchIcon('cloud-gpu-infra', 15),
+    'agentic-browser-web-data': renderTopicSketchIcon('agentic-browser-web-data', 15),
+    'dev-tooling-benchmarks': renderTopicSketchIcon('dev-tooling-benchmarks', 15),
+    default: renderTopicSketchIcon('all', 15),
+  };
 
   return `<!doctype html>
-<html lang="en">
+<html lang="en"${htmlThemeAttr}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
-  <title>${escapeHtml(siteName)} — Editorial Control Panel</title>
+  <title>Pyvren Studio — Editorial Control Panel</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -21,17 +76,47 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
   <link rel="stylesheet" href="${GOOGLE_FONTS_HREF}" media="print" onload="this.media='all'">
   <noscript><link rel="stylesheet" href="${GOOGLE_FONTS_HREF}"></noscript>
   <link rel="stylesheet" href="/assets/app.css">
-  <script>(function(){try{var c=(document.cookie.match(/(?:^|;\\s*)pyvren_theme=(dark|light)(?:;|$)/)||[])[1];var s=localStorage.getItem('pyvren-theme');var t=(s==='dark'||s==='light')?s:((c==='dark'||c==='light')?c:(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+  <script>(function(){try{var c=(document.cookie.match(/(?:^|;\\s*)pyvren_theme=(dark|light)(?:;|$)/)||[])[1];var s=localStorage.getItem('pyvren-theme');var pref=(s==='dark'||s==='light')?s:((c==='dark'||c==='light')?c:(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));document.documentElement.setAttribute('data-theme',pref);if(c!==pref){document.cookie='pyvren_theme='+pref+'; path=/; max-age=31536000; SameSite=Lax';}}catch(e){}})();</script>
 </head>
 <body class="min-h-screen bg-paper text-ink antialiased">
   <div id="toast-root" class="fixed bottom-5 right-5 z-[60] flex flex-col gap-2 max-w-sm pointer-events-none"></div>
   <div id="app" class="min-h-screen flex flex-col">
-    <div class="flex-1 flex items-center justify-center p-6">
-      <div class="text-center space-y-2">
-        <p class="font-tabular text-xs uppercase tracking-[0.14em] text-ink-faint">${escapeHtml(siteName)} Studio</p>
-        <p class="font-editorial text-xl text-ink">Verifying session&hellip;</p>
+    <!-- Initial Skeleton Shell (mirrors public masthead + studio layout before auth resolves) -->
+    <header class="editorial-topbar sticky top-0 z-40 border-b border-hairline">
+      <div class="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-8 h-[4.5rem] sm:h-20 flex items-center justify-between gap-3">
+        <div class="flex items-center gap-3 min-w-0 pt-0.5">
+          ${wordmarkHome}
+          <span class="badge-editorial badge-accent hidden sm:inline-flex">Studio</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="skeleton-line skeleton-shimmer w-24 h-8 rounded-lg"></span>
+          <span class="skeleton-line skeleton-shimmer w-9 h-9 rounded-lg"></span>
+        </div>
       </div>
-    </div>
+    </header>
+    <main class="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-12">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+        <div class="lg:col-span-6 editorial-card p-7 sm:p-9 space-y-5">
+          <div class="space-y-2.5">
+            <span class="skeleton-line skeleton-shimmer w-40"></span>
+            <span class="skeleton-line skeleton-line--lg skeleton-shimmer w-56 h-7"></span>
+            <span class="skeleton-line skeleton-shimmer w-full"></span>
+          </div>
+          <div class="space-y-3 pt-2">
+            <span class="skeleton-line skeleton-shimmer w-full h-10 rounded-[10px]"></span>
+            <span class="skeleton-line skeleton-shimmer w-full h-10 rounded-[10px]"></span>
+            <span class="skeleton-line skeleton-shimmer w-full h-11 rounded-[10px]"></span>
+          </div>
+        </div>
+        <div class="hidden lg:block lg:col-span-6">
+          <div class="rounded-2xl border-[1.5px] border-hairline bg-surface p-6 aspect-[400/282] relative overflow-hidden">
+            <div class="media-skeleton skeleton-shimmer absolute inset-0" aria-hidden="true">
+              <span class="media-skeleton-mark">${snakeMini}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
   </div>
   <div id="modal-root"></div>
 
@@ -39,7 +124,16 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
   (function () {
     'use strict';
 
-    var SITE_NAME = ${JSON.stringify(siteName)};
+    var SITE_NAME = ${safeInlineJson(siteName)};
+    var DEFAULT_AUTHOR = ${safeInlineJson(defaultAuthor)};
+    var WORDMARK_ADMIN = ${safeInlineJson(wordmarkAdmin)};
+    var WORDMARK_HOME = ${safeInlineJson(wordmarkHome)};
+    var HERO_SCENE = ${safeInlineJson(heroScene)};
+    var SNAKE_MINI = ${safeInlineJson(snakeMini)};
+    var UI_ICONS = ${safeInlineJson(uiIcons)};
+    var TOPIC_ICONS = ${safeInlineJson(topicIcons)};
+    var TOKEN_STORAGE_KEY = 'pyvren_admin_jwt';
+
     var ARCHETYPES = [
       { value: 'advisory-teardown', label: 'Advisory Teardown' },
       { value: 'benchmark-index', label: 'Benchmark Index' },
@@ -50,9 +144,9 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
     var PRESETS = [
       { label: 'Autonomous Hunt', topic: '', category: '', archetype: 'auto' },
       { label: 'CLI Coding Agents & MCP', topic: 'Field benchmark of terminal coding agents, MCP vs CLI token overhead, and SWE-bench Pro / Terminal-Bench 2.0 reliability', category: 'ai-coding-agents-mcp', archetype: 'benchmark-index' },
-      { label: 'AI Security & Prompt Injection Defense', topic: 'Defensive teardown of indirect prompt injection, tool-result smuggling, and unauthenticated MCP exposure using OWASP LLM Top 10 controls', category: 'ai-security-jailbreaks', archetype: 'advisory-teardown' },
+      { label: 'AI Security & Prompt Injection', topic: 'Defensive teardown of indirect prompt injection, tool-result smuggling, and unauthenticated MCP exposure using OWASP LLM Top 10 controls', category: 'ai-security-jailbreaks', archetype: 'advisory-teardown' },
       { label: 'Local SLMs & Context Rot', topic: 'Quantitative comparison of 1B-32B open-weight local SLMs vs frontier LLMs, context rot degradation past 32K tokens, and vLLM/SGLang VRAM math', category: 'ai-llms', archetype: 'benchmark-index' },
-      { label: 'Cloudflare Edge & GPU Economics', topic: 'Production limits and break-even economics of Cloudflare Workers & Workflows, serverless Postgres pooling, and spot H100/B200 inference', category: 'cloud-gpu-infra', archetype: 'architecture-analysis' },
+      { label: 'Cloudflare Edge & GPU Math', topic: 'Production limits and break-even economics of Cloudflare Workers & Workflows, serverless Postgres pooling, and spot H100/B200 inference', category: 'cloud-gpu-infra', archetype: 'architecture-analysis' },
       { label: 'Live Web Data & GEO', topic: 'Benchmark of AI agent web-grounding pipelines, Firecrawl/Jina/Playwright Markdown extraction fidelity, and llms.txt + JSON-LD GEO citation readiness', category: 'agentic-browser-web-data', archetype: 'benchmark-index' },
       { label: 'CISA KEV Advisory', topic: 'Rapid technical teardown of newly exploited CISA KEV vulnerabilities and critical GitHub Security Advisories with zero-downtime patch verification', category: 'dev-tooling-benchmarks', archetype: 'advisory-teardown' }
     ];
@@ -88,8 +182,24 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       }
     ];
 
+    function readStoredToken() {
+      try { return sessionStorage.getItem(TOKEN_STORAGE_KEY) || ''; } catch (e) { return ''; }
+    }
+
+    function writeStoredToken(tok) {
+      sessionToken = tok || '';
+      try {
+        if (sessionToken) sessionStorage.setItem(TOKEN_STORAGE_KEY, sessionToken);
+        else sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+      } catch (e) {}
+    }
+
+    var sessionToken = readStoredToken();
+
     var state = {
       auth: { loading: true, authenticated: false, user: null },
+      loggingIn: false,
+      showPassword: false,
       activeTab: 'posts',
       settings: null,
       posts: [],
@@ -102,11 +212,12 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       expandedRunIds: {},
       pollTimer: null,
       dispatching: false,
-      loadingData: false
+      loadingData: false,
+      hasLoadedOnce: false
     };
 
     /* ------------------------------------------------------------------
-       Utilities & Safe Escaping
+       Utilities, Theme Sync & Pointer-Tracked Snake Eyes
        ------------------------------------------------------------------ */
 
     function esc(v) {
@@ -116,6 +227,10 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+    }
+
+    function topicIcon(slug) {
+      return TOPIC_ICONS[slug] || TOPIC_ICONS.default || '';
     }
 
     function fmtDate(iso) {
@@ -150,6 +265,56 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
 
     function isFreeModelsOnly() {
       return state.settings ? state.settings.free_models_only !== false : true;
+    }
+
+    function getTheme() {
+      return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+    }
+
+    function renderThemeToggleButton() {
+      var isDark = getTheme() === 'dark';
+      return '<button type="button" data-action="toggle-theme" class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-hairline bg-surface text-ink-secondary hover:text-ink hover:border-strong transition-colors cursor-pointer shrink-0" aria-label="Switch color theme" aria-pressed="' + (isDark ? 'true' : 'false') + '" title="Switch between warm paper and dark mode">' +
+        (isDark
+          ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32l1.41-1.41"/></svg>'
+          : '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>') +
+      '</button>';
+    }
+
+    function toggleTheme() {
+      var next = getTheme() === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      try { localStorage.setItem('pyvren-theme', next); } catch (e) {}
+      try { document.cookie = 'pyvren_theme=' + next + '; path=/; max-age=31536000; SameSite=Lax'; } catch (e) {}
+      render();
+    }
+
+    // Py's eyes follow the pointer across the admin studio too (desktop pointers, reduced-motion safe)
+    var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!reduceMotion) {
+      var ptrX = 0, ptrY = 0, eyeRaf = 0;
+      var updateEyes = function () {
+        eyeRaf = 0;
+        var pupils = document.querySelectorAll('[data-snake-pupil]');
+        var vh = window.innerHeight || 0;
+        for (var i = 0; i < pupils.length; i++) {
+          var p = pupils[i];
+          var sclera = p.previousElementSibling;
+          if (!sclera || !sclera.getBoundingClientRect) continue;
+          var r = sclera.getBoundingClientRect();
+          if (r.width === 0 || r.bottom < 0 || r.top > vh) continue;
+          var dx = ptrX - (r.left + r.width / 2);
+          var dy = ptrY - (r.top + r.height / 2);
+          var dist = Math.sqrt(dx * dx + dy * dy) || 1;
+          var reach = Math.min(1, dist / 240) * 2.1;
+          p.setAttribute('transform', 'translate(' + ((dx / dist) * reach - 1).toFixed(2) + ' ' + ((dy / dist) * reach).toFixed(2) + ')');
+        }
+      };
+      window.addEventListener('pointermove', function (e) {
+        if (e.pointerType === 'touch') return;
+        ptrX = e.clientX;
+        ptrY = e.clientY;
+        if (!eyeRaf) eyeRaf = window.requestAnimationFrame(updateEyes);
+      }, { passive: true });
     }
 
     function normalizeFreeModels(res) {
@@ -202,12 +367,17 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       if (!root) return;
       var el = document.createElement('div');
       var borderClass = kind === 'error'
-        ? 'border-[var(--danger)] text-[var(--danger)]'
+        ? 'border-[var(--danger)]'
         : kind === 'success'
-          ? 'border-[var(--success)] text-[var(--success)]'
-          : 'border-strong text-ink';
-      el.className = 'pointer-events-auto rounded-[6px] bg-surface border ' + borderClass + ' px-4 py-3 text-sm shadow-lg flex items-center justify-between gap-3';
-      el.innerHTML = '<span class="text-ink">' + esc(msg) + '</span>';
+          ? 'border-[var(--success)]'
+          : 'border-strong';
+      var badgeTone = kind === 'error'
+        ? 'text-[var(--danger)]'
+        : kind === 'success'
+          ? 'text-[var(--success)]'
+          : 'text-accent';
+      el.className = 'pointer-events-auto rounded-xl bg-surface border-[1.5px] ' + borderClass + ' px-4 py-3 text-sm shadow-lg flex items-center gap-2.5';
+      el.innerHTML = '<span class="' + badgeTone + ' shrink-0">' + UI_ICONS.spark + '</span><span class="text-ink font-medium">' + esc(msg) + '</span>';
       root.appendChild(el);
       setTimeout(function () {
         if (el.parentNode) el.parentNode.removeChild(el);
@@ -216,18 +386,36 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
 
     async function apiFetch(url, opts) {
       var init = Object.assign({ credentials: 'same-origin' }, opts || {});
-      init.headers = Object.assign(
+      var headers = Object.assign(
         { 'X-Requested-With': 'PyvrenAdmin' },
         (opts && opts.headers) || {}
       );
+      if (sessionToken && !headers.Authorization && !headers.authorization) {
+        headers.Authorization = 'Bearer ' + sessionToken;
+      }
       if (init.body && typeof init.body === 'object' && !(init.body instanceof FormData)) {
-        init.headers = Object.assign({ 'Content-Type': 'application/json' }, init.headers);
+        headers['Content-Type'] = headers['Content-Type'] || 'application/json';
         init.body = JSON.stringify(init.body);
       }
+      init.headers = headers;
+
       var res = await fetch(url, init);
+      var contentType = (res.headers.get('content-type') || '').toLowerCase();
       var text = await res.text();
+      if (opts && opts.rawText) {
+        if (!res.ok) {
+          var rawErr = new Error('Request failed (' + res.status + ')');
+          rawErr.status = res.status;
+          throw rawErr;
+        }
+        return text;
+      }
       var data = null;
-      try { data = text ? JSON.parse(text) : null; } catch (e) { data = { raw: text }; }
+      if (contentType.indexOf('application/json') !== -1 || text.trim().charAt(0) === '{' || text.trim().charAt(0) === '[') {
+        try { data = text ? JSON.parse(text) : null; } catch (e) { data = { raw: text }; }
+      } else {
+        data = { raw: text };
+      }
       if (!res.ok) {
         var errMsg = (data && (data.error || data.message)) || ('Request failed (' + res.status + ')');
         var err = new Error(errMsg);
@@ -239,15 +427,6 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
     }
     var api = apiFetch;
 
-    function toggleTheme() {
-      var root = document.documentElement;
-      var next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-      if (next === 'dark') root.setAttribute('data-theme', 'dark');
-      else root.removeAttribute('data-theme');
-      try { localStorage.setItem('pyvren-theme', next); } catch (e) {}
-      render();
-    }
-
     /* ------------------------------------------------------------------
        Auth & Data Loading
        ------------------------------------------------------------------ */
@@ -255,10 +434,14 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
     async function checkAuthStatus() {
       try {
         var res = await api('/api/admin/auth/status');
+        var isAuthed = Boolean(res && res.authenticated);
+        if (!isAuthed && sessionToken) {
+          writeStoredToken('');
+        }
         state.auth = {
           loading: false,
-          authenticated: Boolean(res && res.authenticated),
-          user: (res && (res.user || res.admin || (res.email ? { email: res.email, display_name: res.display_name } : null))) || null
+          authenticated: isAuthed,
+          user: (res && (res.user || res.admin || (res.email ? { email: res.email, display_name: res.display_name || DEFAULT_AUTHOR } : null))) || null
         };
         if (state.auth.authenticated) {
           await loadAllWorkspaceData();
@@ -289,9 +472,11 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         state.skills = Array.isArray(results[2]) ? results[2] : ((results[2] && results[2].skills) || []);
         state.runs = Array.isArray(results[3]) ? results[3] : ((results[3] && results[3].runs) || []);
         state.freeModels = normalizeFreeModels(results[4]);
+        state.hasLoadedOnce = true;
         syncPolling();
       } catch (err) {
         if (err && err.status === 401) {
+          writeStoredToken('');
           state.auth.authenticated = false;
           stopPolling();
         } else {
@@ -305,7 +490,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
 
     async function refreshFreeModelsOnly() {
       try {
-        var res = await apiFetch('/api/admin/openrouter/free-models');
+        var res = await apiFetch('/api/admin/openrouter/free-models?refresh=1');
         state.freeModels = normalizeFreeModels(res);
         toast('Loaded ' + state.freeModels.length + ' live OpenRouter :free models', 'success');
         render();
@@ -337,6 +522,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         }
       } catch (err) {
         if (err && err.status === 401) {
+          writeStoredToken('');
           state.auth.authenticated = false;
           stopPolling();
           render();
@@ -368,124 +554,186 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
     }
 
     /* ------------------------------------------------------------------
-       Auth View (Locked Single-Owner Sign In)
+       Skeleton Loaders (Inherits Public Shimmer System)
        ------------------------------------------------------------------ */
 
-    function renderBrandSvg() {
-      return '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
-        '<rect x="1.5" y="1.5" width="21" height="21" rx="3" stroke="currentColor" stroke-width="1.5"/>' +
-        '<path d="M7.5 16.5V7.5H13.25C15.1 7.5 16.25 8.55 16.25 10.2C16.25 11.85 15.1 12.9 13.25 12.9H7.5" stroke="currentColor" stroke-width="1.65" stroke-linecap="square"/>' +
-        '<path d="M13.5 16.5L17 13" stroke="var(--accent)" stroke-width="1.9" stroke-linecap="square"/>' +
-      '</svg>';
+    function renderWorkspaceSkeleton() {
+      var cardSkeleton = '<div class="editorial-card p-5 space-y-3" aria-hidden="true">' +
+        '<div class="flex items-center gap-2">' +
+          '<span class="skeleton-line skeleton-shimmer w-20 h-5 rounded-md"></span>' +
+          '<span class="skeleton-line skeleton-shimmer w-28 h-5 rounded-md"></span>' +
+          '<span class="skeleton-line skeleton-shimmer w-24 h-5 rounded-md"></span>' +
+        '</div>' +
+        '<span class="skeleton-line skeleton-line--lg skeleton-shimmer w-3/4 h-6"></span>' +
+        '<span class="skeleton-line skeleton-shimmer w-full"></span>' +
+        '<span class="skeleton-line skeleton-shimmer w-2/3"></span>' +
+      '</div>';
+
+      return '<section class="space-y-6" aria-busy="true" aria-label="Loading workspace">' +
+        '<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">' +
+          '<div class="admin-stat-tile space-y-2"><span class="skeleton-line skeleton-shimmer w-20"></span><span class="skeleton-line skeleton-line--lg skeleton-shimmer w-14 h-6"></span></div>' +
+          '<div class="admin-stat-tile space-y-2"><span class="skeleton-line skeleton-shimmer w-20"></span><span class="skeleton-line skeleton-line--lg skeleton-shimmer w-14 h-6"></span></div>' +
+          '<div class="admin-stat-tile space-y-2"><span class="skeleton-line skeleton-shimmer w-20"></span><span class="skeleton-line skeleton-line--lg skeleton-shimmer w-14 h-6"></span></div>' +
+          '<div class="admin-stat-tile space-y-2"><span class="skeleton-line skeleton-shimmer w-20"></span><span class="skeleton-line skeleton-line--lg skeleton-shimmer w-14 h-6"></span></div>' +
+        '</div>' +
+        '<div class="space-y-3">' + cardSkeleton + cardSkeleton + cardSkeleton + '</div>' +
+      '</section>';
     }
 
+    /* ------------------------------------------------------------------
+       Auth View (Locked Single-Owner Sign In — Public Sketchbook Twin)
+       ------------------------------------------------------------------ */
+
     function renderAuthGate() {
-      var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-
-      return '<div class="min-h-screen flex flex-col justify-between bg-paper border-t-[3px] border-[var(--accent)] p-4 sm:p-8">' +
-        '<div class="max-w-md w-full mx-auto flex items-center justify-between pt-2">' +
-          '<a href="/" class="inline-flex items-center gap-2.5 text-ink">' +
-            renderBrandSvg() +
-            '<span class="font-masthead font-editorial text-xl font-semibold tracking-tight">' + esc(SITE_NAME) + '</span>' +
-          '</a>' +
-          '<button type="button" data-action="toggle-theme" class="btn-ghost text-xs font-tabular">' + (isDark ? 'Light Mode' : 'Dark Mode') + '</button>' +
-        '</div>' +
-
-        '<div class="max-w-md w-full mx-auto my-10 editorial-card bg-surface border-t-[3px] border-t-[var(--accent)] p-7 sm:p-9 space-y-6">' +
-          '<div class="space-y-2.5 border-b border-hairline pb-5">' +
-            '<p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold inline-flex items-center gap-2">' +
-              '<span class="inline-block w-1.5 h-1.5 rounded-full bg-[var(--accent)]"></span>' +
-              '<span>Pyvren Editorial Desk &middot; Restricted Owner Access</span>' +
-            '</p>' +
-            '<h1 class="font-masthead font-editorial text-3xl font-semibold text-ink leading-tight">Owner Sign In</h1>' +
-            '<p class="text-sm text-ink-muted leading-relaxed">' +
-              'Sign in with the configured owner credentials to manage briefings, autonomous research agents, category skills, and publishing gates.' +
-            '</p>' +
-          '</div>' +
-
-          '<form id="login-form" class="space-y-4">' +
-            '<div class="space-y-1.5">' +
-              '<label class="block font-tabular text-xs text-ink-muted uppercase tracking-wider" for="lg-email">Email</label>' +
-              '<input id="lg-email" name="email" type="email" required autocomplete="email" placeholder="owner@pyvren.com" class="admin-input">' +
+      return '<div class="min-h-screen flex flex-col bg-paper">' +
+        '<header class="editorial-topbar sticky top-0 z-40 border-b border-hairline">' +
+          '<div class="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-8 h-[4.5rem] sm:h-20 flex items-center justify-between gap-3">' +
+            '<div class="flex items-center gap-3 min-w-0 pt-0.5">' +
+              WORDMARK_HOME +
+              '<span class="badge-editorial badge-accent hidden sm:inline-flex">Studio</span>' +
             '</div>' +
-            '<div class="space-y-1.5">' +
-              '<label class="block font-tabular text-xs text-ink-muted uppercase tracking-wider" for="lg-pass">Password</label>' +
-              '<input id="lg-pass" name="password" type="password" required autocomplete="current-password" placeholder="••••••••••••" class="admin-input">' +
+            '<div class="flex items-center gap-2">' +
+              renderThemeToggleButton() +
+              '<a href="/" class="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border border-hairline bg-surface text-xs font-semibold text-ink-secondary hover:text-ink hover:border-strong transition-colors">' +
+                '<span>Public Site</span>' +
+                UI_ICONS.external +
+              '</a>' +
             '</div>' +
-            '<div id="auth-error" class="hidden rounded-[5px] bg-[var(--danger-soft)] text-[var(--danger)] px-3 py-2 text-xs font-medium"></div>' +
-            '<button type="submit" class="btn-accent w-full py-2.5 font-semibold tracking-tight">Sign In</button>' +
-          '</form>' +
-
-          '<div class="pt-4 border-t border-hairline flex items-center justify-between gap-2 font-tabular text-[11px] text-ink-faint">' +
-            '<span>Single-Owner Locked Access</span>' +
-            '<span class="text-accent font-semibold">Private Desk</span>' +
           '</div>' +
-        '</div>' +
+        '</header>' +
 
-        '<div class="max-w-md w-full mx-auto text-center font-tabular text-xs text-ink-faint pb-2">' +
-          '<a href="/" class="hover:text-accent transition-colors">&larr; Return to public publication</a>' +
-        '</div>' +
+        '<main class="flex-1 flex items-center">' +
+          '<div class="max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-14">' +
+            '<div class="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center">' +
+              '<div class="lg:col-span-6 space-y-6">' +
+                '<div class="editorial-card p-6 sm:p-9 space-y-6">' +
+                  '<div class="space-y-2.5 border-b border-hairline pb-5">' +
+                    '<p class="inline-flex items-center gap-1.5 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-bold">' +
+                      UI_ICONS.pen +
+                      '<span>Pyvren Editorial Desk &middot; Owner Access</span>' +
+                    '</p>' +
+                    '<h1 class="font-masthead text-3xl sm:text-4xl font-black text-ink leading-[1.08]">Owner Sign In</h1>' +
+                    '<p class="text-sm text-ink-secondary leading-relaxed">' +
+                      'Sign in to publish dispatches, steer autonomous research runs, tune category skills, and manage your editorial schedule.' +
+                    '</p>' +
+                  '</div>' +
+
+                  '<form id="login-form" class="space-y-4">' +
+                    '<div class="space-y-1.5">' +
+                      '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase tracking-[0.08em]" for="lg-email">Owner Email</label>' +
+                      '<input id="lg-email" name="email" type="email" required autocomplete="email" placeholder="you@example.com" class="admin-input">' +
+                    '</div>' +
+                    '<div class="space-y-1.5">' +
+                      '<div class="flex items-center justify-between gap-2">' +
+                        '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase tracking-[0.08em]" for="lg-pass">Password</label>' +
+                        '<button type="button" data-action="toggle-pass" class="font-tabular text-[11px] text-ink-muted hover:text-accent cursor-pointer">' + (state.showPassword ? 'Hide' : 'Show') + '</button>' +
+                      '</div>' +
+                      '<input id="lg-pass" name="password" type="' + (state.showPassword ? 'text' : 'password') + '" required autocomplete="current-password" placeholder="Enter owner password" class="admin-input">' +
+                    '</div>' +
+                    '<div id="auth-error" role="alert" class="hidden rounded-xl border border-[var(--danger)]/40 bg-[var(--danger-soft)] text-[var(--danger)] px-3.5 py-2.5 text-xs font-medium"></div>' +
+                    '<button type="submit" ' + (state.loggingIn ? 'disabled' : '') + ' class="btn-accent w-full py-2.5 text-sm font-semibold rounded-xl">' +
+                      (state.loggingIn ? 'Signing in...' : 'Enter Pyvren Studio') +
+                    '</button>' +
+                  '</form>' +
+
+                  '<div class="pt-4 border-t border-hairline flex flex-wrap items-center justify-between gap-2 font-tabular text-[11px] text-ink-faint">' +
+                    '<span>Single-owner env-locked access</span>' +
+                    '<span class="text-ink-muted">' + esc(DEFAULT_AUTHOR) + ' &times; Pyvren</span>' +
+                  '</div>' +
+                '</div>' +
+              '</div>' +
+
+              '<div class="lg:col-span-6 space-y-5">' +
+                '<div class="rounded-2xl border-[1.5px] border-strong/80 bg-surface p-3.5 sm:p-5 shadow-[4px_4px_0_0_var(--border-hairline)]">' +
+                  HERO_SCENE +
+                '</div>' +
+                '<div class="grid grid-cols-1 sm:grid-cols-3 gap-3">' +
+                  '<div class="admin-stat-tile space-y-1">' +
+                    '<p class="inline-flex items-center gap-1.5 font-tabular text-[10px] uppercase tracking-[0.1em] text-accent font-bold">' + UI_ICONS.spark + '<span>$0 Guard</span></p>' +
+                    '<p class="text-xs text-ink-secondary">OpenRouter free-model routing with live catalog sync.</p>' +
+                  '</div>' +
+                  '<div class="admin-stat-tile space-y-1">' +
+                    '<p class="inline-flex items-center gap-1.5 font-tabular text-[10px] uppercase tracking-[0.1em] text-accent font-bold">' + UI_ICONS.ledger + '<span>Strict Gate</span></p>' +
+                    '<p class="text-xs text-ink-secondary">Anti-slop stylometry, source grounding &amp; draft lock.</p>' +
+                  '</div>' +
+                  '<div class="admin-stat-tile space-y-1">' +
+                    '<p class="inline-flex items-center gap-1.5 font-tabular text-[10px] uppercase tracking-[0.1em] text-accent font-bold">' + UI_ICONS.layers + '<span>Edge Native</span></p>' +
+                    '<p class="text-xs text-ink-secondary">Cloudflare Workers + Workflows + Supabase RLS.</p>' +
+                  '</div>' +
+                '</div>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</main>' +
+
+        '<footer class="border-t border-hairline py-4 px-4 text-center font-tabular text-xs text-ink-faint">' +
+          '<a href="/" class="hover:text-accent transition-colors">&larr; Return to ' + esc(SITE_NAME) + '</a>' +
+        '</footer>' +
       '</div>';
     }
 
     /* ------------------------------------------------------------------
-       Main Control Panel Shell
+       Main Control Panel Shell (Unified with Public Masthead & Beat Strip)
        ------------------------------------------------------------------ */
 
     function renderTopBar() {
       var mode = (state.settings && state.settings.publishing_mode) || 'draft_review';
       var isAuto = mode === 'auto_publish';
-      var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
       var activeRunsCount = (state.runs || []).filter(function (r) { return r.status === 'queued' || r.status === 'running'; }).length;
       var ownerEmail = state.auth && state.auth.user && state.auth.user.email ? String(state.auth.user.email) : '';
 
-      return '<header class="editorial-topbar sticky top-0 z-40 border-t-[3px] border-t-[var(--accent)] bg-surface/95">' +
-        '<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">' +
-          '<div class="flex items-center gap-3 min-w-0">' +
-            '<a href="/admin" class="inline-flex items-center gap-2.5 text-ink">' +
-              renderBrandSvg() +
-              '<span class="font-masthead font-editorial text-xl font-semibold tracking-tight">' + esc(SITE_NAME) + '</span>' +
-            '</a>' +
-            '<span class="badge-editorial badge-accent hidden sm:inline-flex">Editorial Desk</span>' +
-            (activeRunsCount > 0 ? '<span class="badge-editorial badge-accent">' + activeRunsCount + ' Agent Active</span>' : '') +
+      return '<header class="editorial-topbar sticky top-0 z-40 border-b border-hairline">' +
+        '<div class="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-8 h-[4.5rem] sm:h-20 flex items-center justify-between gap-3">' +
+          '<div class="flex items-center gap-3 min-w-0 pt-0.5">' +
+            WORDMARK_ADMIN +
+            '<span class="badge-editorial badge-accent hidden sm:inline-flex">Studio</span>' +
+            (activeRunsCount > 0 ? '<span class="badge-editorial badge-accent">' + activeRunsCount + ' Active</span>' : '') +
           '</div>' +
 
-          '<div class="flex items-center gap-2 sm:gap-3">' +
-            '<div class="hidden md:flex items-center rounded-[5px] border border-hairline bg-paper p-0.5 font-tabular text-[11px]" role="group" aria-label="Publishing Mode">' +
-              '<button type="button" data-action="set-mode" data-mode="draft_review" class="px-2.5 py-1 rounded-[4px] cursor-pointer transition-colors ' + (!isAuto ? 'bg-[var(--ink-primary)] text-[var(--bg-paper)] font-semibold' : 'text-ink-muted hover:text-ink') + '">Draft Review (Safe)</button>' +
-              '<button type="button" data-action="set-mode" data-mode="auto_publish" class="px-2.5 py-1 rounded-[4px] cursor-pointer transition-colors ' + (isAuto ? 'bg-[var(--accent)] text-white font-semibold' : 'text-ink-muted hover:text-ink') + '">Auto-Publish (Gated)</button>' +
+          '<div class="flex items-center gap-1.5 sm:gap-2 shrink-0">' +
+            '<div class="hidden md:flex items-center rounded-xl border border-hairline bg-surface p-0.5 font-tabular text-[11px]" role="group" aria-label="Publishing Mode">' +
+              '<button type="button" data-action="set-mode" data-mode="draft_review" class="px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors ' + (!isAuto ? 'bg-[var(--ink-primary)] text-[var(--bg-paper)] font-semibold' : 'text-ink-muted hover:text-ink') + '">Draft Review</button>' +
+              '<button type="button" data-action="set-mode" data-mode="auto_publish" class="px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors ' + (isAuto ? 'bg-[var(--accent)] text-white font-semibold' : 'text-ink-muted hover:text-ink') + '">Auto-Publish</button>' +
             '</div>' +
 
-            (ownerEmail ? '<span class="hidden xl:inline-flex font-tabular text-[11px] text-ink-faint px-1">' + esc(ownerEmail) + '</span>' : '') +
-            '<button type="button" data-action="toggle-theme" class="btn-ghost text-xs font-tabular px-2.5 py-1.5" title="Toggle theme">' + (isDark ? 'Light' : 'Dark') + '</button>' +
-            '<a href="/" target="_blank" rel="noopener noreferrer" class="btn-ghost text-xs font-tabular px-2.5 py-1.5">Live Site &nearr;</a>' +
-            '<button type="button" data-action="logout" class="btn-ghost text-xs font-tabular px-2.5 py-1.5">Sign Out</button>' +
+            (ownerEmail ? '<span class="hidden xl:inline-flex font-tabular text-[11px] text-ink-faint px-1.5">' + esc(ownerEmail) + '</span>' : '') +
+            renderThemeToggleButton() +
+            '<a href="/" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 h-9 px-2.5 sm:px-3 rounded-lg border border-hairline bg-surface text-xs font-semibold text-ink-secondary hover:text-ink hover:border-strong transition-colors">' +
+              '<span class="hidden sm:inline">Live Site</span>' +
+              UI_ICONS.external +
+            '</a>' +
+            '<button type="button" data-action="logout" class="inline-flex items-center h-9 px-2.5 sm:px-3 rounded-lg border border-hairline bg-surface text-xs font-semibold text-ink-secondary hover:text-accent hover:border-strong transition-colors cursor-pointer">Sign Out</button>' +
           '</div>' +
         '</div>' +
 
-        '<div class="border-t border-hairline bg-paper">' +
-          '<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4 overflow-x-auto">' +
-            '<nav class="flex items-center gap-1" role="tablist">' +
-              renderTabButton('posts', 'Briefings (' + state.posts.length + ')') +
-              renderTabButton('agent', 'Agent Studio' + (activeRunsCount > 0 ? ' (' + activeRunsCount + ')' : '')) +
-              renderTabButton('skills', 'Category Skills (' + state.skills.length + ')') +
-              renderTabButton('settings', 'Settings & Schedule') +
+        '<div class="border-t border-hairline bg-subtle/60">' +
+          '<div class="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-8 py-2 flex items-center justify-between gap-4 overflow-x-auto ribbon-scroll">' +
+            '<nav class="flex items-center gap-1.5" role="tablist">' +
+              renderTabButton('posts', UI_ICONS.note, 'Briefings', state.posts.length) +
+              renderTabButton('agent', UI_ICONS.spark, 'Agent Studio', activeRunsCount > 0 ? activeRunsCount : null) +
+              renderTabButton('skills', UI_ICONS.layers, 'Category Skills', state.skills.length) +
+              renderTabButton('settings', UI_ICONS.ledger, 'Settings & Schedule', null) +
             '</nav>' +
-            '<div class="hidden sm:flex items-center gap-2 font-tabular text-[11px] text-ink-faint py-2">' +
-              '<span>' + (isFreeModelsOnly() ? '$0 Free Guard: ON' : 'Paid Models Allowed') + '</span>' +
-              '<span>&middot;</span>' +
-              '<span>Min Score: ' + esc(state.settings ? state.settings.min_publish_score : 80) + '</span>' +
-              '<span>&middot;</span>' +
-              '<span>Schedule: ' + (state.settings && state.settings.schedule_enabled ? esc(state.settings.runs_per_day) + 'x/day' : 'Paused') + '</span>' +
+            '<div class="hidden lg:flex items-center gap-2 font-tabular text-[11px] text-ink-muted shrink-0">' +
+              '<span class="badge-editorial ' + (isFreeModelsOnly() ? 'badge-success' : 'badge-warning') + '">' + (isFreeModelsOnly() ? '$0 Free Guard' : 'Custom Models') + '</span>' +
+              '<span class="badge-editorial">Min ' + esc(state.settings ? state.settings.min_publish_score : 80) + '</span>' +
+              '<span class="badge-editorial">' + (state.settings && state.settings.schedule_enabled ? esc(state.settings.runs_per_day) + 'x/day' : 'Schedule Paused') + '</span>' +
             '</div>' +
           '</div>' +
         '</div>' +
       '</header>';
     }
 
-    function renderTabButton(id, label) {
+    function renderTabButton(id, iconHtml, label, count) {
       var active = state.activeTab === id;
-      return '<button type="button" role="tab" aria-selected="' + active + '" data-action="switch-tab" data-tab="' + id + '" class="admin-tab ' + (active ? 'is-active' : '') + '">' + esc(label) + '</button>';
+      var countHtml = count != null
+        ? '<span class="font-tabular text-[10px] px-1.5 py-0.5 rounded-md ' + (active ? 'text-[var(--bg-paper)] border border-current/25' : 'bg-subtle text-ink-muted') + '">' + esc(count) + '</span>'
+        : '';
+      return '<button type="button" role="tab" aria-selected="' + active + '" data-action="switch-tab" data-tab="' + id + '" class="admin-tab ' + (active ? 'is-active' : '') + '">' +
+        iconHtml +
+        '<span>' + esc(label) + '</span>' +
+        countHtml +
+      '</button>';
     }
 
     /* ------------------------------------------------------------------
@@ -508,43 +756,55 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
 
       var draftCount = state.posts.filter(function (p) { return p.status === 'draft'; }).length;
       var pubCount = state.posts.filter(function (p) { return p.status === 'published'; }).length;
+      var avgScore = state.posts.length > 0
+        ? Math.round(state.posts.reduce(function (sum, p) { return sum + Number(p.quality_score || 0); }, 0) / state.posts.length)
+        : 0;
 
       return '<section class="space-y-6">' +
-        '<div class="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-strong">' +
-          '<div>' +
-            '<h1 class="font-editorial text-2xl sm:text-3xl font-semibold text-ink">Briefings Ledger</h1>' +
-            '<p class="text-sm text-ink-muted">Review quality scores, inspect anti-slop stylometry &amp; spot-check notes, preview safely, and publish.</p>' +
+        '<div class="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-5 border-b border-hairline">' +
+          '<div class="space-y-1">' +
+            '<p class="inline-flex items-center gap-1.5 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-bold">' + UI_ICONS.note + '<span>Editorial Queue</span></p>' +
+            '<h1 class="font-masthead text-2xl sm:text-4xl font-black text-ink leading-tight">Briefings Ledger</h1>' +
+            '<p class="text-sm text-ink-secondary">Inspect quality rubrics, anti-slop stylometry, preview safely in a sandbox, and publish.</p>' +
           '</div>' +
           '<div class="flex flex-wrap items-center gap-2">' +
-            '<button type="button" data-action="refresh-all" class="btn-ghost text-xs font-tabular">Refresh</button>' +
-            '<button type="button" data-action="new-post" class="btn-accent text-xs">+ New Post</button>' +
+            '<button type="button" data-action="refresh-all" class="btn-ghost text-xs font-semibold rounded-xl">Refresh</button>' +
+            '<button type="button" data-action="new-post" class="btn-accent text-xs font-semibold rounded-xl">+ New Dispatch</button>' +
           '</div>' +
         '</div>' +
 
+        '<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">' +
+          '<div class="admin-stat-tile"><p class="font-tabular text-[10px] uppercase tracking-[0.1em] text-ink-muted">Total Dispatches</p><p class="font-masthead text-2xl font-black text-ink mt-0.5">' + state.posts.length + '</p></div>' +
+          '<div class="admin-stat-tile"><p class="font-tabular text-[10px] uppercase tracking-[0.1em] text-ink-muted">Published Live</p><p class="font-masthead text-2xl font-black text-[var(--success)] mt-0.5">' + pubCount + '</p></div>' +
+          '<div class="admin-stat-tile"><p class="font-tabular text-[10px] uppercase tracking-[0.1em] text-ink-muted">Drafts Awaiting Review</p><p class="font-masthead text-2xl font-black text-[var(--warning)] mt-0.5">' + draftCount + '</p></div>' +
+          '<div class="admin-stat-tile"><p class="font-tabular text-[10px] uppercase tracking-[0.1em] text-ink-muted">Avg Quality Score</p><p class="font-masthead text-2xl font-black text-ink mt-0.5">' + (avgScore ? avgScore + '/100' : '—') + '</p></div>' +
+        '</div>' +
+
         '<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">' +
-          '<div class="flex items-center gap-1.5">' +
+          '<div class="flex flex-wrap items-center gap-1.5">' +
             renderFilterBtn('all', 'All (' + state.posts.length + ')') +
             renderFilterBtn('draft', 'Drafts (' + draftCount + ')') +
             renderFilterBtn('published', 'Published (' + pubCount + ')') +
           '</div>' +
-          '<div class="w-full sm:w-72">' +
+          '<div class="w-full sm:w-80 relative">' +
             '<input id="post-search-input" type="search" value="' + esc(state.postSearch) + '" placeholder="Filter by title, slug, keyword..." class="admin-input h-9 text-xs">' +
           '</div>' +
         '</div>' +
 
         (filtered.length === 0
-          ? '<div class="border border-hairline rounded-[6px] bg-surface p-10 text-center space-y-2">' +
-              '<p class="font-editorial text-xl text-ink">No briefings match this filter.</p>' +
+          ? '<div class="editorial-card p-10 text-center space-y-3">' +
+              '<div class="mx-auto w-fit opacity-70">' + SNAKE_MINI + '</div>' +
+              '<p class="font-masthead text-xl font-bold text-ink">No briefings match this filter.</p>' +
               '<p class="text-sm text-ink-muted">Create a briefing manually or dispatch the Research Agent in Agent Studio.</p>' +
             '</div>'
-          : '<div class="space-y-3">' + filtered.map(renderPostRow).join('') + '</div>') +
+          : '<div class="space-y-3.5">' + filtered.map(renderPostRow).join('') + '</div>') +
       '</section>';
     }
 
     function renderFilterBtn(val, label) {
       var active = state.postFilter === val;
-      return '<button type="button" data-action="filter-posts" data-filter="' + val + '" class="px-3 py-1.5 rounded-[4px] font-tabular text-xs border cursor-pointer transition-colors ' +
-        (active ? 'bg-[var(--ink-primary)] text-[var(--bg-paper)] border-[var(--ink-primary)] font-semibold' : 'bg-surface text-ink-muted border-hairline hover:border-strong hover:text-ink') +
+      return '<button type="button" data-action="filter-posts" data-filter="' + val + '" class="px-3 py-1.5 rounded-lg font-tabular text-xs border-[1.5px] cursor-pointer transition-colors ' +
+        (active ? 'bg-[var(--ink-primary)] text-[var(--bg-paper)] border-[var(--ink-primary)] font-semibold' : 'bg-surface text-ink-secondary border-hairline hover:border-strong hover:text-ink') +
       '">' + esc(label) + '</button>';
     }
 
@@ -558,22 +818,22 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       var bd = post.quality_breakdown_json || {};
       var isAdminLocked = post.admin_locked === true;
 
-      return '<article class="rounded-[6px] border border-hairline bg-surface overflow-hidden">' +
-        '<div class="p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">' +
-          '<div class="space-y-2 min-w-0 flex-1">' +
+      return '<article class="editorial-card overflow-hidden">' +
+        '<div class="p-4 sm:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">' +
+          '<div class="space-y-2.5 min-w-0 flex-1">' +
             '<div class="flex flex-wrap items-center gap-1.5">' +
               '<span class="badge-editorial ' + (isPub ? 'badge-success' : 'badge-warning') + '">' + (isPub ? 'Published' : 'Draft') + '</span>' +
-              '<span class="badge-editorial badge-accent">' + esc(post.category_slug) + '</span>' +
+              '<span class="badge-editorial inline-flex items-center gap-1.5">' + topicIcon(post.category_slug) + '<span>' + esc(post.category_slug) + '</span></span>' +
               '<span class="badge-editorial">' + esc(fmtArchetype(post.archetype)) + '</span>' +
               '<span class="badge-editorial ' + scoreClass + '">Score ' + score + '/100</span>' +
               '<span class="badge-editorial ' + (post.lint_passed ? 'badge-success' : 'badge-danger') + '">' + (post.lint_passed ? 'Lint Pass' : 'Lint Fail') + '</span>' +
               (isAdminLocked ? '<span class="badge-editorial badge-accent" title="Human-edited briefing protected from automated overwrites">Admin Locked</span>' : '') +
               (isAdminLocked && post.last_edited_by ? '<span class="badge-editorial" title="Last human editor">Edited by ' + esc(post.last_edited_by) + '</span>' : '') +
             '</div>' +
-            '<h2 class="font-editorial text-xl font-semibold text-ink leading-snug">' + esc(post.title) + '</h2>' +
-            '<p class="text-xs text-ink-muted line-clamp-2">' + esc(post.description) + '</p>' +
+            '<h2 class="font-masthead text-xl sm:text-2xl font-bold text-ink leading-snug">' + esc(post.title) + '</h2>' +
+            '<p class="text-xs sm:text-sm text-ink-secondary line-clamp-2 leading-relaxed">' + esc(post.description) + '</p>' +
             '<div class="flex flex-wrap items-center gap-3 font-tabular text-[11px] text-ink-faint">' +
-              '<span>/' + esc(post.slug) + '</span>' +
+              '<span>/blog/' + esc(post.slug) + '</span>' +
               '<span>&middot;</span>' +
               '<span>' + esc(post.word_count || 0) + ' words (' + esc(post.reading_time_minutes || 1) + ' min)</span>' +
               '<span>&middot;</span>' +
@@ -585,15 +845,15 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
           '</div>' +
 
           '<div class="flex flex-wrap items-center gap-2 shrink-0">' +
-            '<button type="button" data-action="toggle-post-notes" data-id="' + post.id + '" class="btn-ghost text-xs font-tabular px-2.5 py-1.5">' +
+            '<button type="button" data-action="toggle-post-notes" data-id="' + post.id + '" class="btn-ghost text-xs font-tabular px-2.5 py-1.5 rounded-lg">' +
               (expanded ? 'Hide Audit' : 'Spot-Check (' + (reviewNotes.length + lintErrors.length) + ')') +
             '</button>' +
-            '<button type="button" data-action="preview-post" data-id="' + post.id + '" class="btn-ghost text-xs font-tabular px-2.5 py-1.5">Preview</button>' +
-            '<button type="button" data-action="edit-post" data-id="' + post.id + '" class="btn-ghost text-xs font-tabular px-2.5 py-1.5">Edit</button>' +
+            '<button type="button" data-action="preview-post" data-id="' + post.id + '" class="btn-ghost text-xs font-tabular px-2.5 py-1.5 rounded-lg">Preview</button>' +
+            '<button type="button" data-action="edit-post" data-id="' + post.id + '" class="btn-ghost text-xs font-tabular px-2.5 py-1.5 rounded-lg">Edit</button>' +
             (isPub
-              ? '<button type="button" data-action="unpublish-post" data-id="' + post.id + '" class="btn-ghost text-xs font-tabular px-2.5 py-1.5">Unpublish</button>'
-              : '<button type="button" data-action="publish-post" data-id="' + post.id + '" class="btn-accent text-xs font-tabular px-3 py-1.5">Publish</button>') +
-            '<button type="button" data-action="delete-post" data-id="' + post.id + '" class="btn-danger text-xs font-tabular px-2.5 py-1.5">Delete</button>' +
+              ? '<button type="button" data-action="unpublish-post" data-id="' + post.id + '" class="btn-ghost text-xs font-tabular px-2.5 py-1.5 rounded-lg">Unpublish</button>'
+              : '<button type="button" data-action="publish-post" data-id="' + post.id + '" class="btn-accent text-xs font-tabular px-3 py-1.5 rounded-lg">Publish</button>') +
+            '<button type="button" data-action="delete-post" data-id="' + post.id + '" class="btn-danger text-xs font-tabular px-2.5 py-1.5 rounded-lg">Delete</button>' +
           '</div>' +
         '</div>' +
 
@@ -633,7 +893,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
 
     function renderMiniMetric(label, val) {
       var v = val == null ? '—' : Math.round(val);
-      return '<div class="rounded-[4px] border border-hairline bg-surface px-2.5 py-2">' +
+      return '<div class="rounded-lg border border-hairline bg-surface px-2.5 py-2">' +
         '<span class="block text-[10px] uppercase text-ink-faint">' + esc(label) + '</span>' +
         '<span class="text-sm font-semibold text-ink">' + esc(v) + '</span>' +
       '</div>';
@@ -647,7 +907,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
           : tone === 'bad'
             ? 'text-[var(--danger)]'
             : 'text-ink';
-      return '<div class="rounded-[4px] border border-hairline bg-surface px-2.5 py-2">' +
+      return '<div class="rounded-lg border border-hairline bg-surface px-2.5 py-2">' +
         '<span class="block text-[10px] uppercase text-ink-faint">' + esc(label) + '</span>' +
         '<span class="text-sm font-semibold ' + valClass + '">' + esc(displayVal) + '</span>' +
       '</div>';
@@ -672,9 +932,9 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
           (metaParts.length > 0 ? '<span class="font-tabular text-[11px] text-ink-faint">' + esc(metaParts.join(' · ')) + '</span>' : '') +
         '</div>' +
         '<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 font-tabular">' +
-          renderStylometryMetric('Human-Likeness Score', likeness == null ? '—' : (likeness + '/100'), likeness == null ? '' : (likeness >= 80 ? 'good' : likeness >= 65 ? 'warn' : 'bad')) +
-          renderStylometryMetric('Sentence Burstiness σ', burstiness == null ? '—' : burstiness.toFixed(1), burstiness == null ? '' : (burstiness >= 5.0 ? 'good' : burstiness >= 3.5 ? 'warn' : 'bad')) +
-          renderStylometryMetric('Bold-Bullet Count', boldBullets == null ? '—' : String(boldBullets), boldBullets == null ? '' : (boldBullets <= 2 ? 'good' : boldBullets <= 5 ? 'warn' : 'bad')) +
+          renderStylometryMetric('Human-Likeness', likeness == null ? '—' : (likeness + '/100'), likeness == null ? '' : (likeness >= 80 ? 'good' : likeness >= 65 ? 'warn' : 'bad')) +
+          renderStylometryMetric('Burstiness σ', burstiness == null ? '—' : burstiness.toFixed(1), burstiness == null ? '' : (burstiness >= 5.0 ? 'good' : burstiness >= 3.5 ? 'warn' : 'bad')) +
+          renderStylometryMetric('Bold Bullets', boldBullets == null ? '—' : String(boldBullets), boldBullets == null ? '' : (boldBullets <= 2 ? 'good' : boldBullets <= 5 ? 'warn' : 'bad')) +
           renderStylometryMetric('Em-Dashes / 100w', emDashes == null ? '—' : emDashes.toFixed(2), emDashes == null ? '' : (emDashes <= 0.8 ? 'good' : emDashes <= 1.5 ? 'warn' : 'bad')) +
           renderStylometryMetric('Robotic Openers', roboticOpeners == null ? '—' : String(roboticOpeners), roboticOpeners == null ? '' : (roboticOpeners === 0 ? 'good' : roboticOpeners <= 1 ? 'warn' : 'bad')) +
           renderStylometryMetric('Concrete Metrics', concreteMetrics == null ? '—' : String(concreteMetrics), concreteMetrics == null ? '' : (concreteMetrics >= 5 ? 'good' : concreteMetrics >= 2 ? 'warn' : 'bad')) +
@@ -689,7 +949,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
     function renderAgentTab() {
       var polling = hasActiveRuns(state.runs);
       var freeOnly = isFreeModelsOnly();
-      var defaultModel = (state.settings && state.settings.openrouter_model) || 'google/gemma-4-31b-it:free';
+      var defaultModel = (state.settings && state.settings.openrouter_model) || 'openrouter/free';
       var skillOptions = '<option value="">Auto-select highest priority enabled skill</option>' +
         state.skills.map(function (s) {
           return '<option value="' + esc(s.slug) + '">' + esc(s.name) + (s.enabled ? '' : ' (disabled)') + '</option>';
@@ -703,45 +963,48 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       var runModelOptions = renderFreeModelOptions('', 'Default (' + defaultModel + ')');
 
       return '<section class="space-y-8">' +
-        '<div class="editorial-card p-6 space-y-5">' +
-          '<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 border-b border-hairline">' +
-            '<div>' +
-              '<p class="font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">ReAct Research Workflow</p>' +
-              '<h1 class="font-editorial text-2xl sm:text-3xl font-semibold text-ink">Agent Studio</h1>' +
+        '<div class="editorial-card p-6 sm:p-7 space-y-5">' +
+          '<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-hairline">' +
+            '<div class="space-y-1">' +
+              '<p class="inline-flex items-center gap-1.5 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-bold">' + UI_ICONS.spark + '<span>ReAct Research Workflow</span></p>' +
+              '<h1 class="font-masthead text-2xl sm:text-4xl font-black text-ink">Agent Studio</h1>' +
             '</div>' +
             '<div class="flex flex-wrap items-center gap-2">' +
               '<span class="badge-editorial ' + (freeOnly ? 'badge-success' : 'badge-warning') + '">' +
-                (freeOnly ? 'Free Models Only: ON' : 'Free Models Only: OFF') + ' &mdash; ' + esc(defaultModel) +
+                (freeOnly ? '$0 Free Models Only' : 'Custom Models Allowed') + ' &mdash; ' + esc(defaultModel) +
               '</span>' +
             '</div>' +
           '</div>' +
 
           '<div class="flex flex-wrap items-center gap-2">' +
-            '<span class="font-tabular text-[11px] uppercase tracking-wider text-ink-faint mr-1">2026 Skill Presets:</span>' +
+            '<span class="font-tabular text-[11px] uppercase tracking-wider text-ink-faint mr-1">Quick Presets:</span>' +
             PRESETS.map(function (p, idx) {
-              return '<button type="button" data-action="apply-preset" data-preset="' + idx + '" class="px-2.5 py-1 rounded-[4px] border border-hairline bg-subtle/70 hover:border-strong text-xs text-ink-secondary cursor-pointer transition-colors">' + esc(p.label) + '</button>';
+              return '<button type="button" data-action="apply-preset" data-preset="' + idx + '" class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-hairline bg-subtle/70 hover:border-strong text-xs font-medium text-ink-secondary hover:text-ink cursor-pointer transition-colors">' +
+                (p.category ? topicIcon(p.category) : UI_ICONS.spark) +
+                '<span>' + esc(p.label) + '</span>' +
+              '</button>';
             }).join('') +
           '</div>' +
 
           '<form id="agent-run-form" class="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">' +
             '<div class="md:col-span-6 space-y-1.5">' +
-              '<label class="block font-tabular text-xs uppercase tracking-wider text-ink-muted" for="ag-topic">Topic <span class="normal-case text-ink-faint">(leave blank for autonomous topic hunt)</span></label>' +
+              '<label class="block font-tabular text-[11px] font-semibold uppercase tracking-wider text-ink-muted" for="ag-topic">Topic <span class="normal-case font-normal text-ink-faint">(leave blank for autonomous topic hunt)</span></label>' +
               '<input id="ag-topic" name="topic" type="text" placeholder="e.g., CVE teardown or leave blank to hunt live feeds" class="admin-input">' +
             '</div>' +
             '<div class="md:col-span-6 space-y-1.5">' +
-              '<label class="block font-tabular text-xs uppercase tracking-wider text-ink-muted" for="ag-cat">Category Skill</label>' +
+              '<label class="block font-tabular text-[11px] font-semibold uppercase tracking-wider text-ink-muted" for="ag-cat">Category Skill</label>' +
               '<select id="ag-cat" name="category_slug" class="admin-select">' + skillOptions + '</select>' +
             '</div>' +
             '<div class="md:col-span-4 space-y-1.5">' +
-              '<label class="block font-tabular text-xs uppercase tracking-wider text-ink-muted" for="ag-arch">Archetype</label>' +
+              '<label class="block font-tabular text-[11px] font-semibold uppercase tracking-wider text-ink-muted" for="ag-arch">Archetype</label>' +
               '<select id="ag-arch" name="archetype" class="admin-select">' + archOptions + '</select>' +
             '</div>' +
             '<div class="md:col-span-5 space-y-1.5">' +
-              '<label class="block font-tabular text-xs uppercase tracking-wider text-ink-muted" for="ag-model">Run Model Override <span class="normal-case text-ink-faint">(live :free catalog)</span></label>' +
+              '<label class="block font-tabular text-[11px] font-semibold uppercase tracking-wider text-ink-muted" for="ag-model">Run Model Override <span class="normal-case font-normal text-ink-faint">(live :free catalog)</span></label>' +
               '<select id="ag-model" name="model_override" class="admin-select font-tabular">' + runModelOptions + '</select>' +
             '</div>' +
             '<div class="md:col-span-3">' +
-              '<button type="submit" ' + (state.dispatching ? 'disabled' : '') + ' class="btn-accent w-full py-2.5">' + (state.dispatching ? 'Dispatching...' : 'Run Agent') + '</button>' +
+              '<button type="submit" ' + (state.dispatching ? 'disabled' : '') + ' class="btn-accent w-full py-2.5 rounded-xl font-semibold">' + (state.dispatching ? 'Dispatching...' : 'Run Agent') + '</button>' +
             '</div>' +
             '<div class="md:col-span-12 pt-1 flex items-center gap-2.5">' +
               '<input id="ag-force" name="force" type="checkbox" class="h-4 w-4 accent-[var(--accent)]">' +
@@ -751,16 +1014,19 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         '</div>' +
 
         '<div class="space-y-4">' +
-          '<div class="flex items-center justify-between gap-3 pb-3 border-b border-strong">' +
+          '<div class="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-hairline">' +
             '<div class="flex items-center gap-3">' +
-              '<h2 class="font-editorial text-2xl font-semibold text-ink">Runs &amp; Source Trace Inspector</h2>' +
+              '<h2 class="font-masthead text-2xl font-bold text-ink">Runs &amp; Source Trace Inspector</h2>' +
               (polling ? '<span class="badge-editorial badge-accent">Live Polling (3.5s)</span>' : '<span class="badge-editorial">Idle</span>') +
             '</div>' +
-            '<button type="button" data-action="refresh-runs" class="btn-ghost text-xs font-tabular">Refresh Runs</button>' +
+            '<button type="button" data-action="refresh-runs" class="btn-ghost text-xs font-tabular rounded-xl">Refresh Runs</button>' +
           '</div>' +
 
           (state.runs.length === 0
-            ? '<div class="border border-hairline rounded-[6px] bg-surface p-8 text-center text-sm text-ink-muted">No agent runs recorded yet. Dispatch a research run above to see step-by-step source extraction traces.</div>'
+            ? '<div class="editorial-card p-8 text-center space-y-2">' +
+                '<div class="mx-auto w-fit opacity-70">' + SNAKE_MINI + '</div>' +
+                '<p class="text-sm text-ink-muted">No agent runs recorded yet. Dispatch a research run above to see step-by-step source extraction traces.</p>' +
+              '</div>'
             : '<div class="space-y-3">' + state.runs.map(renderRunRow).join('') + '</div>') +
         '</div>' +
       '</section>';
@@ -781,15 +1047,15 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       var usage = run.token_usage_json || {};
       var totalTokens = usage.total_tokens || ((usage.prompt_tokens || 0) + (usage.completion_tokens || 0));
 
-      return '<article class="rounded-[6px] border border-hairline bg-surface overflow-hidden">' +
+      return '<article class="editorial-card overflow-hidden">' +
         '<div class="p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">' +
           '<div class="space-y-2 min-w-0 flex-1">' +
             '<div class="flex flex-wrap items-center gap-1.5">' +
               '<span class="badge-editorial ' + statusClass + '">' + esc(statusLabel) + '</span>' +
               '<span class="badge-editorial">Stage: ' + esc(run.current_stage || 'init') + '</span>' +
-              '<span class="badge-editorial badge-accent">' + esc(run.category_slug || 'auto') + '</span>' +
+              '<span class="badge-editorial inline-flex items-center gap-1">' + topicIcon(run.category_slug) + '<span>' + esc(run.category_slug || 'auto') + '</span></span>' +
               '<span class="badge-editorial">' + esc(run.trigger_source || 'manual') + '</span>' +
-              (run.quality_score != null ? '<span class="badge-editorial badge-success">QS ' + Math.round(run.quality_score) + '/100</span>' : '') +
+              (run.quality_score != null ? '<span class="badge-editorial badge-success">Score ' + Math.round(run.quality_score) + '/100</span>' : '') +
             '</div>' +
             '<h3 class="font-semibold text-base text-ink">' + esc(run.topic || '(Autonomous Topic Hunt)') + '</h3>' +
             '<div class="flex flex-wrap items-center gap-3 font-tabular text-[11px] text-ink-faint">' +
@@ -803,20 +1069,20 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
               (run.completed_at ? '<span>&middot;</span><span>Finished ' + esc(fmtDate(run.completed_at)) + '</span>' : '') +
             '</div>' +
             (run.decision_reason
-              ? '<div class="rounded-[4px] border ' + (isSkipped ? 'border-[var(--border-strong)] bg-subtle' : 'border-hairline bg-subtle/60') + ' px-3 py-2 text-xs text-ink-secondary">' +
+              ? '<div class="rounded-lg border ' + (isSkipped ? 'border-[var(--border-strong)] bg-subtle' : 'border-hairline bg-subtle/60') + ' px-3 py-2 text-xs text-ink-secondary">' +
                   '<strong class="font-tabular uppercase tracking-wider text-[10px] ' + (isSkipped ? 'text-[var(--warning)]' : 'text-ink-muted') + ' mr-1.5">' +
                     (isSkipped ? 'SKIPPED — Editorial Triage:' : 'Editorial Decision:') +
                   '</strong>' +
                   esc(run.decision_reason) +
                 '</div>'
               : '') +
-            (run.error_message ? '<p class="text-xs text-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 rounded-[4px]">' + esc(run.error_message) + '</p>' : '') +
+            (run.error_message ? '<p class="text-xs text-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 rounded-lg">' + esc(run.error_message) + '</p>' : '') +
           '</div>' +
 
           '<div class="flex flex-wrap items-center gap-2 shrink-0">' +
-            (run.post_id ? '<button type="button" data-action="preview-post" data-id="' + run.post_id + '" class="btn-ghost text-xs font-tabular px-2.5 py-1.5">Preview Post #' + run.post_id + '</button>' : '') +
-            (run.post_id ? '<button type="button" data-action="edit-post" data-id="' + run.post_id + '" class="btn-ghost text-xs font-tabular px-2.5 py-1.5">Edit Post</button>' : '') +
-            '<button type="button" data-action="toggle-run-trace" data-id="' + run.id + '" class="btn-ghost text-xs font-tabular px-2.5 py-1.5">' +
+            (run.post_id ? '<button type="button" data-action="preview-post" data-id="' + run.post_id + '" class="btn-ghost text-xs font-tabular px-2.5 py-1.5 rounded-lg">Preview #' + run.post_id + '</button>' : '') +
+            (run.post_id ? '<button type="button" data-action="edit-post" data-id="' + run.post_id + '" class="btn-ghost text-xs font-tabular px-2.5 py-1.5 rounded-lg">Edit Post</button>' : '') +
+            '<button type="button" data-action="toggle-run-trace" data-id="' + run.id + '" class="btn-ghost text-xs font-tabular px-2.5 py-1.5 rounded-lg">' +
               (expanded ? 'Hide Trace' : 'Source Trace (' + trace.length + ')') +
             '</button>' +
           '</div>' +
@@ -828,7 +1094,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
               (trace.length === 0
                 ? '<p class="text-xs text-ink-faint">No trace entries recorded yet.</p>'
                 : '<ol class="space-y-2">' + trace.map(function (t, idx) {
-                    return '<li class="rounded-[5px] border border-hairline bg-surface p-3 text-xs space-y-1">' +
+                    return '<li class="rounded-lg border border-hairline bg-surface p-3 text-xs space-y-1">' +
                       '<div class="flex flex-wrap items-center justify-between gap-2 font-tabular">' +
                         '<div class="flex items-center gap-2">' +
                           '<span class="text-ink-faint">#' + (idx + 1) + '</span>' +
@@ -857,16 +1123,17 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
 
     function renderSkillsTab() {
       return '<section class="space-y-6">' +
-        '<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-strong">' +
-          '<div>' +
-            '<h1 class="font-editorial text-2xl sm:text-3xl font-semibold text-ink">Category Research Skills</h1>' +
-            '<p class="text-sm text-ink-muted">Configure domain instructions, RSS/advisory feeds, search queries, preferred archetypes, and banned patterns.</p>' +
+        '<div class="flex flex-col sm:flex-row sm:items-end justify-between gap-4 pb-5 border-b border-hairline">' +
+          '<div class="space-y-1">' +
+            '<p class="inline-flex items-center gap-1.5 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-bold">' + UI_ICONS.layers + '<span>Editorial Beats</span></p>' +
+            '<h1 class="font-masthead text-2xl sm:text-4xl font-black text-ink">Category Research Skills</h1>' +
+            '<p class="text-sm text-ink-secondary">Configure domain prompts, RSS/advisory feeds, search queries, preferred archetypes, and banned clichés.</p>' +
           '</div>' +
-          '<button type="button" data-action="new-skill" class="btn-accent text-xs self-start sm:self-auto">+ New Skill</button>' +
+          '<button type="button" data-action="new-skill" class="btn-accent text-xs font-semibold rounded-xl self-start sm:self-auto">+ New Skill</button>' +
         '</div>' +
 
         (state.skills.length === 0
-          ? '<div class="border border-hairline rounded-[6px] bg-surface p-8 text-center text-sm text-ink-muted">No category skills configured yet.</div>'
+          ? '<div class="editorial-card p-8 text-center text-sm text-ink-muted">No category skills configured yet.</div>'
           : '<div class="grid grid-cols-1 md:grid-cols-2 gap-4">' + state.skills.map(renderSkillCard).join('') + '</div>') +
       '</section>';
     }
@@ -876,18 +1143,19 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       var queries = Array.isArray(skill.search_queries_json) ? skill.search_queries_json : [];
       var archs = Array.isArray(skill.preferred_archetypes_json) ? skill.preferred_archetypes_json : [];
 
-      return '<article class="editorial-card p-5 flex flex-col justify-between gap-4">' +
+      return '<article class="editorial-card p-5 sm:p-6 flex flex-col justify-between gap-4">' +
         '<div class="space-y-2.5">' +
           '<div class="flex items-center justify-between gap-2">' +
             '<div class="flex items-center gap-2">' +
+              '<span class="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-hairline bg-paper text-ink">' + topicIcon(skill.slug) + '</span>' +
               '<span class="badge-editorial ' + (skill.enabled ? 'badge-success' : 'badge-warning') + '">' + (skill.enabled ? 'Enabled' : 'Paused') + '</span>' +
               '<span class="badge-editorial">Priority ' + esc(skill.priority) + '</span>' +
             '</div>' +
             '<span class="font-tabular text-xs text-ink-faint">' + esc(skill.slug) + '</span>' +
           '</div>' +
-          '<h2 class="font-editorial text-xl font-semibold text-ink">' + esc(skill.name) + '</h2>' +
-          '<p class="text-sm text-ink-muted leading-relaxed">' + esc(skill.description) + '</p>' +
-          '<p class="text-xs text-ink-faint"><strong class="text-ink-secondary">Audience:</strong> ' + esc(skill.target_audience) + '</p>' +
+          '<h2 class="font-masthead text-xl font-bold text-ink">' + esc(skill.name) + '</h2>' +
+          '<p class="text-sm text-ink-secondary leading-relaxed">' + esc(skill.description) + '</p>' +
+          '<p class="text-xs text-ink-muted"><strong class="text-ink">Audience:</strong> ' + esc(skill.target_audience) + '</p>' +
           '<div class="flex flex-wrap gap-1.5 pt-1">' +
             archs.map(function (a) { return '<span class="badge-editorial">' + esc(fmtArchetype(a)) + '</span>'; }).join('') +
           '</div>' +
@@ -896,8 +1164,8 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         '<div class="pt-3 border-t border-hairline flex items-center justify-between gap-3">' +
           '<span class="font-tabular text-[11px] text-ink-faint">' + feeds.length + ' feeds &middot; ' + queries.length + ' queries</span>' +
           '<div class="flex items-center gap-2">' +
-            '<button type="button" data-action="edit-skill" data-slug="' + esc(skill.slug) + '" class="btn-ghost text-xs font-tabular px-2.5 py-1">Edit</button>' +
-            '<button type="button" data-action="delete-skill" data-slug="' + esc(skill.slug) + '" class="btn-danger text-xs font-tabular px-2.5 py-1">Delete</button>' +
+            '<button type="button" data-action="edit-skill" data-slug="' + esc(skill.slug) + '" class="btn-ghost text-xs font-tabular px-2.5 py-1 rounded-lg">Edit</button>' +
+            '<button type="button" data-action="delete-skill" data-slug="' + esc(skill.slug) + '" class="btn-danger text-xs font-tabular px-2.5 py-1 rounded-lg">Delete</button>' +
           '</div>' +
         '</div>' +
       '</article>';
@@ -914,55 +1182,56 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         : '8, 14, 20';
 
       return '<section class="space-y-6">' +
-        '<div class="pb-4 border-b border-strong">' +
-          '<h1 class="font-editorial text-2xl sm:text-3xl font-semibold text-ink">Settings &amp; Autonomous Schedule</h1>' +
-          '<p class="text-sm text-ink-muted">Configure publishing gates, cron cadence, OpenRouter models, editorial identity, and AdSense monetization.</p>' +
+        '<div class="pb-5 border-b border-hairline space-y-1">' +
+          '<p class="inline-flex items-center gap-1.5 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-bold">' + UI_ICONS.ledger + '<span>Configuration</span></p>' +
+          '<h1 class="font-masthead text-2xl sm:text-4xl font-black text-ink">Settings &amp; Autonomous Schedule</h1>' +
+          '<p class="text-sm text-ink-secondary">Configure publishing gates, cron cadence, OpenRouter models, editorial identity, and AdSense.</p>' +
         '</div>' +
 
         '<form id="settings-form" class="space-y-6">' +
           '<div class="editorial-card p-6 space-y-4">' +
-            '<h2 class="font-tabular text-xs uppercase tracking-[0.14em] text-accent font-semibold">Publishing Gate &amp; Schedule</h2>' +
+            '<h2 class="font-tabular text-xs uppercase tracking-[0.14em] text-accent font-bold">Publishing Gate &amp; Schedule</h2>' +
 
-            '<div class="rounded-[5px] border border-hairline bg-subtle/60 p-4 space-y-2.5">' +
+            '<div class="field-note p-4 space-y-2.5">' +
               '<p class="font-tabular text-[11px] uppercase tracking-wider text-ink-muted font-semibold">Recommended Editorial Schedule Presets</p>' +
               '<div class="flex flex-wrap items-center gap-2">' +
                 SCHEDULE_PRESETS.map(function (sp, idx) {
                   return '<button type="button" data-action="apply-schedule-preset" data-schedule-preset="' + idx + '" class="' +
                     (idx === 0
-                      ? 'px-3 py-1.5 rounded-[4px] border border-[var(--accent)] bg-surface text-xs font-semibold text-accent hover:bg-subtle cursor-pointer transition-colors'
-                      : 'px-3 py-1.5 rounded-[4px] border border-hairline bg-surface hover:border-strong text-xs text-ink-secondary cursor-pointer transition-colors') +
+                      ? 'px-3 py-1.5 rounded-lg border-[1.5px] border-[var(--accent)] bg-surface text-xs font-semibold text-accent hover:bg-subtle cursor-pointer transition-colors'
+                      : 'px-3 py-1.5 rounded-lg border border-hairline bg-surface hover:border-strong text-xs text-ink-secondary cursor-pointer transition-colors') +
                   '">' + esc(sp.label) + '</button>';
                 }).join('') +
               '</div>' +
-              '<p class="text-xs text-ink-muted leading-relaxed">Scheduled runs act as an Editorial Triage Desk—if there is no genuine breaking news or all items overlap with past posts, the agent logs a clean SKIPPED run without generating filler.</p>' +
+              '<p class="text-xs text-ink-muted leading-relaxed">Scheduled runs act as an Editorial Triage Desk — if there is no genuine breaking news or all items overlap past posts, the agent logs a clean SKIPPED run without generating filler.</p>' +
             '</div>' +
 
             '<div class="grid grid-cols-1 md:grid-cols-2 gap-4">' +
               '<div class="space-y-1.5">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-mode">Publishing Mode</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-mode">Publishing Mode</label>' +
                 '<select id="st-mode" name="publishing_mode" class="admin-select">' +
                   '<option value="draft_review"' + (s.publishing_mode !== 'auto_publish' ? ' selected' : '') + '>Draft Review (Safe — human approves before live)</option>' +
                   '<option value="auto_publish"' + (s.publishing_mode === 'auto_publish' ? ' selected' : '') + '>Auto-Publish (Gated by lint + min score)</option>' +
                 '</select>' +
               '</div>' +
               '<div class="space-y-1.5">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-score">Minimum Auto-Publish Score (50–100)</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-score">Minimum Auto-Publish Score (50–100)</label>' +
                 '<input id="st-score" name="min_publish_score" type="number" min="50" max="100" value="' + esc(s.min_publish_score != null ? s.min_publish_score : 80) + '" class="admin-input">' +
               '</div>' +
               '<div class="space-y-1.5">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-rpd">Scheduled Runs Per Day (1–24)</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-rpd">Scheduled Runs Per Day (1–24)</label>' +
                 '<input id="st-rpd" name="runs_per_day" type="number" min="1" max="24" value="' + esc(s.runs_per_day != null ? s.runs_per_day : 3) + '" class="admin-input">' +
               '</div>' +
               '<div class="space-y-1.5">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-hours">Preferred UTC Hours <span class="normal-case text-ink-faint">(comma-separated 0-23, e.g. 8, 14, 20)</span></label>' +
+                '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-hours">Preferred UTC Hours <span class="normal-case font-normal text-ink-faint">(comma-separated 0-23)</span></label>' +
                 '<input id="st-hours" name="preferred_hours_utc" type="text" value="' + esc(prefHoursVal) + '" placeholder="8, 14, 20" class="admin-input font-tabular">' +
               '</div>' +
               '<div class="space-y-1.5">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-max-posts">Max Posts Per Day (1–24)</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-max-posts">Max Posts Per Day (1–24)</label>' +
                 '<input id="st-max-posts" name="max_posts_per_day" type="number" min="1" max="24" value="' + esc(s.max_posts_per_day != null ? s.max_posts_per_day : 2) + '" class="admin-input">' +
               '</div>' +
               '<div class="space-y-1.5">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-novelty">Min News Novelty Score <span class="normal-case text-ink-faint">(0-100, skips writing below threshold)</span></label>' +
+                '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-novelty">Min News Novelty Score <span class="normal-case font-normal text-ink-faint">(0-100)</span></label>' +
                 '<input id="st-novelty" name="min_novelty_score" type="number" min="0" max="100" value="' + esc(s.min_novelty_score != null ? s.min_novelty_score : 68) + '" class="admin-input">' +
               '</div>' +
               '<div class="flex items-center gap-3 pt-2 md:col-span-2">' +
@@ -971,7 +1240,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
               '</div>' +
             '</div>' +
             '<div class="space-y-1.5">' +
-              '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-feed">Default Topic Feed URL</label>' +
+              '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-feed">Default Topic Feed URL</label>' +
               '<input id="st-feed" name="default_topic_feed" type="text" value="' + esc(s.default_topic_feed || '') + '" class="admin-input">' +
             '</div>' +
             '<p class="font-tabular text-xs text-ink-faint">Last scheduled run: ' + esc(fmtDate(s.last_scheduled_run_at)) + '</p>' +
@@ -980,15 +1249,15 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
           '<div class="editorial-card p-6 space-y-4">' +
             '<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">' +
               '<div class="flex flex-wrap items-center gap-2">' +
-                '<h2 class="font-tabular text-xs uppercase tracking-[0.14em] text-accent font-semibold">OpenRouter Models &amp; Spend Guard</h2>' +
+                '<h2 class="font-tabular text-xs uppercase tracking-[0.14em] text-accent font-bold">OpenRouter Models &amp; Spend Guard</h2>' +
                 '<span class="badge-editorial ' + (s.free_models_only !== false ? 'badge-success' : 'badge-warning') + '">' +
                   (s.free_models_only !== false ? '$0 Free Only' : 'Custom / Paid Allowed') +
                 '</span>' +
                 '<span class="badge-editorial">' + state.freeModels.length + ' live :free</span>' +
               '</div>' +
-              '<button type="button" data-action="refresh-free-models" class="btn-ghost text-xs font-tabular px-2.5 py-1 self-start sm:self-auto">Refresh :free Models</button>' +
+              '<button type="button" data-action="refresh-free-models" class="btn-ghost text-xs font-tabular px-3 py-1.5 rounded-lg self-start sm:self-auto">Refresh :free Models</button>' +
             '</div>' +
-            '<div class="rounded-[5px] border border-hairline bg-subtle/60 px-4 py-3 flex items-start gap-3">' +
+            '<div class="rounded-xl border border-hairline bg-subtle/60 px-4 py-3 flex items-start gap-3">' +
               '<input id="st-free-only" name="free_models_only" type="checkbox"' + (s.free_models_only !== false ? ' checked' : '') + ' class="h-4 w-4 mt-0.5 accent-[var(--accent)]">' +
               '<div class="space-y-0.5">' +
                 '<label for="st-free-only" class="text-sm font-medium text-ink cursor-pointer">OpenRouter Free Models Only ($0 Spend Guard)</label>' +
@@ -997,14 +1266,14 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
             '</div>' +
             '<div class="grid grid-cols-1 md:grid-cols-2 gap-4">' +
               '<div class="space-y-2">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-model">Primary Research &amp; Writing Model</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-model">Primary Research &amp; Writing Model</label>' +
                 '<select id="st-model-picker" data-sync-target="st-model" aria-label="Pick live free primary model" class="admin-select font-tabular text-xs">' +
                   renderFreeModelOptions(s.openrouter_model || '', 'Pick live :free model to populate...') +
                 '</select>' +
-                '<input id="st-model" name="openrouter_model" data-sync-picker="st-model-picker" type="text" value="' + esc(s.openrouter_model || '') + '" placeholder="google/gemma-4-31b-it:free" class="admin-input font-tabular">' +
+                '<input id="st-model" name="openrouter_model" data-sync-picker="st-model-picker" type="text" value="' + esc(s.openrouter_model || '') + '" placeholder="openrouter/free" class="admin-input font-tabular">' +
               '</div>' +
               '<div class="space-y-2">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-judge">Judge / Audit Model</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-judge">Judge / Audit Model</label>' +
                 '<select id="st-judge-picker" data-sync-target="st-judge" aria-label="Pick live free judge model" class="admin-select font-tabular text-xs">' +
                   renderFreeModelOptions(s.judge_model || '', 'Pick live :free judge model...') +
                 '</select>' +
@@ -1014,66 +1283,66 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
           '</div>' +
 
           '<div class="editorial-card p-6 space-y-4">' +
-            '<h2 class="font-tabular text-xs uppercase tracking-[0.14em] text-accent font-semibold">Publication &amp; Masthead</h2>' +
+            '<h2 class="font-tabular text-xs uppercase tracking-[0.14em] text-accent font-bold">Publication &amp; Masthead</h2>' +
             '<div class="grid grid-cols-1 md:grid-cols-2 gap-4">' +
               '<div class="space-y-1.5">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-sname">Site Name</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-sname">Site Name</label>' +
                 '<input id="st-sname" name="site_name" type="text" value="' + esc(s.site_name || '') + '" class="admin-input">' +
               '</div>' +
               '<div class="space-y-1.5">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-base">Canonical Base URL</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-base">Canonical Base URL</label>' +
                 '<input id="st-base" name="base_url" type="url" value="' + esc(s.base_url || '') + '" placeholder="https://pyvren.com" class="admin-input">' +
               '</div>' +
               '<div class="space-y-1.5 md:col-span-2">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-tag">Site Tagline</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-tag">Site Tagline</label>' +
                 '<input id="st-tag" name="site_tagline" type="text" value="' + esc(s.site_tagline || '') + '" class="admin-input">' +
               '</div>' +
               '<div class="space-y-1.5">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-author">Default Author / Lead Editor</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-author">Default Author / Lead Editor</label>' +
                 '<input id="st-author" name="default_author" type="text" value="' + esc(s.default_author || '') + '" class="admin-input">' +
               '</div>' +
               '<div class="space-y-1.5">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-email">Contact Email</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-email">Contact Email</label>' +
                 '<input id="st-email" name="contact_email" type="email" value="' + esc(s.contact_email || '') + '" class="admin-input">' +
               '</div>' +
               '<div class="space-y-1.5 md:col-span-2">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-bio">Author Bio</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-bio">Author Bio</label>' +
                 '<textarea id="st-bio" name="author_bio" rows="3" class="admin-textarea">' + esc(s.author_bio || '') + '</textarea>' +
               '</div>' +
             '</div>' +
           '</div>' +
 
           '<div class="editorial-card p-6 space-y-4">' +
-            '<h2 class="font-tabular text-xs uppercase tracking-[0.14em] text-accent font-semibold">Monetization &amp; Bottom Conversion Strip</h2>' +
+            '<h2 class="font-tabular text-xs uppercase tracking-[0.14em] text-accent font-bold">Monetization &amp; Bottom Conversion Strip</h2>' +
             '<div class="grid grid-cols-1 md:grid-cols-2 gap-4">' +
               '<div class="space-y-1.5">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-ads">Google AdSense Client ID <span class="normal-case text-ink-faint">(blank disables ads)</span></label>' +
+                '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-ads">Google AdSense Client ID <span class="normal-case font-normal text-ink-faint">(blank disables ads)</span></label>' +
                 '<input id="st-ads" name="adsense_client_id" type="text" value="' + esc(s.adsense_client_id || '') + '" placeholder="ca-pub-xxxxxxxxxxxxxxxx" class="admin-input font-tabular">' +
               '</div>' +
               '<div class="space-y-1.5">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-ctaurl">CTA URL</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-ctaurl">CTA URL</label>' +
                 '<input id="st-ctaurl" name="cta_url" type="text" value="' + esc(s.cta_url || '') + '" placeholder="/rss.xml" class="admin-input">' +
               '</div>' +
               '<div class="space-y-1.5 md:col-span-2">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-ctah">CTA Headline</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-ctah">CTA Headline</label>' +
                 '<input id="st-ctah" name="cta_headline" type="text" value="' + esc(s.cta_headline || '') + '" class="admin-input">' +
               '</div>' +
               '<div class="space-y-1.5 md:col-span-2">' +
-                '<label class="block font-tabular text-xs text-ink-muted uppercase" for="st-ctab">CTA Body</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold text-ink-muted uppercase" for="st-ctab">CTA Body</label>' +
                 '<textarea id="st-ctab" name="cta_body" rows="2" class="admin-textarea">' + esc(s.cta_body || '') + '</textarea>' +
               '</div>' +
             '</div>' +
           '</div>' +
 
           '<div class="flex items-center justify-end gap-3">' +
-            '<button type="submit" class="btn-accent px-6 py-2.5">Save Settings</button>' +
+            '<button type="submit" class="btn-accent px-6 py-2.5 rounded-xl font-semibold">Save Settings</button>' +
           '</div>' +
         '</form>' +
       '</section>';
     }
 
     /* ------------------------------------------------------------------
-       Modals: Sandboxed Preview, Post Markdown/GEO Editor, Skill Editor
+       Modals: Sandboxed Preview (with Skeleton + Auth), Post Editor, Skill Editor
        ------------------------------------------------------------------ */
 
     function closeModal() {
@@ -1081,7 +1350,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       if (root) root.innerHTML = '';
     }
 
-    function openPreviewModal(postId) {
+    async function openPreviewModal(postId) {
       var post = state.posts.find(function (p) { return p.id === postId; });
       var title = post ? post.title : ('Briefing #' + postId);
       var root = document.getElementById('modal-root');
@@ -1089,14 +1358,40 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         '<div class="admin-modal-panel max-w-5xl flex flex-col" style="height:88vh">' +
           '<div class="px-5 py-3.5 border-b border-hairline flex items-center justify-between gap-3 bg-surface">' +
             '<div class="min-w-0">' +
-              '<p class="font-tabular text-[10px] uppercase tracking-widest text-accent font-semibold">Sandboxed SSR Preview (sandbox=&quot;&quot;)</p>' +
-              '<h2 class="font-editorial text-lg font-semibold text-ink truncate">' + esc(title) + '</h2>' +
+              '<p class="font-tabular text-[10px] uppercase tracking-widest text-accent font-bold">Sandboxed SSR Preview (sandbox=&quot;&quot;)</p>' +
+              '<h2 class="font-masthead text-lg font-bold text-ink truncate">' + esc(title) + '</h2>' +
             '</div>' +
-            '<button type="button" data-action="close-modal" class="btn-ghost text-xs font-tabular">Close</button>' +
+            '<button type="button" data-action="close-modal" class="btn-ghost text-xs font-tabular rounded-lg">Close</button>' +
           '</div>' +
-          '<iframe sandbox="" src="/api/admin/preview/' + encodeURIComponent(postId) + '" title="Sandboxed post preview" class="w-full flex-1 bg-white border-0"></iframe>' +
+          '<div id="preview-frame-host" class="relative flex-1 bg-paper overflow-hidden">' +
+            '<div class="p-8 space-y-4" aria-busy="true">' +
+              '<span class="skeleton-line skeleton-shimmer w-40"></span>' +
+              '<span class="skeleton-line skeleton-line--lg skeleton-shimmer w-3/4 h-8"></span>' +
+              '<div class="relative rounded-2xl overflow-hidden h-64 border border-hairline"><div class="media-skeleton skeleton-shimmer absolute inset-0"><span class="media-skeleton-mark">' + SNAKE_MINI + '</span></div></div>' +
+              '<span class="skeleton-line skeleton-shimmer w-full"></span>' +
+              '<span class="skeleton-line skeleton-shimmer w-5/6"></span>' +
+            '</div>' +
+          '</div>' +
         '</div>' +
       '</div>';
+
+      try {
+        var html = await apiFetch('/api/admin/preview/' + encodeURIComponent(postId), { rawText: true });
+        var host = document.getElementById('preview-frame-host');
+        if (!host) return;
+        var iframe = document.createElement('iframe');
+        iframe.setAttribute('sandbox', '');
+        iframe.title = 'Sandboxed post preview';
+        iframe.className = 'w-full h-full bg-paper border-0';
+        iframe.srcdoc = html;
+        host.innerHTML = '';
+        host.appendChild(iframe);
+      } catch (err) {
+        var hostErr = document.getElementById('preview-frame-host');
+        if (hostErr) {
+          hostErr.innerHTML = '<div class="p-8 text-center text-sm text-[var(--danger)]">' + esc((err && err.message) || 'Unable to load preview.') + '</div>';
+        }
+      }
     }
 
     function openPostEditorModal(post) {
@@ -1109,7 +1404,7 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         key_facts_json: [],
         faq_json: [],
         body_markdown: '',
-        author: (state.settings && state.settings.default_author) || '',
+        author: (state.settings && state.settings.default_author) || DEFAULT_AUTHOR,
         category_slug: (state.skills[0] && state.skills[0].slug) || 'ai-coding-agents-mcp',
         archetype: 'architecture-analysis',
         tags_json: [],
@@ -1144,103 +1439,103 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
           '<div class="flex items-center justify-between gap-3 pb-4 border-b border-hairline">' +
             '<div class="space-y-1">' +
               '<div class="flex flex-wrap items-center gap-2">' +
-                '<p class="font-tabular text-[10px] uppercase tracking-widest text-accent font-semibold">' + (isEdit ? 'Edit Briefing #' + p.id : 'New Editorial Briefing') + '</p>' +
+                '<p class="font-tabular text-[10px] uppercase tracking-widest text-accent font-bold">' + (isEdit ? 'Edit Briefing #' + p.id : 'New Editorial Briefing') + '</p>' +
                 (isEdit && p.admin_locked === true ? '<span class="badge-editorial badge-accent">Admin Locked</span>' : '') +
                 (isEdit && p.admin_locked === true && p.last_edited_by ? '<span class="badge-editorial">Edited by ' + esc(p.last_edited_by) + '</span>' : '') +
               '</div>' +
-              '<h2 class="font-editorial text-2xl font-semibold text-ink">' + (isEdit ? esc(p.title) : 'Compose Markdown & GEO Dossier') + '</h2>' +
+              '<h2 class="font-masthead text-2xl font-bold text-ink">' + (isEdit ? esc(p.title) : 'Compose Markdown & GEO Dossier') + '</h2>' +
             '</div>' +
-            '<button type="button" data-action="close-modal" class="btn-ghost text-xs font-tabular">Close</button>' +
+            '<button type="button" data-action="close-modal" class="btn-ghost text-xs font-tabular rounded-lg">Close</button>' +
           '</div>' +
 
           '<form id="post-editor-form" data-post-id="' + (isEdit ? p.id : '') + '" class="space-y-4">' +
             '<div class="grid grid-cols-1 md:grid-cols-2 gap-4">' +
               '<div class="space-y-1 md:col-span-2">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Title</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Title</label>' +
                 '<input name="title" type="text" required value="' + esc(p.title) + '" class="admin-input">' +
               '</div>' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Slug <span class="normal-case text-ink-faint">(auto if empty)</span></label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Slug <span class="normal-case font-normal text-ink-faint">(auto if empty)</span></label>' +
                 '<input name="slug" type="text" value="' + esc(p.slug || '') + '" class="admin-input font-tabular">' +
               '</div>' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Author</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Author</label>' +
                 '<input name="author" type="text" value="' + esc(p.author || '') + '" class="admin-input">' +
               '</div>' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Category Skill</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Category Skill</label>' +
                 '<select name="category_slug" class="admin-select">' + catOpts + '</select>' +
               '</div>' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Archetype</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Archetype</label>' +
                 '<select name="archetype" class="admin-select">' + archOpts + '</select>' +
               '</div>' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Status</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Status</label>' +
                 '<select name="status" class="admin-select">' +
                   '<option value="draft"' + (p.status !== 'published' ? ' selected' : '') + '>Draft</option>' +
                   '<option value="published"' + (p.status === 'published' ? ' selected' : '') + '>Published</option>' +
                 '</select>' +
               '</div>' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Tags (comma-separated)</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Tags (comma-separated)</label>' +
                 '<input name="tags" type="text" value="' + esc(Array.isArray(p.tags_json) ? p.tags_json.join(', ') : '') + '" class="admin-input">' +
               '</div>' +
               '<div class="space-y-1 md:col-span-2">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Keywords (SEO / GEO, comma-separated)</label>' +
-                '<input name="keywords" type="text" value="' + esc(Array.isArray(p.keywords_json) ? p.keywords_json.join(', ') : '') + '" placeholder="cli coding agents, mcp token overhead, prompt injection defense, context rot" class="admin-input">' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Keywords (SEO / GEO, comma-separated)</label>' +
+                '<input name="keywords" type="text" value="' + esc(Array.isArray(p.keywords_json) ? p.keywords_json.join(', ') : '') + '" placeholder="cli coding agents, mcp token overhead, prompt injection defense" class="admin-input">' +
               '</div>' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Cover Image URL <span class="normal-case text-ink-faint">(https:// crawled reference or empty for Crew SVG)</span></label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Cover Image URL <span class="normal-case font-normal text-ink-faint">(empty uses Py illustration)</span></label>' +
                 '<input name="cover_image_url" type="url" value="' + esc(p.cover_image_url || '') + '" placeholder="https://..." class="admin-input font-tabular">' +
               '</div>' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Cover Image Alt / Caption</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Cover Image Alt / Caption</label>' +
                 '<input name="cover_image_alt" type="text" value="' + esc(p.cover_image_alt || '') + '" placeholder="Benchmark diagram or reference figure caption" class="admin-input">' +
               '</div>' +
             '</div>' +
 
             '<div class="space-y-1">' +
-              '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Meta Description</label>' +
+              '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Meta Description</label>' +
               '<textarea name="description" rows="2" required class="admin-textarea">' + esc(p.description || '') + '</textarea>' +
             '</div>' +
 
             '<div class="space-y-1">' +
-              '<label class="block font-tabular text-[11px] uppercase text-ink-muted">GEO Answer-First TL;DR Summary</label>' +
+              '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">GEO Answer-First TL;DR Summary</label>' +
               '<textarea name="tldr_summary" rows="2" class="admin-textarea">' + esc(p.tldr_summary || '') + '</textarea>' +
             '</div>' +
 
             '<div class="space-y-1">' +
-              '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Body Markdown</label>' +
+              '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Body Markdown</label>' +
               '<textarea name="body_markdown" rows="12" required class="admin-textarea">' + esc(p.body_markdown || '') + '</textarea>' +
             '</div>' +
 
             '<div class="grid grid-cols-1 md:grid-cols-2 gap-4">' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Key Facts <span class="normal-case text-ink-faint">(one per line: Label | Value | Optional URL)</span></label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Key Facts <span class="normal-case font-normal text-ink-faint">(Label | Value | Optional URL)</span></label>' +
                 '<textarea name="key_facts_lines" rows="4" class="admin-textarea" placeholder="Latency P95 | 142ms | https://example.com">' + esc(factsLines) + '</textarea>' +
               '</div>' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Primary Sources <span class="normal-case text-ink-faint">(one https:// URL per line)</span></label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Primary Sources <span class="normal-case font-normal text-ink-faint">(one https:// URL per line)</span></label>' +
                 '<textarea name="sources_lines" rows="4" class="admin-textarea" placeholder="https://official-advisory.example.com">' + esc(arrayToLines(p.sources_json)) + '</textarea>' +
               '</div>' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">FAQ JSON <span class="normal-case text-ink-faint">([{&quot;question&quot;:&quot;...&quot;,&quot;answer&quot;:&quot;...&quot;}])</span></label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">FAQ JSON</label>' +
                 '<textarea name="faq_json_text" rows="4" class="admin-textarea">' + esc(faqJsonText) + '</textarea>' +
               '</div>' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Human Spot-Check Notes <span class="normal-case text-ink-faint">(one per line)</span></label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Human Spot-Check Notes <span class="normal-case font-normal text-ink-faint">(one per line)</span></label>' +
                 '<textarea name="review_notes_lines" rows="4" class="admin-textarea">' + esc(arrayToLines(p.review_notes_json)) + '</textarea>' +
               '</div>' +
             '</div>' +
 
-            '<div id="lint-preview-box" class="hidden rounded-[6px] border border-hairline bg-subtle p-4 text-xs space-y-2"></div>' +
+            '<div id="lint-preview-box" class="hidden rounded-xl border border-hairline bg-subtle p-4 text-xs space-y-2"></div>' +
 
             '<div class="pt-4 border-t border-hairline flex flex-wrap items-center justify-between gap-3">' +
-              '<button type="button" data-action="dry-run-lint" class="btn-ghost font-tabular text-xs">Dry-Run Lint &amp; Score</button>' +
+              '<button type="button" data-action="dry-run-lint" class="btn-ghost font-tabular text-xs rounded-lg">Dry-Run Lint &amp; Score</button>' +
               '<div class="flex items-center gap-2">' +
-                '<button type="button" data-action="close-modal" class="btn-ghost text-xs">Cancel</button>' +
-                '<button type="submit" class="btn-accent text-xs px-5">' + (isEdit ? 'Save Changes' : 'Create Briefing') + '</button>' +
+                '<button type="button" data-action="close-modal" class="btn-ghost text-xs rounded-lg">Cancel</button>' +
+                '<button type="submit" class="btn-accent text-xs px-5 rounded-lg font-semibold">' + (isEdit ? 'Save Changes' : 'Create Briefing') + '</button>' +
               '</div>' +
             '</div>' +
           '</form>' +
@@ -1330,24 +1625,24 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         '<div class="admin-modal-panel max-w-3xl p-6 space-y-5">' +
           '<div class="flex items-center justify-between gap-3 pb-4 border-b border-hairline">' +
             '<div>' +
-              '<p class="font-tabular text-[10px] uppercase tracking-widest text-accent font-semibold">' + (isEdit ? 'Edit Category Skill' : 'New Category Skill') + '</p>' +
-              '<h2 class="font-editorial text-2xl font-semibold text-ink">' + (isEdit ? esc(s.name) : 'Create Research Track') + '</h2>' +
+              '<p class="font-tabular text-[10px] uppercase tracking-widest text-accent font-bold">' + (isEdit ? 'Edit Category Skill' : 'New Category Skill') + '</p>' +
+              '<h2 class="font-masthead text-2xl font-bold text-ink">' + (isEdit ? esc(s.name) : 'Create Research Track') + '</h2>' +
             '</div>' +
-            '<button type="button" data-action="close-modal" class="btn-ghost text-xs font-tabular">Close</button>' +
+            '<button type="button" data-action="close-modal" class="btn-ghost text-xs font-tabular rounded-lg">Close</button>' +
           '</div>' +
 
           '<form id="skill-editor-form" data-is-edit="' + (isEdit ? '1' : '0') + '" class="space-y-4">' +
             '<div class="grid grid-cols-1 md:grid-cols-2 gap-4">' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Name</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Name</label>' +
                 '<input name="name" type="text" required value="' + esc(s.name) + '" class="admin-input">' +
               '</div>' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Slug</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Slug</label>' +
                 '<input name="slug" type="text" required ' + (isEdit ? 'readonly' : '') + ' value="' + esc(s.slug) + '" placeholder="ai-security-jailbreaks" class="admin-input font-tabular' + (isEdit ? ' opacity-70' : '') + '">' +
               '</div>' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Priority (higher runs more often)</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Priority (higher runs more often)</label>' +
                 '<input name="priority" type="number" min="1" max="100" value="' + esc(s.priority != null ? s.priority : 50) + '" class="admin-input">' +
               '</div>' +
               '<div class="flex items-center gap-3 pt-5">' +
@@ -1357,22 +1652,22 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
             '</div>' +
 
             '<div class="space-y-1">' +
-              '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Description</label>' +
+              '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Description</label>' +
               '<textarea name="description" rows="2" required class="admin-textarea">' + esc(s.description) + '</textarea>' +
             '</div>' +
 
             '<div class="space-y-1">' +
-              '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Target Audience</label>' +
+              '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Target Audience</label>' +
               '<input name="target_audience" type="text" value="' + esc(s.target_audience || '') + '" class="admin-input">' +
             '</div>' +
 
             '<div class="space-y-1">' +
-              '<label class="block font-tabular text-[11px] uppercase text-ink-muted">System Instructions (Domain Prompt)</label>' +
+              '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">System Instructions (Domain Prompt)</label>' +
               '<textarea name="system_instructions" rows="5" required class="admin-textarea">' + esc(s.system_instructions || '') + '</textarea>' +
             '</div>' +
 
             '<div class="space-y-1.5">' +
-              '<span class="block font-tabular text-[11px] uppercase text-ink-muted">Preferred Archetypes</span>' +
+              '<span class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Preferred Archetypes</span>' +
               '<div class="flex flex-wrap gap-3">' +
                 ARCHETYPES.map(function (a) {
                   var chk = selectedArchs.indexOf(a.value) !== -1 ? ' checked' : '';
@@ -1386,26 +1681,26 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
 
             '<div class="grid grid-cols-1 md:grid-cols-2 gap-4">' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Research Feeds (one URL per line)</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Research Feeds (one URL per line)</label>' +
                 '<textarea name="research_feeds" rows="4" class="admin-textarea">' + esc(arrayToLines(s.research_feeds_json)) + '</textarea>' +
               '</div>' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Search Queries (one per line)</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Search Queries (one per line)</label>' +
                 '<textarea name="search_queries" rows="4" class="admin-textarea">' + esc(arrayToLines(s.search_queries_json)) + '</textarea>' +
               '</div>' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Required Sections (one per line)</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Required Sections (one per line)</label>' +
                 '<textarea name="required_sections" rows="3" class="admin-textarea">' + esc(arrayToLines(s.required_sections_json)) + '</textarea>' +
               '</div>' +
               '<div class="space-y-1">' +
-                '<label class="block font-tabular text-[11px] uppercase text-ink-muted">Banned Patterns / Clichés (one per line)</label>' +
+                '<label class="block font-tabular text-[11px] font-semibold uppercase text-ink-muted">Banned Patterns / Clichés (one per line)</label>' +
                 '<textarea name="banned_patterns" rows="3" class="admin-textarea">' + esc(arrayToLines(s.banned_patterns_json)) + '</textarea>' +
               '</div>' +
             '</div>' +
 
             '<div class="pt-4 border-t border-hairline flex items-center justify-end gap-2">' +
-              '<button type="button" data-action="close-modal" class="btn-ghost text-xs">Cancel</button>' +
-              '<button type="submit" class="btn-accent text-xs px-5">' + (isEdit ? 'Save Skill' : 'Create Skill') + '</button>' +
+              '<button type="button" data-action="close-modal" class="btn-ghost text-xs rounded-lg">Cancel</button>' +
+              '<button type="submit" class="btn-accent text-xs px-5 rounded-lg font-semibold">' + (isEdit ? 'Save Skill' : 'Create Skill') + '</button>' +
             '</div>' +
           '</form>' +
         '</div>' +
@@ -1430,13 +1725,20 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       }
 
       var tabHtml = '';
-      if (state.activeTab === 'posts') tabHtml = renderPostsTab();
-      else if (state.activeTab === 'agent') tabHtml = renderAgentTab();
-      else if (state.activeTab === 'skills') tabHtml = renderSkillsTab();
-      else tabHtml = renderSettingsTab();
+      if (state.loadingData && !state.hasLoadedOnce) {
+        tabHtml = renderWorkspaceSkeleton();
+      } else if (state.activeTab === 'posts') {
+        tabHtml = renderPostsTab();
+      } else if (state.activeTab === 'agent') {
+        tabHtml = renderAgentTab();
+      } else if (state.activeTab === 'skills') {
+        tabHtml = renderSkillsTab();
+      } else {
+        tabHtml = renderSettingsTab();
+      }
 
       app.innerHTML = renderTopBar() +
-        '<main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">' +
+        '<main class="flex-1 max-w-7xl w-full mx-auto px-3.5 sm:px-6 lg:px-8 py-8">' +
           tabHtml +
         '</main>';
     }
@@ -1459,14 +1761,23 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
       try {
         if (action === 'toggle-theme') {
           toggleTheme();
+        } else if (action === 'toggle-pass') {
+          state.showPassword = !state.showPassword;
+          var passEl = document.getElementById('lg-pass');
+          if (passEl) {
+            passEl.type = state.showPassword ? 'text' : 'password';
+            target.textContent = state.showPassword ? 'Hide' : 'Show';
+          }
         } else if (action === 'close-modal') {
           closeModal();
         } else if (action === 'switch-tab') {
           state.activeTab = target.getAttribute('data-tab') || 'posts';
           render();
         } else if (action === 'logout') {
-          await apiFetch('/api/admin/auth/logout', { method: 'POST' });
-          state.auth.authenticated = false;
+          try { await apiFetch('/api/admin/auth/logout', { method: 'POST' }); } catch (e2) {}
+          writeStoredToken('');
+          state.auth = { loading: false, authenticated: false, user: null };
+          state.hasLoadedOnce = false;
           stopPolling();
           toast('Signed out', 'success');
           render();
@@ -1639,21 +1950,45 @@ export function renderAdminSpaHtml(settings: SiteSettings): string {
         if (form.id === 'login-form') {
           var lfd = new FormData(form);
           var lErr = document.getElementById('auth-error');
+          var submitBtn = form.querySelector('button[type="submit"]');
           if (lErr) lErr.classList.add('hidden');
+          if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Signing in...';
+          }
+          state.loggingIn = true;
           try {
-            await apiFetch('/api/admin/auth/login', {
+            var loginRes = await apiFetch('/api/admin/auth/login', {
               method: 'POST',
               body: {
                 email: String(lfd.get('email') || '').trim(),
                 password: String(lfd.get('password') || '')
               }
             });
-            toast('Signed in', 'success');
-            await checkAuthStatus();
+            if (loginRes && loginRes.token) {
+              writeStoredToken(loginRes.token);
+            }
+            state.auth = {
+              loading: false,
+              authenticated: true,
+              user: {
+                email: (loginRes && loginRes.email) || String(lfd.get('email') || '').trim(),
+                display_name: (loginRes && loginRes.display_name) || DEFAULT_AUTHOR
+              }
+            };
+            toast('Welcome back to Pyvren Studio', 'success');
+            await loadAllWorkspaceData();
           } catch (err) {
             if (lErr) {
-              lErr.textContent = err.message || 'Invalid credentials';
+              lErr.textContent = (err && err.message) || 'Invalid email or password.';
               lErr.classList.remove('hidden');
+            }
+          } finally {
+            state.loggingIn = false;
+            var btnAfter = document.querySelector('#login-form button[type="submit"]');
+            if (btnAfter) {
+              btnAfter.disabled = false;
+              btnAfter.textContent = 'Enter Pyvren Studio';
             }
           }
         } else if (form.id === 'post-editor-form') {

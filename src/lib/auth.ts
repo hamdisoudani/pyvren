@@ -302,7 +302,7 @@ export function buildSessionCookie(
     `${SESSION_COOKIE_NAME}=${token}`,
     'HttpOnly',
     'Path=/',
-    'SameSite=Strict',
+    'SameSite=Lax',
     `Max-Age=${maxAge}`,
   ];
   if (isHttps) {
@@ -316,7 +316,7 @@ export function buildClearSessionCookie(isHttps: boolean): string {
     `${SESSION_COOKIE_NAME}=`,
     'HttpOnly',
     'Path=/',
-    'SameSite=Strict',
+    'SameSite=Lax',
     'Max-Age=0',
     'Expires=Thu, 01 Jan 1970 00:00:00 GMT',
   ];

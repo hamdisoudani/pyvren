@@ -372,4 +372,71 @@ describe('Dual-Layer UX (Humans vs Agents), Theme Persistence, Rate-Limited Sear
       'https://opengraph.githubassets.com/1/scalekit-inc/mcp-vs-cli-benchmark',
     );
   });
+
+  it('5. Admin SPA inherits public Pyvren design, theme cookie SSR, skeletons & works behind reverse-proxy X-Forwarded-Host', async () => {
+    const db = new InMemoryDatabase();
+    const env = createTestEnv(db);
+    const app = createApp();
+
+    // Admin SPA honors pyvren_theme cookie on SSR & shares public Pyvren wordmark + typography + skeletons
+    const adminRes = await app.request(
+      'https://pyvren.com/admin',
+      { headers: { Cookie: 'pyvren_theme=dark' } },
+      env,
+    );
+    expect(adminRes.status).toBe(200);
+    expect(adminRes.headers.get('x-robots-tag')).toBe('noindex, nofollow');
+    const adminHtml = await adminRes.text();
+    expect(adminHtml).toContain('<html lang="en" data-theme="dark">');
+    expect(adminHtml).toContain('Playfair+Display');
+    expect(adminHtml).toContain('pyvren-wordmark');
+    expect(adminHtml).toContain('py-snake-mark');
+    expect(adminHtml).toContain('skeleton-shimmer');
+    expect(adminHtml).toContain('data-snake-pupil');
+    expect(adminHtml).not.toContain('bootstrap-form');
+
+    // Login behind reverse proxy / preview tunnel (X-Forwarded-Host matches Origin) succeeds
+    const proxyLogin = await app.request(
+      'http://localhost:8787/api/admin/auth/login',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: 'https://preview-tunnel.example.com',
+          'X-Forwarded-Host': 'preview-tunnel.example.com',
+          'X-Forwarded-Proto': 'https',
+        },
+        body: JSON.stringify({
+          email: env.ADMIN_EMAIL,
+          password: env.ADMIN_PASSWORD,
+        }),
+      },
+      env,
+    );
+    expect(proxyLogin.status).toBe(200);
+    const setCookie = proxyLogin.headers.get('set-cookie') || '';
+    expect(setCookie).toContain('pyvren_session=');
+    expect(setCookie).toContain('HttpOnly');
+    expect(setCookie).toContain('SameSite=Lax');
+    expect(setCookie).toContain('Secure');
+
+    // Cross-origin attacker Origin still gets rejected with 403 even with X-Forwarded-Host present
+    const badProxyLogin = await app.request(
+      'http://localhost:8787/api/admin/auth/login',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Origin: 'https://evil-attacker.example',
+          'X-Forwarded-Host': 'preview-tunnel.example.com',
+        },
+        body: JSON.stringify({
+          email: env.ADMIN_EMAIL,
+          password: env.ADMIN_PASSWORD,
+        }),
+      },
+      env,
+    );
+    expect(badProxyLogin.status).toBe(403);
+  });
 });
