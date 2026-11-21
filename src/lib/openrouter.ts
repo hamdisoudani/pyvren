@@ -65,13 +65,13 @@ export const CURATED_FREE_MODELS: string[] = [
 
 export const CURATED_NIM_MODELS: string[] = [
   'nim/nvidia/nemotron-3.5-super-vl-120b-a12b',
-  'nim/nvidia/nemotron-3.5-lightning-30b-a3b',
+  'nim/minimaxai/minimax-m3.1-flash',
   'nim/nvidia/nemotron-3-ultra-550b-a55b',
+  'nim/nvidia/nemotron-3.5-lightning-30b-a3b',
   'nim/google/gemma-4-31b-it',
   'nim/z-ai/glm-5.3-flash',
   'nim/mistralai/mistral-large-4-1t-a52b',
   'nim/moonshotai/kimi-k3.1-pro',
-  'nim/minimaxai/minimax-m3.1-flash',
 ];
 
 const CURATED_FREE_MODEL_METADATA: Record<string, OpenRouterFreeModelInfo> = {
@@ -623,8 +623,9 @@ export async function probeWorkingModelPool(
   if (nimKey) {
     defaultPool.push(
       'nim/nvidia/nemotron-3.5-super-vl-120b-a12b',
-      'nim/nvidia/nemotron-3.5-lightning-30b-a3b',
+      'nim/minimaxai/minimax-m3.1-flash',
       'nim/nvidia/nemotron-3-ultra-550b-a55b',
+      'nim/nvidia/nemotron-3.5-lightning-30b-a3b',
     );
   }
   if (orKey && (opts?.forceRefresh || openRouterDailyExhaustedUntil <= now)) {

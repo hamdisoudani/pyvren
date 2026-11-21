@@ -297,4 +297,272 @@ describe('NVIDIA NIM Multi-Provider Routing, Cross-Provider Failover & Live Pool
     expect(listJson.models.some((m) => m.id.endsWith(':free'))).toBe(true);
     expect(listJson.probe_results.length).toBeGreaterThanOrEqual(3);
   });
+
+  it('5. Blocks placeholder CVEs in linter and auto-improves + re-audits a 65/100 draft across two distinct families with category skill rules', async () => {
+    const { lintPostPayload } = await import('../src/lib/linter');
+    const { createEmptyTokenUsage, stageLoadContext, stageQualityAssessment } = await import('../src/lib/agent');
+
+    const badBody = `# Summary\n\nPlaceholder CVE-2025-XXXX affects routers. See [CISA](https://www.cisa.gov/known-exploited-vulnerabilities-catalog), [NVD](https://nvd.nist.gov/vuln/detail/CVE-2025-42884), and [Cisco](https://sec.cloudapps.cisco.com/security/center/publicationListing.x).\n\n| Product | CVE |\n| --- | --- |\n| Cisco | CVE-2025-XXXX |\n\n` + 'Technical operational hardening details for incident responders. '.repeat(65);
+    const badLint = lintPostPayload({
+      title: 'CISA KEV Adds Four Actively Exploited Enterprise Flaws',
+      description: 'Short description that is deliberately over one hundred seventy characters long so it also triggers the deterministic meta description lint check right alongside the placeholder CVE.',
+      tldr_summary: 'Placeholder CVE-2025-XXXX summary.',
+      key_facts: [
+        { label: 'Flaws', value: '4' },
+        { label: 'Catalog', value: 'CISA KEV' },
+        { label: 'Priority', value: 'Patch now' },
+      ],
+      faq: [
+        { question: 'What is affected?', answer: 'Four enterprise systems.' },
+        { question: 'How do I patch?', answer: 'Apply vendor updates immediately.' },
+      ],
+      body_markdown: badBody,
+      author: 'Hamdi Soudani',
+      archetype: 'advisory-teardown',
+      sources: [
+        'https://www.cisa.gov/known-exploited-vulnerabilities-catalog',
+        'https://nvd.nist.gov/vuln/detail/CVE-2025-42884',
+      ],
+    });
+    expect(badLint.passed).toBe(false);
+    expect(badLint.errors.some((e) => e.includes('CVE-YYYY-XXXX'))).toBe(true);
+
+    const db = new InMemoryDatabase();
+    const env = makeTestEnv({ __TEST_DB__: db, OPENROUTER_API_KEY: '' });
+    const ctx = await stageLoadContext(db, {
+      category_slug: 'dev-tooling-benchmarks',
+      archetype: 'advisory-teardown',
+      force: true,
+    });
+    ctx.model = 'nim/nvidia/nemotron-3.5-super-vl-120b-a12b';
+    ctx.judgeModel = 'nim/minimaxai/minimax-m3.1-flash';
+    ctx.fastestModels = [
+      'nim/nvidia/nemotron-3.5-super-vl-120b-a12b',
+      'nim/minimaxai/minimax-m3.1-flash',
+      'nim/nvidia/nemotron-3-ultra-550b-a55b',
+    ];
+
+    const goodBody = `## Incident Timeline & Blast-Radius Table
+
+Teams running Apache Roller, Cisco Expressway, SAP NetWeaver, and VMware vCenter face active exploitation tracked in the [CISA KEV catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog). Prioritize patching within 24 hours.
+
+| Vendor | Product | Verified CVE | Action |
+| --- | --- | --- | --- |
+| SAP | NetWeaver | CVE-2025-42884 | Apply SAP Security Note |
+| Broadcom | VMware vCenter | CVE-2024-38812 | Upgrade vCenter Server |
+| Cisco | Expressway | CVE-2022-20812 | Upgrade to fixed release |
+
+## Technical Root Cause & Attack Vector (Defensive Analysis)
+
+According to [NVD CVE-2025-42884](https://nvd.nist.gov/vuln/detail/CVE-2025-42884) and the [Cisco Security Advisory](https://sec.cloudapps.cisco.com/security/center/publicationListing.x), attackers chain unauthenticated edge exposure with weak input validation to reach management planes. Keep administrative interfaces off public networks. Verify every ingress rule across staging and production clusters immediately.
+
+\`\`\`bash
+# Verify exposed management ports internally before patching
+ss -tulpn | grep -E ':(443|8443|50000)'
+\`\`\`
+
+## Exact Patch, Upgrade & Verification Commands
+
+Follow each vendor's verified release notes directly instead of ad-hoc scripts. Confirm package checksums after rollout. Track remediation completion across every cluster node with automated asset inventory checks.
+
+## Detection Rules & Hardening Checklist
+
+Audit outbound connections from vCenter and Expressway appliances for unexpected callbacks. Rotate service credentials after patching completes. Alert on anomalous administrative API calls across all four platforms. ` +
+      'Short crisp verdict. Concrete infrastructure teams isolate management planes, verify signed vendor patches, audit outbound telemetry, and confirm zero unauthorized administrative sessions remain active after maintenance windows complete. '.repeat(14);
+
+    let llmCalls = 0;
+    const seenSystems: string[] = [];
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      llmCalls++;
+      const parsed = JSON.parse(String(init?.body || '{}')) as {
+        model?: string;
+        messages?: Array<{ role: string; content: string }>;
+      };
+      const sys = parsed.messages?.find((m) => m.role === 'system')?.content || '';
+      const usr = parsed.messages?.find((m) => m.role === 'user')?.content || '';
+      seenSystems.push(sys);
+
+      // Revision pass (call #3)
+      if (usr.includes('AUTO-IMPROVEMENT ROUND')) {
+        return new Response(
+          JSON.stringify({
+            model: parsed.model,
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    title: 'CISA KEV Adds Four Actively Exploited Flaws: Patch Guide',
+                    slug: 'cisa-kev-four-actively-exploited-flaws-patch-guide',
+                    description:
+                      'Defensive breakdown of four newly added CISA KEV flaws across SAP NetWeaver, VMware vCenter, Cisco Expressway, and Apache Roller with verified patching steps.',
+                    tldr_summary:
+                      'CISA added four actively exploited enterprise flaws including CVE-2025-42884 to KEV. Isolate management planes and apply vendor patches immediately.',
+                    cover_image_url: null,
+                    cover_image_alt: null,
+                    images: [],
+                    key_facts: [
+                      { label: 'Verified CVE', value: 'CVE-2025-42884 (SAP NetWeaver)' },
+                      { label: 'Catalog', value: 'CISA KEV (4 flaws added)' },
+                      { label: 'Priority', value: 'Immediate patch & management-plane isolation' },
+                    ],
+                    faq: [
+                      {
+                        question: 'Which products are affected by the new CISA KEV additions?',
+                        answer: 'SAP NetWeaver, VMware vCenter, Cisco Expressway, and Apache Roller.',
+                      },
+                      {
+                        question: 'What is the immediate defensive step before maintenance?',
+                        answer: 'Restrict management interfaces to internal VPN/bastion networks and audit logs.',
+                      },
+                    ],
+                    body_markdown: goodBody,
+                    tags: ['cisa-kev', 'cve', 'incident-response'],
+                    keywords: ['cisa kev', 'cve-2025-42884', 'vmware vcenter', 'cisco expressway', 'sap netweaver'],
+                    sources: [
+                      'https://www.cisa.gov/known-exploited-vulnerabilities-catalog',
+                      'https://nvd.nist.gov/vuln/detail/CVE-2025-42884',
+                      'https://sec.cloudapps.cisco.com/security/center/publicationListing.x',
+                    ],
+                    review_notes: ['Replaced placeholder CVEs with verified IDs and fixed meta description length.'],
+                  }),
+                },
+              },
+            ],
+            usage: { prompt_tokens: 100, completion_tokens: 200, total_tokens: 300 },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      // Round 0 critics fail the placeholder draft; Round 1 critics pass the improved draft!
+      const isImproved = !usr.includes('CVE-2025-XXXX');
+      if (sys.includes('Critic 1')) {
+        return new Response(
+          JSON.stringify({
+            model: parsed.model,
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify(
+                    isImproved
+                      ? {
+                          editorial_tone: 92,
+                          factual_grounding: 94,
+                          visuals_and_tables: 90,
+                          verdict: 'pass',
+                          blocking_issues: [],
+                          concrete_fixes: [],
+                          notes: 'All placeholder CVEs removed and category required sections verified.',
+                        }
+                      : {
+                          editorial_tone: 55,
+                          factual_grounding: 30,
+                          visuals_and_tables: 60,
+                          verdict: 'revise',
+                          blocking_issues: ['Contains placeholder CVE-2025-XXXX'],
+                          concrete_fixes: ['Replace CVE-2025-XXXX with verified CVE IDs'],
+                          notes: 'Contains placeholder CVEs.',
+                        },
+                  ),
+                },
+              },
+            ],
+            usage: { prompt_tokens: 40, completion_tokens: 40, total_tokens: 80 },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          model: parsed.model,
+          choices: [
+            {
+              message: {
+                content: JSON.stringify(
+                  isImproved
+                    ? {
+                        seo_score: 91,
+                        geo_clarity: 93,
+                        adsense_safety: 96,
+                        verdict: 'pass',
+                        blocking_issues: [],
+                        concrete_fixes: [],
+                        notes: 'Clean meta description, verified citations, strictly defensive.',
+                      }
+                    : {
+                        seo_score: 58,
+                        geo_clarity: 60,
+                        adsense_safety: 75,
+                        verdict: 'revise',
+                        blocking_issues: ['Meta description too long'],
+                        concrete_fixes: ['Shorten description to 125-160 chars'],
+                        notes: 'Meta description exceeds limit.',
+                      },
+                ),
+              },
+            },
+          ],
+          usage: { prompt_tokens: 40, completion_tokens: 40, total_tokens: 80 },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+
+    const trace: import('../src/types').TraceEntry[] = [];
+    const usage = createEmptyTokenUsage();
+    const res = await stageQualityAssessment(
+      env,
+      ctx,
+      {
+        title: 'CISA KEV Adds Four Actively Exploited Enterprise Flaws',
+        slug: 'cisa-kev-flaws',
+        description:
+          'Short description that is deliberately over one hundred seventy characters long so it also triggers the deterministic meta description lint check right alongside the placeholder CVE.',
+        tldr_summary: 'Placeholder CVE-2025-XXXX summary.',
+        cover_image_url: null,
+        cover_image_alt: null,
+        images: [],
+        key_facts: [
+          { label: 'Flaws', value: '4' },
+          { label: 'Catalog', value: 'CISA KEV' },
+          { label: 'Priority', value: 'Patch now' },
+        ],
+        faq: [
+          { question: 'What is affected?', answer: 'Four enterprise systems.' },
+          { question: 'How do I patch?', answer: 'Apply vendor updates immediately.' },
+        ],
+        body_markdown: badBody,
+        tags: ['cisa-kev'],
+        keywords: ['cisa kev'],
+        sources: [
+          'https://www.cisa.gov/known-exploited-vulnerabilities-catalog',
+          'https://nvd.nist.gov/vuln/detail/CVE-2025-42884',
+        ],
+        review_notes: [],
+      },
+      badLint,
+      trace,
+      usage,
+      [
+        {
+          url: 'https://nvd.nist.gov/vuln/detail/CVE-2025-42884',
+          title: 'NVD CVE-2025-42884',
+          markdown: 'SAP NetWeaver CVE-2025-42884 active exploitation.',
+          chars: 120,
+        },
+      ],
+      { reAuditAfterRevision: true, maxImprovementRounds: 2 },
+    );
+
+    // Critics saw the category's exact required sections
+    expect(seenSystems.some((s) => s.includes('CATEGORY REQUIRED SECTIONS'))).toBe(true);
+    // 2 initial critics + 1 revision + 2 re-audit critics = 5 calls, then early-exited cleanly!
+    expect(llmCalls).toBe(5);
+    expect(res.revisedLintResult?.passed).toBe(true);
+    expect(res.finalScore).toBeGreaterThanOrEqual(85);
+    expect(res.finalBreakdown.dual_critic_review?.cross_family_verified).toBe(true);
+    expect(res.finalBreakdown.dual_critic_review?.revision_applied).toBe(true);
+  });
 });

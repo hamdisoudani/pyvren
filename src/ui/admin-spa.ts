@@ -1021,6 +1021,9 @@ export function renderAdminSpaHtml(
             '<button type="button" data-action="toggle-post-notes" data-id="' + post.id + '" class="btn-ghost text-xs px-2.5 py-2 sm:py-1.5 rounded-lg justify-center">' +
               (expanded ? 'Hide audit' : 'Audit (' + (reviewNotes.length + lintErrors.length) + ')') +
             '</button>' +
+            (!isPub || score < 80
+              ? '<button type="button" data-action="improve-post" data-id="' + post.id + '" class="btn-ghost text-xs px-2.5 py-2 sm:py-1.5 rounded-lg justify-center font-semibold">Auto-improve</button>'
+              : '') +
             '<button type="button" data-action="preview-post" data-id="' + post.id + '" class="btn-ghost text-xs px-2.5 py-2 sm:py-1.5 rounded-lg justify-center">Preview</button>' +
             '<button type="button" data-action="edit-post" data-id="' + post.id + '" class="btn-ghost text-xs px-2.5 py-2 sm:py-1.5 rounded-lg justify-center">Edit</button>' +
             (isPub
@@ -1215,6 +1218,7 @@ export function renderAdminSpaHtml(
           '</div>' +
 
           '<div class="flex flex-wrap items-center gap-2 shrink-0">' +
+            (run.status === 'failed' ? '<button type="button" data-action="retry-run" data-id="' + run.id + '" class="btn-accent text-xs px-2.5 py-1.5 rounded-lg font-semibold">Rerun</button>' : '') +
             (run.post_id ? '<button type="button" data-action="preview-post" data-id="' + run.post_id + '" class="btn-ghost text-xs px-2.5 py-1.5 rounded-lg">Preview</button>' : '') +
             (run.post_id ? '<button type="button" data-action="edit-post" data-id="' + run.post_id + '" class="btn-ghost text-xs px-2.5 py-1.5 rounded-lg">Edit post</button>' : '') +
             '<button type="button" data-action="toggle-run-trace" data-id="' + run.id + '" class="btn-ghost text-xs px-2.5 py-1.5 rounded-lg">' +
@@ -2105,6 +2109,35 @@ export function renderAdminSpaHtml(
             found = (fetched && (fetched.post || fetched)) || null;
           }
           if (found) openPostEditorModal(found);
+        } else if (action === 'improve-post') {
+          var impId = Number(target.getAttribute('data-id'));
+          target.disabled = true;
+          target.textContent = 'Improving...';
+          try {
+            var impRes = await apiFetch('/api/admin/posts/' + impId + '/improve', { method: 'POST' });
+            if (impRes && impRes.execution_mode === 'workflow') {
+              toast('Auto-improvement workflow started — check Automation logs', 'success');
+              await refreshRunsOnly();
+            } else {
+              toast('Post improved (' + (impRes && impRes.previous_score) + ' -> ' + (impRes && impRes.final_score) + '/100)', 'success');
+              await loadAllWorkspaceData();
+            }
+          } finally {
+            target.disabled = false;
+            target.textContent = 'Auto-improve';
+          }
+        } else if (action === 'retry-run') {
+          var retryId = Number(target.getAttribute('data-id'));
+          target.disabled = true;
+          target.textContent = 'Rerunning...';
+          try {
+            await apiFetch('/api/admin/agent/runs/' + retryId + '/retry', { method: 'POST' });
+            toast('Rerun started for #' + retryId, 'success');
+            await refreshRunsOnly();
+          } finally {
+            target.disabled = false;
+            target.textContent = 'Rerun';
+          }
         } else if (action === 'publish-post' || action === 'unpublish-post') {
           var pubId = Number(target.getAttribute('data-id'));
           var isPubAction = action === 'publish-post';

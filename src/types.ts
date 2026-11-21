@@ -258,6 +258,7 @@ export interface AgentDispatchPayload {
   model_override?: string;
   force?: boolean;
   run_id?: number;
+  improve_post_id?: number;
 }
 
 export interface DatabaseAdapter {

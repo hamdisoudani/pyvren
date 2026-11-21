@@ -33,6 +33,8 @@ import {
   extractJsonObject,
   getFastestHealthyModelsFromCache,
   getOpenRouterModelFamily,
+  isFreeOpenRouterModel,
+  isNimModel,
   pickDistinctFreeCriticPair,
   probeWorkingModelPool,
   resolveFreeModelChain,
@@ -1436,13 +1438,142 @@ function sanitizeStringList(val: unknown, limit = 5): string[] {
     .slice(0, limit);
 }
 
+export interface QualityAssessmentOptions {
+  maxImprovementRounds?: number;
+  reAuditAfterRevision?: boolean;
+}
+
+interface DualCriticPassResult {
+  criticAOk: boolean;
+  criticBOk: boolean;
+  criticAModel: string;
+  criticBModel: string;
+  criticATone: number;
+  criticAGrounding: number;
+  criticAVisuals: number;
+  criticBSeo: number;
+  criticBGeo: number;
+  criticBAdsense: number;
+  criticEntries: DualCriticEntry[];
+  combinedBlocking: string[];
+  combinedFixes: string[];
+  combinedWarnings: string[];
+  structuralTriggers: string[];
+  overall: number;
+  blendedSeo: number;
+  blendedGeo: number;
+  blendedInfoGain: number;
+  blendedGrounding: number;
+  blendedAntiSlop: number;
+  blendedAdsense: number;
+}
+
+function buildCategorySkillAuditBlock(ctx: AgentContext): string {
+  const requiredSections = Array.isArray(ctx.skill.required_sections_json)
+    ? ctx.skill.required_sections_json.filter(Boolean)
+    : [];
+  const bannedPatterns = Array.isArray(ctx.skill.banned_patterns_json)
+    ? ctx.skill.banned_patterns_json.filter(Boolean)
+    : [];
+  return [
+    `CATEGORY SKILL: ${ctx.skill.name} (slug: ${ctx.skill.slug})`,
+    `TARGET AUDIENCE: ${ctx.skill.target_audience || 'Senior software & AI engineers'}`,
+    `ARCHETYPE: ${ctx.archetype}`,
+    `CATEGORY EDITORIAL INSTRUCTIONS: ${ctx.skill.system_instructions}`,
+    requiredSections.length > 0
+      ? `CATEGORY REQUIRED SECTIONS (every section must appear with real concrete substance):\n${requiredSections.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}`
+      : 'CATEGORY REQUIRED SECTIONS: Use concrete engineering H2 headings tailored to the topic.',
+    bannedPatterns.length > 0
+      ? `CATEGORY BANNED PATTERNS (strictly forbidden): ${bannedPatterns.join(', ')}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+function computeBlendedScores(
+  lint: LintResult,
+  c: {
+    criticAOk: boolean;
+    criticBOk: boolean;
+    criticATone: number;
+    criticAGrounding: number;
+    criticAVisuals: number;
+    criticBSeo: number;
+    criticBGeo: number;
+    criticBAdsense: number;
+  },
+): {
+  overall: number;
+  blendedSeo: number;
+  blendedGeo: number;
+  blendedInfoGain: number;
+  blendedGrounding: number;
+  blendedAntiSlop: number;
+  blendedAdsense: number;
+} {
+  const base = lint.quality_breakdown;
+  if (!c.criticAOk && !c.criticBOk) {
+    const degraded = lint.passed ? lint.quality_score : Math.min(lint.quality_score, 65);
+    return {
+      overall: degraded,
+      blendedSeo: base.seo_structure,
+      blendedGeo: base.geo_citation_readiness,
+      blendedInfoGain: base.information_gain,
+      blendedGrounding: base.source_grounding,
+      blendedAntiSlop: base.anti_slop_cleanliness,
+      blendedAdsense: base.adsense_compliance,
+    };
+  }
+  const blendedSeo = c.criticBOk
+    ? clampScore(base.seo_structure * 0.7 + c.criticBSeo * 0.3)
+    : base.seo_structure;
+  const blendedGeo = c.criticBOk
+    ? clampScore(base.geo_citation_readiness * 0.7 + c.criticBGeo * 0.3)
+    : base.geo_citation_readiness;
+  const blendedInfoGain = c.criticAOk
+    ? clampScore(base.information_gain * 0.75 + c.criticAVisuals * 0.25)
+    : base.information_gain;
+  const blendedGrounding = c.criticAOk
+    ? clampScore(base.source_grounding * 0.7 + c.criticAGrounding * 0.3)
+    : base.source_grounding;
+  const blendedAntiSlop = c.criticAOk
+    ? clampScore(base.anti_slop_cleanliness * 0.7 + c.criticATone * 0.3)
+    : base.anti_slop_cleanliness;
+  const blendedAdsense = c.criticBOk
+    ? clampScore(base.adsense_compliance * 0.7 + c.criticBAdsense * 0.3)
+    : base.adsense_compliance;
+
+  let overall = clampScore(
+    blendedSeo * 0.16 +
+      blendedGeo * 0.18 +
+      blendedInfoGain * 0.22 +
+      blendedGrounding * 0.18 +
+      blendedAntiSlop * 0.14 +
+      blendedAdsense * 0.12,
+  );
+  if (!lint.passed) {
+    overall = Math.min(overall, 65);
+  }
+  return {
+    overall,
+    blendedSeo,
+    blendedGeo,
+    blendedInfoGain,
+    blendedGrounding,
+    blendedAntiSlop,
+    blendedAdsense,
+  };
+}
+
 /**
- * Stage 5: Cross-Family Dual-Model Critic & Refinement Loop.
- * Runs TWO distinct $0 OpenRouter model families in parallel:
- *   - Critic 1 (Family A): Pyvren writing tone, anti-slop stylometry, verified reference images, Markdown tables & factual depth
- *   - Critic 2 (Family B): SEO structure, GEO/AEO extractability, Google AdSense publisher safety & E-E-A-T compliance
- * If either critic flags blocking issues (or missing reference images/tables), runs a targeted 1-pass refinement
- * via the writer model and adopts the revised draft if it preserves or improves deterministic lint compliance.
+ * Stage 5: SOTA Cross-Family Dual-Model Critic & Iterative Auto-Improvement Loop.
+ * Runs TWO distinct $0 model families in parallel, enforcing every category-specific skill rule:
+ *   - Critic 1 (Family A): Category skill compliance, required sections, Pyvren tone, zero-fabrication grounding, reference images & tables
+ *   - Critic 2 (Family B): SEO metadata/structure, GEO/AEO extractability, Google AdSense E-E-A-T safety & fact verification
+ * If quality is below threshold, deterministic lint fails, or either critic flags blocking issues,
+ * runs an iterative Auto-Improvement Loop (up to 2 rounds in production) with full primary sources,
+ * cross-model editing, and post-revision Dual-Critic re-scoring so the final score reflects the improved article.
  */
 export async function stageQualityAssessment(
   env: WorkerEnv,
@@ -1452,22 +1583,35 @@ export async function stageQualityAssessment(
   trace: TraceEntry[],
   usage: TokenUsage,
   sources?: PrimarySourceDoc[],
+  opts?: QualityAssessmentOptions,
 ): Promise<QualityAssessmentOutput> {
   const freeModelsOnly = ctx.settings.free_models_only !== false;
+  const minPublishScore = Math.max(50, Math.min(100, ctx.settings.min_publish_score || 78));
   const crawledImages = sources ? collectCrawledImages(sources) : [];
   let activeDraft = draft;
   let activeLint = lintResult;
 
-  const sourceExcerpts =
+  const reAuditAfterRevision = opts?.reAuditAfterRevision ?? !env.__TEST_DB__;
+  const maxImprovementRounds = Math.max(
+    1,
+    Math.min(2, opts?.maxImprovementRounds ?? (env.__TEST_DB__ ? 1 : 2)),
+  );
+
+  const sourceExcerptsForCritics =
     sources && sources.length > 0
       ? sources
-          .slice(0, 5)
-          .map((s, idx) => `[${idx + 1}] ${s.url} — ${s.title}\n${s.markdown.slice(0, 1_100)}`)
+          .slice(0, 6)
+          .map((s, idx) => `[${idx + 1}] ${s.url} — ${s.title}\n${s.markdown.slice(0, 1_400)}`)
           .join('\n\n')
       : activeDraft.sources.map((u, idx) => `[${idx + 1}] ${u}`).join('\n');
 
-  const initialHasImages = hasGroundedReferenceImages(activeDraft);
-  const initialHasTable = hasMarkdownDataTable(activeDraft.body_markdown);
+  const sourceExcerptsForRevision =
+    sources && sources.length > 0
+      ? sources
+          .slice(0, 6)
+          .map((s, idx) => `[${idx + 1}] ${s.url} — ${s.title}\n${s.markdown.slice(0, 2_200)}`)
+          .join('\n\n')
+      : activeDraft.sources.map((u, idx) => `[${idx + 1}] ${u}`).join('\n');
 
   const criticPair = pickDistinctFreeCriticPair({
     writerModel: ctx.model,
@@ -1479,32 +1623,18 @@ export async function stageQualityAssessment(
   });
 
   const todayUtc = new Date().toISOString().slice(0, 10);
-
-  const sharedDraftBrief = `CURRENT DATE (UTC): ${todayUtc}
-CATEGORY: ${ctx.skill.name} (${ctx.archetype})
-TITLE (${activeDraft.title.length} chars): ${activeDraft.title}
-META DESCRIPTION (${activeDraft.description.length} chars): ${activeDraft.description}
-TLDR: ${activeDraft.tldr_summary}
-KEY FACTS (${activeDraft.key_facts.length}): ${JSON.stringify(activeDraft.key_facts)}
-FAQ (${activeDraft.faq.length}): ${JSON.stringify(activeDraft.faq)}
-COVER IMAGE: ${activeDraft.cover_image_url || '(none)'}
-INLINE IMAGES COUNT: ${activeDraft.images.length} | AVAILABLE CRAWLED SOURCE IMAGES: ${crawledImages.length}
-HAS MARKDOWN DATA TABLE: ${initialHasTable ? 'YES' : 'NO'}
-DETERMINISTIC LINT PASSED: ${activeLint.passed} (score=${activeLint.quality_score})
-
-ARTICLE BODY:
-${activeDraft.body_markdown.slice(0, 8_500)}
-
-PRIMARY SOURCES:
-${sourceExcerpts}`;
+  const categorySkillRules = buildCategorySkillAuditBlock(ctx);
 
   const criticASystem = `You are Critic 1 (Principal Technical Editor) reviewing a draft for ${ctx.settings.site_name}.
 CURRENT DATE (UTC): ${todayUtc}. Dates and source URLs on or before ${todayUtc} are CURRENT, NOT future-dated.
+
+${categorySkillRules}
+
 Audit STRICTLY on four dimensions:
-1. editorial_tone (0-100): Does it match Pyvren's crisp, human-sounding staff-engineer voice (varied sentence length, concrete verdicts, zero AI slop, zero filler transitions like "Furthermore/Moreover/In conclusion", zero walls of bold-colon bullets)?
-2. factual_grounding (0-100): Are benchmarks, versions, pricing, dates, and technical claims genuinely supported by the primary sources?
-3. visuals_and_tables (0-100): Does the article include at least one concrete Markdown comparison/spec/timeline table AND (when AVAILABLE CRAWLED SOURCE IMAGES > 0) grounded reference images with accurate captions?
-4. verdict: "pass" ONLY if ready to publish as-is; otherwise "revise" with exact concrete_fixes.
+1. editorial_tone (0-100): Does it match Pyvren's crisp, human-sounding staff-engineer voice (varied sentence length, concrete verdicts, zero AI slop, zero filler transitions like "Furthermore/Moreover/In conclusion", zero walls of bold-colon bullets, zero category banned patterns)?
+2. factual_grounding (0-100): Are ALL CVE IDs, benchmarks, versions, pricing, dates, commands, and technical claims genuinely supported by PRIMARY SOURCES? Penalize heavily if ANY placeholder CVE (CVE-2025-XXXX), fabricated CLI command, or unsupported number appears.
+3. visuals_and_tables (0-100): Does the article satisfy the category's REQUIRED SECTIONS, include at least one concrete Markdown comparison/spec/timeline table, AND (when AVAILABLE CRAWLED SOURCE IMAGES > 0) grounded reference images with accurate captions?
+4. verdict: "pass" ONLY if ready to publish as-is with zero placeholders and full category skill compliance; otherwise "revise" with exact concrete_fixes.
 
 Return ONLY valid JSON:
 {
@@ -1519,11 +1649,14 @@ Return ONLY valid JSON:
 
   const criticBSystem = `You are Critic 2 (SEO, GEO/AEO & Google AdSense Publisher Compliance Auditor) reviewing a draft for ${ctx.settings.site_name}.
 CURRENT DATE (UTC): ${todayUtc}. Dates and source URLs on or before ${todayUtc} are CURRENT, NOT future-dated.
+
+${categorySkillRules}
+
 Audit STRICTLY on four dimensions:
-1. seo_score (0-100): Search-intent headline (45-75 chars), compelling meta description (120-160 chars), logical H2/H3 hierarchy, scannable formatting, deep inline source links, zero keyword stuffing.
-2. geo_clarity (0-100): Answer-first opening, crisp TL;DR, factual key_facts with units/numbers, and genuinely useful FAQ answers extractable by Google AI Overviews, Perplexity, and ChatGPT Search.
-3. adsense_safety (0-100): High original value / E-E-A-T commentary (not thin news rehash), clean attribution, strictly defensive framing on cybersecurity/breach topics (zero working exploit payloads or policy-violating attack steps).
-4. verdict: "pass" ONLY if SEO, GEO, and AdSense standards are met; otherwise "revise" with exact concrete_fixes.
+1. seo_score (0-100): Search-intent headline (35-70 chars), compelling meta description (120-160 chars — strictly <= 165 chars), logical H2/H3 hierarchy covering the category's required sections, scannable formatting, >= 3 deep inline primary https:// source links, zero keyword stuffing.
+2. geo_clarity (0-100): Answer-first opening, crisp TL;DR, factual key_facts with real verified units/IDs/numbers (ZERO placeholders), and genuinely useful FAQ answers extractable by Google AI Overviews, Perplexity, and ChatGPT Search.
+3. adsense_safety (0-100): High original engineering value / E-E-A-T commentary (not thin news rehash), clean attribution, strictly defensive framing on cybersecurity/breach topics (zero working exploit payloads or policy-violating attack steps).
+4. verdict: "pass" ONLY if SEO, GEO, AdSense, and lint requirements are met; otherwise "revise" with exact concrete_fixes.
 
 Return ONLY valid JSON:
 {
@@ -1536,258 +1669,333 @@ Return ONLY valid JSON:
   "notes": "1-3 concrete sentences of SEO/AdSense/GEO critique"
 }`;
 
-  const [criticASettled, criticBSettled] = await Promise.allSettled([
-    callOpenRouter(env, {
-      model: criticPair.criticA,
-      fallbackModels: criticPair.criticAFallbacks,
-      messages: [
-        { role: 'system', content: criticASystem },
-        { role: 'user', content: sharedDraftBrief },
-      ],
-      temperature: 0.1,
-      maxTokens: 2_048,
-      jsonMode: true,
-      freeModelsOnly,
-    }),
-    callOpenRouter(env, {
-      model: criticPair.criticB,
-      fallbackModels: criticPair.criticBFallbacks,
-      messages: [
-        { role: 'system', content: criticBSystem },
-        { role: 'user', content: sharedDraftBrief },
-      ],
-      temperature: 0.1,
-      maxTokens: 2_048,
-      jsonMode: true,
-      freeModelsOnly,
-    }),
-  ]);
+  const runDualCriticPass = async (
+    targetDraft: DraftArticlePayload,
+    targetLint: LintResult,
+    passLabel: string,
+  ): Promise<DualCriticPassResult> => {
+    const hasImages = hasGroundedReferenceImages(targetDraft);
+    const hasTable = hasMarkdownDataTable(targetDraft.body_markdown);
 
-  let criticAOk = false;
-  let criticBOk = false;
-  let criticAModel = criticPair.criticA;
-  let criticBModel = criticPair.criticB;
+    const sharedDraftBrief = `CURRENT DATE (UTC): ${todayUtc}
+${categorySkillRules}
+TITLE (${targetDraft.title.length} chars — must be 30-70): ${targetDraft.title}
+META DESCRIPTION (${targetDraft.description.length} chars — must be 120-165): ${targetDraft.description}
+TLDR: ${targetDraft.tldr_summary}
+KEY FACTS (${targetDraft.key_facts.length}): ${JSON.stringify(targetDraft.key_facts)}
+FAQ (${targetDraft.faq.length}): ${JSON.stringify(targetDraft.faq)}
+COVER IMAGE: ${targetDraft.cover_image_url || '(none)'}
+INLINE IMAGES COUNT: ${targetDraft.images.length} | AVAILABLE CRAWLED SOURCE IMAGES: ${crawledImages.length}
+HAS MARKDOWN DATA TABLE: ${hasTable ? 'YES' : 'NO'}
+DETERMINISTIC LINT PASSED: ${targetLint.passed} (score=${targetLint.quality_score})${targetLint.errors.length > 0 ? `\nDETERMINISTIC LINT ERRORS:\n- ${targetLint.errors.join('\n- ')}` : ''}
 
-  let criticATone = activeLint.quality_breakdown.anti_slop_cleanliness;
-  let criticAGrounding = activeLint.quality_breakdown.source_grounding;
-  let criticAVisuals = activeLint.quality_breakdown.information_gain;
-  let criticBSeo = activeLint.quality_breakdown.seo_structure;
-  let criticBGeo = activeLint.quality_breakdown.geo_citation_readiness;
-  let criticBAdsense = activeLint.quality_breakdown.adsense_compliance;
+ARTICLE BODY:
+${targetDraft.body_markdown.slice(0, 9_500)}
 
-  const criticEntries: DualCriticEntry[] = [];
-  const combinedBlocking: string[] = [];
-  const combinedFixes: string[] = [];
-  const combinedWarnings: string[] = [];
+PRIMARY SOURCES:
+${sourceExcerptsForCritics}`;
 
-  if (criticASettled.status === 'fulfilled') {
-    const resA = criticASettled.value;
-    addTokenUsage(usage, resA.usage);
-    criticAModel = resA.model || criticPair.criticA;
-    try {
-      const parsedA = extractJsonObject<{
-        editorial_tone?: number;
-        anti_slop_tone?: number;
-        factual_grounding?: number;
-        visuals_and_tables?: number;
-        verdict?: string;
-        blocking_issues?: string[];
-        concrete_fixes?: string[];
-        warnings?: string[];
-        notes?: string;
-        judge_notes?: string;
-      }>(resA.content);
-      criticAOk = true;
-      const toneRaw = parsedA.editorial_tone ?? parsedA.anti_slop_tone;
-      if (typeof toneRaw === 'number' && Number.isFinite(toneRaw)) criticATone = clampScore(toneRaw);
-      if (typeof parsedA.factual_grounding === 'number' && Number.isFinite(parsedA.factual_grounding)) {
-        criticAGrounding = clampScore(parsedA.factual_grounding);
+    const [criticASettled, criticBSettled] = await Promise.allSettled([
+      callOpenRouter(env, {
+        model: criticPair.criticA,
+        fallbackModels: criticPair.criticAFallbacks,
+        messages: [
+          { role: 'system', content: criticASystem },
+          { role: 'user', content: sharedDraftBrief },
+        ],
+        temperature: 0.1,
+        maxTokens: 2_048,
+        jsonMode: true,
+        freeModelsOnly,
+      }),
+      callOpenRouter(env, {
+        model: criticPair.criticB,
+        fallbackModels: criticPair.criticBFallbacks,
+        messages: [
+          { role: 'system', content: criticBSystem },
+          { role: 'user', content: sharedDraftBrief },
+        ],
+        temperature: 0.1,
+        maxTokens: 2_048,
+        jsonMode: true,
+        freeModelsOnly,
+      }),
+    ]);
+
+    let criticAOk = false;
+    let criticBOk = false;
+    let criticAModel = criticPair.criticA;
+    let criticBModel = criticPair.criticB;
+
+    let criticATone = targetLint.quality_breakdown.anti_slop_cleanliness;
+    let criticAGrounding = targetLint.quality_breakdown.source_grounding;
+    let criticAVisuals = targetLint.quality_breakdown.information_gain;
+    let criticBSeo = targetLint.quality_breakdown.seo_structure;
+    let criticBGeo = targetLint.quality_breakdown.geo_citation_readiness;
+    let criticBAdsense = targetLint.quality_breakdown.adsense_compliance;
+
+    const criticEntries: DualCriticEntry[] = [];
+    const combinedBlocking: string[] = [];
+    const combinedFixes: string[] = [];
+    const combinedWarnings: string[] = [];
+
+    if (criticASettled.status === 'fulfilled') {
+      const resA = criticASettled.value;
+      addTokenUsage(usage, resA.usage);
+      criticAModel = resA.model || criticPair.criticA;
+      try {
+        const parsedA = extractJsonObject<{
+          editorial_tone?: number;
+          anti_slop_tone?: number;
+          factual_grounding?: number;
+          visuals_and_tables?: number;
+          verdict?: string;
+          blocking_issues?: string[];
+          concrete_fixes?: string[];
+          warnings?: string[];
+          notes?: string;
+          judge_notes?: string;
+        }>(resA.content);
+        criticAOk = true;
+        const toneRaw = parsedA.editorial_tone ?? parsedA.anti_slop_tone;
+        if (typeof toneRaw === 'number' && Number.isFinite(toneRaw)) criticATone = clampScore(toneRaw);
+        if (typeof parsedA.factual_grounding === 'number' && Number.isFinite(parsedA.factual_grounding)) {
+          criticAGrounding = clampScore(parsedA.factual_grounding);
+        }
+        if (typeof parsedA.visuals_and_tables === 'number' && Number.isFinite(parsedA.visuals_and_tables)) {
+          criticAVisuals = clampScore(parsedA.visuals_and_tables);
+        }
+        const blockingA = sanitizeStringList(parsedA.blocking_issues, 5);
+        const fixesA = sanitizeStringList(parsedA.concrete_fixes, 5);
+        const warnA = sanitizeStringList(parsedA.warnings, 4);
+        const verdictA: 'pass' | 'revise' =
+          parsedA.verdict === 'revise' || blockingA.length > 0 ? 'revise' : 'pass';
+        const notesA = (parsedA.notes || parsedA.judge_notes || '').trim();
+
+        combinedBlocking.push(...blockingA);
+        combinedFixes.push(...fixesA);
+        combinedWarnings.push(...warnA, ...blockingA);
+        criticEntries.push({
+          role: 'editorial_visuals_tone',
+          model: criticAModel,
+          family: getOpenRouterModelFamily(criticAModel),
+          verdict: verdictA,
+          scores: {
+            editorial_tone: criticATone,
+            factual_grounding: criticAGrounding,
+            visuals_and_tables: criticAVisuals,
+          },
+          blocking_issues: blockingA,
+          concrete_fixes: fixesA,
+          notes: notesA || 'Editorial, skill rules & grounding checked.',
+        });
+        pushTrace(trace, {
+          stage: 'quality_assessment',
+          tool_name: 'dual_critic_editorial',
+          input: `${passLabel} · ${criticAModel} (${getOpenRouterModelFamily(criticAModel)})`,
+          summary: `Critic 1 [${getOpenRouterModelFamily(criticAModel)}] ${passLabel} verdict=${verdictA} (tone=${criticATone}, grounding=${criticAGrounding}, visuals/tables=${criticAVisuals})`,
+          ok: true,
+        });
+      } catch (parseErr) {
+        const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+        criticEntries.push({
+          role: 'editorial_visuals_tone',
+          model: criticAModel,
+          family: getOpenRouterModelFamily(criticAModel),
+          verdict: 'unavailable',
+          scores: {},
+          blocking_issues: [],
+          concrete_fixes: [],
+          notes: `Critic 1 JSON parse failed: ${msg}`,
+        });
       }
-      if (typeof parsedA.visuals_and_tables === 'number' && Number.isFinite(parsedA.visuals_and_tables)) {
-        criticAVisuals = clampScore(parsedA.visuals_and_tables);
-      }
-      const blockingA = sanitizeStringList(parsedA.blocking_issues, 4);
-      const fixesA = sanitizeStringList(parsedA.concrete_fixes, 4);
-      const warnA = sanitizeStringList(parsedA.warnings, 4);
-      const verdictA: 'pass' | 'revise' =
-        parsedA.verdict === 'revise' || blockingA.length > 0 ? 'revise' : 'pass';
-      const notesA = (parsedA.notes || parsedA.judge_notes || '').trim();
-
-      combinedBlocking.push(...blockingA);
-      combinedFixes.push(...fixesA);
-      combinedWarnings.push(...warnA, ...blockingA);
+    } else {
+      const msg = criticASettled.reason instanceof Error ? criticASettled.reason.message : String(criticASettled.reason);
       criticEntries.push({
         role: 'editorial_visuals_tone',
         model: criticAModel,
         family: getOpenRouterModelFamily(criticAModel),
-        verdict: verdictA,
-        scores: {
-          editorial_tone: criticATone,
-          factual_grounding: criticAGrounding,
-          visuals_and_tables: criticAVisuals,
-        },
-        blocking_issues: blockingA,
-        concrete_fixes: fixesA,
-        notes: notesA || 'Editorial, tone & structure checked.',
+        verdict: 'unavailable',
+        scores: {},
+        blocking_issues: [],
+        concrete_fixes: [],
+        notes: `Critic 1 unavailable: ${msg}`,
       });
       pushTrace(trace, {
         stage: 'quality_assessment',
         tool_name: 'dual_critic_editorial',
-        input: `${criticAModel} (${getOpenRouterModelFamily(criticAModel)})`,
-        summary: `Critic 1 [${getOpenRouterModelFamily(criticAModel)}] verdict=${verdictA} (tone=${criticATone}, grounding=${criticAGrounding}, visuals/tables=${criticAVisuals})`,
-        ok: true,
-      });
-    } catch (parseErr) {
-      const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
-      criticEntries.push({
-        role: 'editorial_visuals_tone',
-        model: criticAModel,
-        family: getOpenRouterModelFamily(criticAModel),
-        verdict: 'unavailable',
-        scores: {},
-        blocking_issues: [],
-        concrete_fixes: [],
-        notes: `Critic 1 JSON parse failed: ${msg}`,
+        input: `${passLabel} · ${criticAModel}`,
+        summary: `Critic 1 failed (${msg})`,
+        ok: false,
       });
     }
-  } else {
-    const msg = criticASettled.reason instanceof Error ? criticASettled.reason.message : String(criticASettled.reason);
-    criticEntries.push({
-      role: 'editorial_visuals_tone',
-      model: criticAModel,
-      family: getOpenRouterModelFamily(criticAModel),
-      verdict: 'unavailable',
-      scores: {},
-      blocking_issues: [],
-      concrete_fixes: [],
-      notes: `Critic 1 unavailable: ${msg}`,
-    });
-    pushTrace(trace, {
-      stage: 'quality_assessment',
-      tool_name: 'dual_critic_editorial',
-      input: criticAModel,
-      summary: `Critic 1 failed (${msg})`,
-      ok: false,
-    });
-  }
 
-  if (criticBSettled.status === 'fulfilled') {
-    const resB = criticBSettled.value;
-    addTokenUsage(usage, resB.usage);
-    criticBModel = resB.model || criticPair.criticB;
-    try {
-      const parsedB = extractJsonObject<{
-        seo_score?: number;
-        geo_clarity?: number;
-        adsense_safety?: number;
-        verdict?: string;
-        blocking_issues?: string[];
-        concrete_fixes?: string[];
-        warnings?: string[];
-        notes?: string;
-        judge_notes?: string;
-      }>(resB.content);
-      criticBOk = true;
-      if (typeof parsedB.seo_score === 'number' && Number.isFinite(parsedB.seo_score)) {
-        criticBSeo = clampScore(parsedB.seo_score);
-      }
-      if (typeof parsedB.geo_clarity === 'number' && Number.isFinite(parsedB.geo_clarity)) {
-        criticBGeo = clampScore(parsedB.geo_clarity);
-      }
-      if (typeof parsedB.adsense_safety === 'number' && Number.isFinite(parsedB.adsense_safety)) {
-        criticBAdsense = clampScore(parsedB.adsense_safety);
-      }
-      const blockingB = sanitizeStringList(parsedB.blocking_issues, 4);
-      const fixesB = sanitizeStringList(parsedB.concrete_fixes, 4);
-      const warnB = sanitizeStringList(parsedB.warnings, 4);
-      const verdictB: 'pass' | 'revise' =
-        parsedB.verdict === 'revise' || blockingB.length > 0 ? 'revise' : 'pass';
-      const notesB = (parsedB.notes || parsedB.judge_notes || '').trim();
+    if (criticBSettled.status === 'fulfilled') {
+      const resB = criticBSettled.value;
+      addTokenUsage(usage, resB.usage);
+      criticBModel = resB.model || criticPair.criticB;
+      try {
+        const parsedB = extractJsonObject<{
+          seo_score?: number;
+          geo_clarity?: number;
+          adsense_safety?: number;
+          verdict?: string;
+          blocking_issues?: string[];
+          concrete_fixes?: string[];
+          warnings?: string[];
+          notes?: string;
+          judge_notes?: string;
+        }>(resB.content);
+        criticBOk = true;
+        if (typeof parsedB.seo_score === 'number' && Number.isFinite(parsedB.seo_score)) {
+          criticBSeo = clampScore(parsedB.seo_score);
+        }
+        if (typeof parsedB.geo_clarity === 'number' && Number.isFinite(parsedB.geo_clarity)) {
+          criticBGeo = clampScore(parsedB.geo_clarity);
+        }
+        if (typeof parsedB.adsense_safety === 'number' && Number.isFinite(parsedB.adsense_safety)) {
+          criticBAdsense = clampScore(parsedB.adsense_safety);
+        }
+        const blockingB = sanitizeStringList(parsedB.blocking_issues, 5);
+        const fixesB = sanitizeStringList(parsedB.concrete_fixes, 5);
+        const warnB = sanitizeStringList(parsedB.warnings, 4);
+        const verdictB: 'pass' | 'revise' =
+          parsedB.verdict === 'revise' || blockingB.length > 0 ? 'revise' : 'pass';
+        const notesB = (parsedB.notes || parsedB.judge_notes || '').trim();
 
-      combinedBlocking.push(...blockingB);
-      combinedFixes.push(...fixesB);
-      combinedWarnings.push(...warnB, ...blockingB);
+        combinedBlocking.push(...blockingB);
+        combinedFixes.push(...fixesB);
+        combinedWarnings.push(...warnB, ...blockingB);
+        criticEntries.push({
+          role: 'seo_geo_adsense',
+          model: criticBModel,
+          family: getOpenRouterModelFamily(criticBModel),
+          verdict: verdictB,
+          scores: {
+            seo_score: criticBSeo,
+            geo_clarity: criticBGeo,
+            adsense_safety: criticBAdsense,
+          },
+          blocking_issues: blockingB,
+          concrete_fixes: fixesB,
+          notes: notesB || 'SEO, GEO & AdSense compliance checked.',
+        });
+        pushTrace(trace, {
+          stage: 'quality_assessment',
+          tool_name: 'dual_critic_seo_adsense',
+          input: `${passLabel} · ${criticBModel} (${getOpenRouterModelFamily(criticBModel)})`,
+          summary: `Critic 2 [${getOpenRouterModelFamily(criticBModel)}] ${passLabel} verdict=${verdictB} (seo=${criticBSeo}, geo=${criticBGeo}, adsense=${criticBAdsense})`,
+          ok: true,
+        });
+      } catch (parseErr) {
+        const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+        criticEntries.push({
+          role: 'seo_geo_adsense',
+          model: criticBModel,
+          family: getOpenRouterModelFamily(criticBModel),
+          verdict: 'unavailable',
+          scores: {},
+          blocking_issues: [],
+          concrete_fixes: [],
+          notes: `Critic 2 JSON parse failed: ${msg}`,
+        });
+      }
+    } else {
+      const msg = criticBSettled.reason instanceof Error ? criticBSettled.reason.message : String(criticBSettled.reason);
       criticEntries.push({
         role: 'seo_geo_adsense',
         model: criticBModel,
         family: getOpenRouterModelFamily(criticBModel),
-        verdict: verdictB,
-        scores: {
-          seo_score: criticBSeo,
-          geo_clarity: criticBGeo,
-          adsense_safety: criticBAdsense,
-        },
-        blocking_issues: blockingB,
-        concrete_fixes: fixesB,
-        notes: notesB || 'SEO, GEO & AdSense compliance checked.',
+        verdict: 'unavailable',
+        scores: {},
+        blocking_issues: [],
+        concrete_fixes: [],
+        notes: `Critic 2 unavailable: ${msg}`,
       });
       pushTrace(trace, {
         stage: 'quality_assessment',
         tool_name: 'dual_critic_seo_adsense',
-        input: `${criticBModel} (${getOpenRouterModelFamily(criticBModel)})`,
-        summary: `Critic 2 [${getOpenRouterModelFamily(criticBModel)}] verdict=${verdictB} (seo=${criticBSeo}, geo=${criticBGeo}, adsense=${criticBAdsense})`,
-        ok: true,
-      });
-    } catch (parseErr) {
-      const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
-      criticEntries.push({
-        role: 'seo_geo_adsense',
-        model: criticBModel,
-        family: getOpenRouterModelFamily(criticBModel),
-        verdict: 'unavailable',
-        scores: {},
-        blocking_issues: [],
-        concrete_fixes: [],
-        notes: `Critic 2 JSON parse failed: ${msg}`,
+        input: `${passLabel} · ${criticBModel}`,
+        summary: `Critic 2 failed (${msg})`,
+        ok: false,
       });
     }
-  } else {
-    const msg = criticBSettled.reason instanceof Error ? criticBSettled.reason.message : String(criticBSettled.reason);
-    criticEntries.push({
-      role: 'seo_geo_adsense',
-      model: criticBModel,
-      family: getOpenRouterModelFamily(criticBModel),
-      verdict: 'unavailable',
-      scores: {},
-      blocking_issues: [],
-      concrete_fixes: [],
-      notes: `Critic 2 unavailable: ${msg}`,
-    });
-    pushTrace(trace, {
-      stage: 'quality_assessment',
-      tool_name: 'dual_critic_seo_adsense',
-      input: criticBModel,
-      summary: `Critic 2 failed (${msg})`,
-      ok: false,
-    });
-  }
 
-  // Deterministic structural checks to combine with critic verdicts
-  const structuralTriggers: string[] = [];
-  if (crawledImages.length > 0 && !initialHasImages) {
-    structuralTriggers.push(
-      `Missing verified reference image even though ${crawledImages.length} crawled source image(s) are available`,
+    const structuralTriggers: string[] = [];
+    if (crawledImages.length > 0 && !hasImages) {
+      structuralTriggers.push(
+        `Missing verified reference image even though ${crawledImages.length} crawled source image(s) are available`,
+      );
+    }
+    if (!hasTable) {
+      structuralTriggers.push('Missing structured Markdown comparison/spec table');
+    }
+
+    const blended = computeBlendedScores(targetLint, {
+      criticAOk,
+      criticBOk,
+      criticATone,
+      criticAGrounding,
+      criticAVisuals,
+      criticBSeo,
+      criticBGeo,
+      criticBAdsense,
+    });
+
+    return {
+      criticAOk,
+      criticBOk,
+      criticAModel,
+      criticBModel,
+      criticATone,
+      criticAGrounding,
+      criticAVisuals,
+      criticBSeo,
+      criticBGeo,
+      criticBAdsense,
+      criticEntries,
+      combinedBlocking,
+      combinedFixes,
+      combinedWarnings,
+      structuralTriggers,
+      ...blended,
+    };
+  };
+
+  // Round 0: Initial cross-family Dual-Critic Audit
+  let latestAudit = await runDualCriticPass(activeDraft, activeLint, 'round-0');
+
+  const needsImprovement = (audit: DualCriticPassResult, lint: LintResult): boolean => {
+    const anyRevise = audit.criticEntries.some((c) => c.verdict === 'revise');
+    const lowDim =
+      (audit.criticAOk &&
+        (audit.criticATone < 78 || audit.criticAGrounding < 78 || audit.criticAVisuals < 75)) ||
+      (audit.criticBOk &&
+        (audit.criticBSeo < 78 || audit.criticBGeo < 78 || audit.criticBAdsense < 80));
+    return (
+      !lint.passed ||
+      audit.overall < minPublishScore ||
+      anyRevise ||
+      audit.structuralTriggers.length > 0 ||
+      lowDim
     );
-  }
-  if (!initialHasTable) {
-    structuralTriggers.push('Missing structured Markdown comparison/spec table');
-  }
+  };
 
-  const anyCriticRequestsRevision = criticEntries.some((c) => c.verdict === 'revise');
-  const lowCriticDimension =
-    (criticAOk && (criticATone < 78 || criticAGrounding < 78 || criticAVisuals < 75)) ||
-    (criticBOk && (criticBSeo < 78 || criticBGeo < 78 || criticBAdsense < 80));
-
-  const revisionReasons: string[] = [
-    ...structuralTriggers,
-    ...combinedBlocking.slice(0, 4),
-    ...(lowCriticDimension ? ['One or more cross-family critic dimensions scored below 78'] : []),
+  const initialReasons: string[] = [
+    ...activeLint.errors.slice(0, 3),
+    ...latestAudit.structuralTriggers,
+    ...latestAudit.combinedBlocking.slice(0, 4),
+    ...(latestAudit.overall < minPublishScore
+      ? [`Quality score ${latestAudit.overall}/100 below threshold ${minPublishScore}/100`]
+      : []),
   ];
+
   const shouldAttemptRevision =
-    (criticAOk || criticBOk) &&
-    (anyCriticRequestsRevision || structuralTriggers.length > 0 || lowCriticDimension);
+    (latestAudit.criticAOk || latestAudit.criticBOk || !activeLint.passed) &&
+    needsImprovement(latestAudit, activeLint);
 
   let revisionApplied = false;
+  let revisionRoundsApplied = 0;
   let revisedDraft: DraftArticlePayload | undefined;
   let revisedLintResult: LintResult | undefined;
 
@@ -1804,106 +2012,197 @@ Return ONLY valid JSON:
             .join('\n')
         : '(none available — keep cover_image_url null and images [])';
 
-    const revisionPrompt = `Two independent editorial critics from different LLM families audited your draft and requested targeted improvements before publication.
+    // Pick a distinct frontier/cross-family model for the revision pass when available
+    // so two different models actively catch AND repair each other's mistakes
+    const distinctReviser =
+      [
+        'nim/nvidia/nemotron-3-ultra-550b-a55b',
+        criticPair.criticA,
+        criticPair.criticB,
+        ...getEffectiveFallbackModels(ctx),
+      ].find(
+        (m) =>
+          m &&
+          m !== ctx.model &&
+          (!freeModelsOnly || isFreeOpenRouterModel(m)) &&
+          (!isNimModel(m) || Boolean(env.NVIDIA_NIM_API_KEY?.trim())),
+      ) || ctx.model;
 
-CRITIC 1 (${getOpenRouterModelFamily(criticAModel)} — Editorial, Tone, Visuals & Tables):
-${criticEntries[0]?.notes || '(n/a)'}
-Blocking issues: ${JSON.stringify(criticEntries[0]?.blocking_issues || [])}
-Concrete fixes: ${JSON.stringify(criticEntries[0]?.concrete_fixes || [])}
+    for (let round = 1; round <= maxImprovementRounds; round++) {
+      if (round > 1 && !needsImprovement(latestAudit, activeLint)) {
+        break;
+      }
 
-CRITIC 2 (${getOpenRouterModelFamily(criticBModel)} — SEO, GEO & AdSense Compliance):
-${criticEntries[1]?.notes || '(n/a)'}
-Blocking issues: ${JSON.stringify(criticEntries[1]?.blocking_issues || [])}
-Concrete fixes: ${JSON.stringify(criticEntries[1]?.concrete_fixes || [])}
+      const prevHasTable = hasMarkdownDataTable(activeDraft.body_markdown);
+      const prevHasImages = hasGroundedReferenceImages(activeDraft);
 
-STRUCTURAL CHECKS TO SATISFY:
-${structuralTriggers.length > 0 ? structuralTriggers.map((t, i) => `${i + 1}. ${t}`).join('\n') : '1. Preserve all verified reference images, Markdown comparison tables, deep inline citations, and Pyvren voice.'}
+      const revisionPrompt = `AUTO-IMPROVEMENT ROUND ${round}/${maxImprovementRounds} — CURRENT DATE (UTC): ${todayUtc}
+Two independent editorial critics from different LLM families audited this draft against Pyvren's category-specific skill rules and requested targeted improvements before publication.
+
+${categorySkillRules}
+
+DETERMINISTIC LINT STATUS: ${activeLint.passed ? 'PASSED' : 'FAILED'} (score=${activeLint.quality_score})
+${activeLint.errors.length > 0 ? `DETERMINISTIC LINT ERRORS (MUST FIX EVERY SINGLE ONE):\n${activeLint.errors.map((e, i) => `${i + 1}. ${e}`).join('\n')}` : 'No deterministic lint errors — preserve full lint compliance.'}
+
+CRITIC 1 (${getOpenRouterModelFamily(latestAudit.criticAModel)} — Editorial Craft, Category Skill Rules, Grounding & Visuals):
+${latestAudit.criticEntries[0]?.notes || '(n/a)'}
+Blocking issues: ${JSON.stringify(latestAudit.criticEntries[0]?.blocking_issues || [])}
+Concrete fixes: ${JSON.stringify(latestAudit.criticEntries[0]?.concrete_fixes || [])}
+
+CRITIC 2 (${getOpenRouterModelFamily(latestAudit.criticBModel)} — SEO, GEO & AdSense Compliance):
+${latestAudit.criticEntries[1]?.notes || '(n/a)'}
+Blocking issues: ${JSON.stringify(latestAudit.criticEntries[1]?.blocking_issues || [])}
+Concrete fixes: ${JSON.stringify(latestAudit.criticEntries[1]?.concrete_fixes || [])}
+
+STRUCTURAL & FACTUAL INTEGRITY RULES (MANDATORY):
+1. Title MUST be 35-70 characters. Meta description MUST be 125-160 characters (never > 165 chars).
+2. ZERO placeholder tokens (NEVER write CVE-2025-XXXX, CVE-YYYY-NNNN, [TBD], [TODO], or example.com). Use ONLY real verified CVE IDs, version numbers, benchmarks, and commands explicitly backed by PRIMARY SOURCES below — if a specific command or patch version is not in PRIMARY SOURCES, link the official vendor advisory instead of fabricating a CLI command!
+3. Cover EVERY category required section listed above with crisp, concrete staff-engineer prose (no bold-colon bullet walls, no AI filler transitions).
+4. Include at least ONE clean Markdown comparison/spec/timeline table AND >= 3 distinct deep inline https:// citations from PRIMARY SOURCES.
+${latestAudit.structuralTriggers.length > 0 ? `5. Structural fixes required: ${latestAudit.structuralTriggers.join('; ')}` : ''}
 
 VERIFIED CRAWLED REFERENCE IMAGES (ONLY use exact URLs from this list):
 ${availableImagesText}
 
-CURRENT DRAFT JSON:
+PRIMARY SOURCES DOSSIER (ground every single CVE, metric, quote, and URL strictly in these sources):
+${sourceExcerptsForRevision}
+
+CURRENT DRAFT JSON TO IMPROVE:
 ${JSON.stringify(activeDraft, null, 2)}
 
-Apply ALL requested editorial, table, reference-image, SEO, GEO, and AdSense refinements while preserving factual accuracy and Pyvren's crisp human tone. Return ONLY the complete revised RFC 8259 JSON object.`;
+Return ONLY the complete SOTA revised RFC 8259 JSON object ready for immediate publication.`;
 
-    try {
-      const reviseRes = await callOpenRouter(env, {
-        model: ctx.model,
-        fallbackModels: getEffectiveFallbackModels(ctx),
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: revisionPrompt },
-        ],
-        temperature: 0.25,
-        maxTokens: 7_500,
-        jsonMode: true,
-        freeModelsOnly,
-      });
-      addTokenUsage(usage, reviseRes.usage);
-      const revModel = reviseRes.model || ctx.model;
+      // Round 1 prefers distinctReviser (cross-model editor); Round 2 falls back to ctx.model for complementary polish
+      const revisionModel = round === 1 && !env.__TEST_DB__ ? distinctReviser : ctx.model;
+      const revisionFallbacks = Array.from(
+        new Set([ctx.model, ...getEffectiveFallbackModels(ctx)]),
+      ).filter((m) => m && m !== revisionModel);
 
-      const candidateDraft = normalizeDraftPayload(
-        extractJsonObject<Partial<DraftArticlePayload>>(reviseRes.content),
-        activeDraft.title,
-        sources || [],
-      );
-      const candidateLint = lintPostPayload({
-        title: candidateDraft.title,
-        description: candidateDraft.description,
-        tldr_summary: candidateDraft.tldr_summary,
-        key_facts: candidateDraft.key_facts,
-        faq: candidateDraft.faq,
-        body_markdown: candidateDraft.body_markdown,
-        author: ctx.settings.default_author,
-        archetype: ctx.archetype,
-        sources: candidateDraft.sources,
-        banned_patterns: ctx.skill.banned_patterns_json,
-      });
-
-      const improvesOrMaintainsLint =
-        (candidateLint.passed && !activeLint.passed) ||
-        (candidateLint.passed === activeLint.passed &&
-          candidateLint.quality_score >= activeLint.quality_score - 3);
-
-      if (improvesOrMaintainsLint) {
-        activeDraft = candidateDraft;
-        activeLint = candidateLint;
-        revisedDraft = candidateDraft;
-        revisedLintResult = candidateLint;
-        revisionApplied = true;
-        // Boost critic scores modestly only where deterministic checks now confirm fixes
-        if (hasMarkdownDataTable(activeDraft.body_markdown) && !initialHasTable) {
-          criticAVisuals = clampScore(Math.max(criticAVisuals, 84));
-        }
-        if (hasGroundedReferenceImages(activeDraft) && !initialHasImages) {
-          criticAVisuals = clampScore(Math.max(criticAVisuals, 86));
-        }
-        pushTrace(trace, {
-          stage: 'quality_assessment',
-          tool_name: 'dual_critic_revision_pass',
-          input: revModel,
-          summary: `Applied cross-family critic revision via ${revModel} (lint=${candidateLint.passed ? 'PASS' : 'FAIL'}, score=${candidateLint.quality_score}, table=${hasMarkdownDataTable(candidateDraft.body_markdown)}, images=${hasGroundedReferenceImages(candidateDraft)})`,
-          ok: true,
+      try {
+        const reviseRes = await callOpenRouter(env, {
+          model: revisionModel,
+          fallbackModels: revisionFallbacks,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: revisionPrompt },
+          ],
+          temperature: 0.22,
+          maxTokens: 8_192,
+          jsonMode: true,
+          freeModelsOnly,
         });
-      } else {
+        addTokenUsage(usage, reviseRes.usage);
+        const revModel = reviseRes.model || revisionModel;
+
+        const candidateDraft = normalizeDraftPayload(
+          extractJsonObject<Partial<DraftArticlePayload>>(reviseRes.content),
+          activeDraft.title,
+          sources || [],
+        );
+        const candidateLint = lintPostPayload({
+          title: candidateDraft.title,
+          description: candidateDraft.description,
+          tldr_summary: candidateDraft.tldr_summary,
+          key_facts: candidateDraft.key_facts,
+          faq: candidateDraft.faq,
+          body_markdown: candidateDraft.body_markdown,
+          author: ctx.settings.default_author,
+          archetype: ctx.archetype,
+          sources: candidateDraft.sources,
+          banned_patterns: ctx.skill.banned_patterns_json,
+        });
+
+        const improvesOrMaintainsLint =
+          (candidateLint.passed && !activeLint.passed) ||
+          (candidateLint.passed === activeLint.passed &&
+            candidateLint.quality_score >= activeLint.quality_score - 3);
+
+        if (!improvesOrMaintainsLint) {
+          pushTrace(trace, {
+            stage: 'quality_assessment',
+            tool_name: 'dual_critic_revision_pass',
+            input: `round-${round} · ${revModel}`,
+            summary: `Discarded round-${round} revision from ${revModel} because it regressed deterministic lint (${candidateLint.errors.length} errors, score=${candidateLint.quality_score} vs ${activeLint.quality_score})`,
+            ok: false,
+          });
+          continue;
+        }
+
+        // Adopt candidate and, when reAuditAfterRevision is enabled, re-score with BOTH critics!
+        if (reAuditAfterRevision) {
+          const postAudit = await runDualCriticPass(candidateDraft, candidateLint, `round-${round}`);
+          const improvedOverall =
+            (candidateLint.passed && !activeLint.passed) ||
+            postAudit.overall >= latestAudit.overall;
+
+          if (improvedOverall) {
+            const oldScore = latestAudit.overall;
+            activeDraft = candidateDraft;
+            activeLint = candidateLint;
+            revisedDraft = candidateDraft;
+            revisedLintResult = candidateLint;
+            latestAudit = postAudit;
+            revisionApplied = true;
+            revisionRoundsApplied++;
+            pushTrace(trace, {
+              stage: 'quality_assessment',
+              tool_name: 'dual_critic_revision_pass',
+              input: `round-${round} · ${revModel}`,
+              summary: `Auto-improved draft via ${revModel} (round ${round}): verified score ${oldScore} -> ${postAudit.overall}/100 (lint=${candidateLint.passed ? 'PASS' : 'FAIL'}, table=${hasMarkdownDataTable(candidateDraft.body_markdown)}, images=${hasGroundedReferenceImages(candidateDraft)})`,
+              ok: true,
+            });
+            // Stop early once SOTA bar is cleared with clean lint & zero blocking issues
+            if (
+              activeLint.passed &&
+              latestAudit.overall >= Math.max(minPublishScore, 84) &&
+              latestAudit.combinedBlocking.length === 0
+            ) {
+              break;
+            }
+          } else {
+            pushTrace(trace, {
+              stage: 'quality_assessment',
+              tool_name: 'dual_critic_revision_pass',
+              input: `round-${round} · ${revModel}`,
+              summary: `Discarded round-${round} revision from ${revModel} because re-audited score regressed (${postAudit.overall} < ${latestAudit.overall})`,
+              ok: false,
+            });
+          }
+        } else {
+          // Deterministic single-pass mode (used in compact unit tests)
+          activeDraft = candidateDraft;
+          activeLint = candidateLint;
+          revisedDraft = candidateDraft;
+          revisedLintResult = candidateLint;
+          revisionApplied = true;
+          revisionRoundsApplied++;
+          if (hasMarkdownDataTable(activeDraft.body_markdown) && !prevHasTable) {
+            latestAudit.criticAVisuals = clampScore(Math.max(latestAudit.criticAVisuals, 84));
+          }
+          if (hasGroundedReferenceImages(activeDraft) && !prevHasImages) {
+            latestAudit.criticAVisuals = clampScore(Math.max(latestAudit.criticAVisuals, 86));
+          }
+          const recomputed = computeBlendedScores(activeLint, latestAudit);
+          latestAudit = { ...latestAudit, ...recomputed };
+          pushTrace(trace, {
+            stage: 'quality_assessment',
+            tool_name: 'dual_critic_revision_pass',
+            input: `round-${round} · ${revModel}`,
+            summary: `Applied cross-family critic revision via ${revModel} (lint=${candidateLint.passed ? 'PASS' : 'FAIL'}, score=${candidateLint.quality_score}, table=${hasMarkdownDataTable(candidateDraft.body_markdown)}, images=${hasGroundedReferenceImages(candidateDraft)})`,
+            ok: true,
+          });
+          break;
+        }
+      } catch (revErr) {
+        const msg = revErr instanceof Error ? revErr.message : String(revErr);
         pushTrace(trace, {
           stage: 'quality_assessment',
           tool_name: 'dual_critic_revision_pass',
-          input: revModel,
-          summary: `Discarded critic revision because it regressed deterministic lint (${candidateLint.errors.length} errors, score=${candidateLint.quality_score} vs ${activeLint.quality_score})`,
+          input: `round-${round} · ${revisionModel}`,
+          summary: `Round-${round} auto-improve pass skipped due to error (${msg}); keeping best validated draft`,
           ok: false,
         });
       }
-    } catch (revErr) {
-      const msg = revErr instanceof Error ? revErr.message : String(revErr);
-      pushTrace(trace, {
-        stage: 'quality_assessment',
-        tool_name: 'dual_critic_revision_pass',
-        input: ctx.model,
-        summary: `Critic revision pass skipped due to error (${msg}); keeping validated draft`,
-        ok: false,
-      });
     }
   }
 
@@ -1914,23 +2213,28 @@ Apply ALL requested editorial, table, reference-image, SEO, GEO, and AdSense ref
 
   const finalHasImages = hasGroundedReferenceImages(activeDraft);
   const finalHasTable = hasMarkdownDataTable(activeDraft.body_markdown);
-  const famA = getOpenRouterModelFamily(criticAModel);
-  const famB = getOpenRouterModelFamily(criticBModel);
-  const crossFamilyVerified = criticAOk && criticBOk && famA !== famB && famA !== 'router' && famB !== 'router';
+  const famA = getOpenRouterModelFamily(latestAudit.criticAModel);
+  const famB = getOpenRouterModelFamily(latestAudit.criticBModel);
+  const crossFamilyVerified =
+    latestAudit.criticAOk &&
+    latestAudit.criticBOk &&
+    famA !== famB &&
+    famA !== 'router' &&
+    famB !== 'router';
 
   const dualReview: DualCriticReviewSummary = {
     writer_model: ctx.model,
     writer_family: getOpenRouterModelFamily(ctx.model),
-    critics: criticEntries,
+    critics: latestAudit.criticEntries,
     cross_family_verified: crossFamilyVerified,
     has_reference_images: finalHasImages,
     has_data_table: finalHasTable,
     revision_triggered: shouldAttemptRevision,
     revision_applied: revisionApplied,
-    ...(revisionReasons.length > 0 ? { revision_reason: revisionReasons.slice(0, 3).join(' | ') } : {}),
+    ...(initialReasons.length > 0 ? { revision_reason: initialReasons.slice(0, 3).join(' | ') } : {}),
   };
 
-  if (!criticAOk && !criticBOk) {
+  if (!latestAudit.criticAOk && !latestAudit.criticBOk) {
     const degradedScore = activeLint.passed
       ? activeLint.quality_score
       : Math.min(activeLint.quality_score, 65);
@@ -1941,60 +2245,46 @@ Apply ALL requested editorial, table, reference-image, SEO, GEO, and AdSense ref
       finalScore: degradedScore,
       finalBreakdown: baseBreakdown,
       resolvedJudgeModel: ctx.judgeModel,
+      ...(revisedDraft ? { revisedDraft } : {}),
+      ...(revisedLintResult ? { revisedLintResult } : {}),
     };
   }
 
-  const blendedSeo = criticBOk
-    ? clampScore(baseBreakdown.seo_structure * 0.7 + criticBSeo * 0.3)
-    : baseBreakdown.seo_structure;
-  const blendedGeo = criticBOk
-    ? clampScore(baseBreakdown.geo_citation_readiness * 0.7 + criticBGeo * 0.3)
-    : baseBreakdown.geo_citation_readiness;
-  const blendedInfoGain = criticAOk
-    ? clampScore(baseBreakdown.information_gain * 0.75 + criticAVisuals * 0.25)
-    : baseBreakdown.information_gain;
-  const blendedGrounding = criticAOk
-    ? clampScore(baseBreakdown.source_grounding * 0.7 + criticAGrounding * 0.3)
-    : baseBreakdown.source_grounding;
-  const blendedAntiSlop = criticAOk
-    ? clampScore(baseBreakdown.anti_slop_cleanliness * 0.7 + criticATone * 0.3)
-    : baseBreakdown.anti_slop_cleanliness;
-  const blendedAdsense = criticBOk
-    ? clampScore(baseBreakdown.adsense_compliance * 0.7 + criticBAdsense * 0.3)
-    : baseBreakdown.adsense_compliance;
-
-  let overall = clampScore(
-    blendedSeo * 0.16 +
-      blendedGeo * 0.18 +
-      blendedInfoGain * 0.22 +
-      blendedGrounding * 0.18 +
-      blendedAntiSlop * 0.14 +
-      blendedAdsense * 0.12,
-  );
-
-  if (!activeLint.passed) {
-    overall = Math.min(overall, 65);
-  }
-
-  const judgeNotesParts = criticEntries
+  const judgeNotesParts = latestAudit.criticEntries
     .filter((c) => c.verdict !== 'unavailable' && c.notes)
-    .map((c) => `[${c.family} / ${c.role === 'editorial_visuals_tone' ? 'Editorial' : 'SEO+AdSense'}] ${c.notes}`);
+    .map(
+      (c) =>
+        `[${c.family} / ${c.role === 'editorial_visuals_tone' ? 'Editorial' : 'SEO+AdSense'}] ${c.notes}`,
+    );
   if (revisionApplied) {
-    judgeNotesParts.push('Automated cross-family revision pass applied and re-linted.');
+    judgeNotesParts.push(
+      `Automated cross-model improvement applied (${revisionRoundsApplied} round${revisionRoundsApplied === 1 ? '' : 's'})${reAuditAfterRevision ? ' and re-verified by dual critics.' : ' and re-linted.'}`,
+    );
   }
 
-  const resolvedJudgeModel = criticAOk && criticBOk ? `${criticAModel} + ${criticBModel}` : criticAOk ? criticAModel : criticBModel;
+  const resolvedJudgeModel =
+    latestAudit.criticAOk && latestAudit.criticBOk
+      ? `${latestAudit.criticAModel} + ${latestAudit.criticBModel}`
+      : latestAudit.criticAOk
+        ? latestAudit.criticAModel
+        : latestAudit.criticBModel;
   ctx.judgeModel = resolvedJudgeModel;
 
   const finalBreakdown: QualityBreakdown = {
-    overall,
-    seo_structure: blendedSeo,
-    geo_citation_readiness: blendedGeo,
-    information_gain: blendedInfoGain,
-    source_grounding: blendedGrounding,
-    anti_slop_cleanliness: blendedAntiSlop,
-    adsense_compliance: blendedAdsense,
-    warnings: Array.from(new Set([...baseBreakdown.warnings, ...combinedWarnings, ...structuralTriggers])).slice(0, 12),
+    overall: latestAudit.overall,
+    seo_structure: latestAudit.blendedSeo,
+    geo_citation_readiness: latestAudit.blendedGeo,
+    information_gain: latestAudit.blendedInfoGain,
+    source_grounding: latestAudit.blendedGrounding,
+    anti_slop_cleanliness: latestAudit.blendedAntiSlop,
+    adsense_compliance: latestAudit.blendedAdsense,
+    warnings: Array.from(
+      new Set([
+        ...baseBreakdown.warnings,
+        ...latestAudit.combinedWarnings,
+        ...latestAudit.structuralTriggers,
+      ]),
+    ).slice(0, 12),
     judge_notes: judgeNotesParts.join(' ') || undefined,
     ...(baseBreakdown.humanity_signals ? { humanity_signals: baseBreakdown.humanity_signals } : {}),
     dual_critic_review: dualReview,
@@ -2004,12 +2294,12 @@ Apply ALL requested editorial, table, reference-image, SEO, GEO, and AdSense ref
     stage: 'quality_assessment',
     tool_name: 'openrouter_editorial_judge',
     input: resolvedJudgeModel,
-    summary: `Dual-family score ${overall}/100 (crossFamily=${crossFamilyVerified}, revised=${revisionApplied}, table=${finalHasTable}, images=${finalHasImages})`,
+    summary: `Dual-family score ${latestAudit.overall}/100 (crossFamily=${crossFamilyVerified}, rounds=${revisionRoundsApplied}, lint=${activeLint.passed ? 'PASS' : 'FAIL'}, table=${finalHasTable}, images=${finalHasImages})`,
     ok: true,
   });
 
   return {
-    finalScore: overall,
+    finalScore: latestAudit.overall,
     finalBreakdown,
     resolvedJudgeModel,
     ...(revisedDraft ? { revisedDraft } : {}),
@@ -2367,3 +2657,198 @@ export async function runEditorialAgentDirect(
     };
   }
 }
+
+/**
+ * Re-researches an existing draft/low-score post with Serper.dev primary sources, runs the full
+ * SOTA cross-family dual-critic + iterative auto-improvement loop against the post's category skill rules,
+ * persists the upgraded article, and auto-publishes it if it clears lint + min_publish_score.
+ */
+export async function improveExistingPost(
+  db: DatabaseAdapter,
+  env: WorkerEnv,
+  postId: number,
+  editedBy = 'agent-auto-improve',
+): Promise<{
+  post: PostRecord;
+  previousScore: number;
+  finalScore: number;
+  promotedToPublished: boolean;
+  trace: TraceEntry[];
+  usage: TokenUsage;
+}> {
+  const existing = await db.getPostById(postId);
+  if (!existing) {
+    throw new Error(`Post #${postId} not found.`);
+  }
+
+  const trace: TraceEntry[] = [];
+  const usage = createEmptyTokenUsage();
+  const ctx = await stageLoadContext(db, {
+    category_slug: existing.category_slug,
+    archetype: existing.archetype,
+    trigger_source: 'manual',
+    force: true,
+  });
+
+  // Live fastest-pool warm-up when cache is cold
+  if (!env.__TEST_DB__ && getFastestHealthyModelsFromCache().length === 0) {
+    try {
+      const probeResults = await probeWorkingModelPool(
+        env,
+        [ctx.model, ...getConfiguredFallbackModels(ctx.settings), ctx.judgeModel].filter(Boolean),
+        { timeoutMs: 7_000 },
+      );
+      const working = probeResults.filter((r) => r.ok && r.json_ok).map((r) => r.id);
+      if (working.length > 0) {
+        ctx.fastestModels = working;
+        if (probeResults.some((r) => r.id === ctx.model && !r.ok)) {
+          ctx.model = working[0];
+        }
+      }
+    } catch {
+      // continue with configured failover chain
+    }
+  } else {
+    ctx.fastestModels = getFastestHealthyModelsFromCache();
+  }
+
+  // Re-research using Serper.dev + existing source URLs to replace any missing facts/CVEs/metrics
+  const seedFeedItems: FeedItem[] = (existing.sources_json || [])
+    .filter((u) => typeof u === 'string' && u.startsWith('https://'))
+    .slice(0, 4)
+    .map((url) => ({
+      title: existing.title,
+      url,
+      summary: existing.description || existing.tldr_summary || existing.title,
+    }));
+
+  const searchQueries = [
+    existing.title,
+    `${existing.title} official advisory CVE benchmark specifications`,
+    ...(existing.keywords_json || []).slice(0, 2).map((kw) => `${existing.title} ${kw}`),
+  ].slice(0, 3);
+
+  const primarySources = await stageDeepResearch(
+    env,
+    existing.title,
+    searchQueries,
+    seedFeedItems,
+    trace,
+  );
+
+  const initialDraft: DraftArticlePayload = {
+    title: existing.title,
+    slug: existing.slug,
+    description: existing.description,
+    tldr_summary: existing.tldr_summary,
+    cover_image_url: existing.cover_image_url,
+    cover_image_alt: existing.cover_image_alt,
+    images: Array.isArray(existing.images_json) ? existing.images_json : [],
+    key_facts: Array.isArray(existing.key_facts_json) ? existing.key_facts_json : [],
+    faq: Array.isArray(existing.faq_json) ? existing.faq_json : [],
+    body_markdown: existing.body_markdown,
+    tags: Array.isArray(existing.tags_json) ? existing.tags_json : [],
+    keywords: Array.isArray(existing.keywords_json) ? existing.keywords_json : [],
+    sources: Array.isArray(existing.sources_json) ? existing.sources_json : [],
+    review_notes: Array.isArray(existing.review_notes_json) ? existing.review_notes_json : [],
+  };
+
+  const initialLint = lintPostPayload({
+    title: initialDraft.title,
+    description: initialDraft.description,
+    tldr_summary: initialDraft.tldr_summary,
+    key_facts: initialDraft.key_facts,
+    faq: initialDraft.faq,
+    body_markdown: initialDraft.body_markdown,
+    author: existing.author || ctx.settings.default_author,
+    archetype: existing.archetype,
+    sources: initialDraft.sources,
+    banned_patterns: ctx.skill.banned_patterns_json,
+  });
+
+  const assessed = await stageQualityAssessment(
+    env,
+    ctx,
+    initialDraft,
+    initialLint,
+    trace,
+    usage,
+    primarySources,
+    {
+      reAuditAfterRevision: true,
+      maxImprovementRounds: 2,
+    },
+  );
+
+  const finalDraft = assessed.revisedDraft || initialDraft;
+  const finalLint = assessed.revisedLintResult || initialLint;
+  const compiled = compileMarkdown(finalDraft.body_markdown);
+  const minPublishScore = Math.max(50, Math.min(100, ctx.settings.min_publish_score || 78));
+  const canAutoPublish =
+    ctx.settings.publishing_mode === 'auto_publish' &&
+    finalLint.passed &&
+    assessed.finalScore >= minPublishScore;
+
+  const nextStatus: PostStatus =
+    existing.status === 'published' ? 'published' : canAutoPublish ? 'published' : 'draft';
+  const promotedToPublished = existing.status !== 'published' && nextStatus === 'published';
+
+  const updatedPost = await db.updatePost(existing.id, {
+    title: finalDraft.title,
+    description: finalDraft.description,
+    tldr_summary: finalDraft.tldr_summary,
+    cover_image_url: finalDraft.cover_image_url,
+    cover_image_alt: finalDraft.cover_image_alt,
+    images_json: finalDraft.images,
+    key_facts_json: finalDraft.key_facts,
+    faq_json: finalDraft.faq,
+    body_markdown: finalDraft.body_markdown,
+    body_html: compiled.html,
+    tags_json: finalDraft.tags,
+    keywords_json: finalDraft.keywords,
+    sources_json: finalDraft.sources,
+    review_notes_json: finalDraft.review_notes,
+    lint_passed: finalLint.passed,
+    lint_errors_json: finalLint.errors,
+    quality_score: assessed.finalScore,
+    quality_breakdown_json: assessed.finalBreakdown,
+    reading_time_minutes: finalLint.reading_time_minutes || compiled.readingTimeMinutes,
+    word_count: finalLint.word_count || compiled.wordCount,
+    status: nextStatus,
+    published_at:
+      existing.published_at || (nextStatus === 'published' ? new Date().toISOString() : null),
+    last_edited_by: editedBy,
+  });
+
+  const savedPost = updatedPost || existing;
+
+  const createdRun = await db.createAgentRun({
+    trigger_source: 'manual',
+    category_slug: savedPost.category_slug,
+    topic: `Auto-improve: ${savedPost.title}`,
+    archetype: savedPost.archetype,
+    model_used: ctx.model,
+    status: 'completed',
+    current_stage: 'completed',
+    decision_reason: promotedToPublished
+      ? `Auto-improved post #${savedPost.id} (${existing.quality_score} -> ${assessed.finalScore}/100) and promoted to published`
+      : `Auto-improved post #${savedPost.id} (${existing.quality_score} -> ${assessed.finalScore}/100; status=${nextStatus})`,
+  });
+  await db.updateAgentRun(createdRun.id, {
+    quality_score: assessed.finalScore,
+    post_id: savedPost.id,
+    trace_json: trace,
+    token_usage_json: usage,
+    completed_at: new Date().toISOString(),
+  });
+
+  return {
+    post: savedPost,
+    previousScore: existing.quality_score,
+    finalScore: assessed.finalScore,
+    promotedToPublished,
+    trace,
+    usage,
+  };
+}
+

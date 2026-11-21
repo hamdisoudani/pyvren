@@ -1249,11 +1249,9 @@ export async function searchWebSources(
   const freshness = opts?.freshness;
   const mode = opts?.mode ?? 'web';
 
-  // 1. Try Serper if API key is configured
+  // 1. Try Serper if API key is configured (news -> organic web fallback when mode === 'news')
   const serperKey = env.SERPER_API_KEY?.trim();
   if (serperKey) {
-    const endpoint =
-      mode === 'news' ? 'https://google.serper.dev/news' : 'https://google.serper.dev/search';
     const tbs =
       freshness === 'day'
         ? 'qdr:d'
@@ -1262,76 +1260,85 @@ export async function searchWebSources(
           : freshness === 'month'
             ? 'qdr:m'
             : undefined;
+    const serperAttempts: Array<{ endpoint: string; label: string; useTbs: boolean }> =
+      mode === 'news'
+        ? [
+            { endpoint: 'https://google.serper.dev/news', label: 'news', useTbs: true },
+            { endpoint: 'https://google.serper.dev/search', label: 'web', useTbs: false },
+          ]
+        : [{ endpoint: 'https://google.serper.dev/search', label: 'web', useTbs: true }];
 
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 12_000);
+    for (const attempt of serperAttempts) {
       try {
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'X-API-KEY': serperKey,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            q: cleanQuery,
-            num: 8,
-            ...(tbs ? { tbs } : {}),
-          }),
-          signal: controller.signal,
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 12_000);
+        try {
+          const response = await fetch(attempt.endpoint, {
+            method: 'POST',
+            headers: {
+              'X-API-KEY': serperKey,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              q: cleanQuery,
+              num: 8,
+              ...(attempt.useTbs && tbs ? { tbs } : {}),
+            }),
+            signal: controller.signal,
+          });
+          if (!response.ok) {
+            throw new Error(`Serper HTTP ${response.status}`);
+          }
+          const data = (await response.json()) as {
+            organic?: Array<{ title?: string; link?: string; snippet?: string; date?: string }>;
+            news?: Array<{ title?: string; link?: string; snippet?: string; date?: string }>;
+          };
+          const rawList = Array.isArray(data.news)
+            ? data.news
+            : Array.isArray(data.organic)
+              ? data.organic
+              : [];
+          const seen = new Set<string>();
+          const results: SearchSourceItem[] = [];
+          for (const item of rawList) {
+            if (!item.link) continue;
+            const check = isSafePublicUrl(item.link);
+            if (!check.ok || !check.url) continue;
+            const normalizedUrl = check.url.toString();
+            if (seen.has(normalizedUrl)) continue;
+            seen.add(normalizedUrl);
+            const datePrefix = item.date ? `[${item.date}] ` : '';
+            results.push({
+              title: normalizeWhitespace(item.title || normalizedUrl),
+              url: normalizedUrl,
+              snippet: normalizeWhitespace(`${datePrefix}${item.snippet || ''}`).slice(0, 320),
+            });
+          }
+          if (results.length > 0) {
+            pushTrace(trace, {
+              stage: 'deep_research',
+              tool_name: 'searchWebSources',
+              input: cleanQuery,
+              url: attempt.endpoint,
+              summary: `Serper (${attempt.label}${attempt.useTbs && tbs ? `, ${tbs}` : ''}) returned ${results.length} safe results`,
+              ok: true,
+            });
+            return results;
+          }
+        } finally {
+          clearTimeout(timeout);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        pushTrace(trace, {
+          stage: 'deep_research',
+          tool_name: 'searchWebSources',
+          input: cleanQuery,
+          url: attempt.endpoint,
+          summary: `Serper ${attempt.label} failed (${message}); continuing fallback`,
+          ok: false,
         });
-        if (!response.ok) {
-          throw new Error(`Serper HTTP ${response.status}`);
-        }
-        const data = (await response.json()) as {
-          organic?: Array<{ title?: string; link?: string; snippet?: string; date?: string }>;
-          news?: Array<{ title?: string; link?: string; snippet?: string; date?: string }>;
-        };
-        const rawList = Array.isArray(data.news)
-          ? data.news
-          : Array.isArray(data.organic)
-            ? data.organic
-            : [];
-        const seen = new Set<string>();
-        const results: SearchSourceItem[] = [];
-        for (const item of rawList) {
-          if (!item.link) continue;
-          const check = isSafePublicUrl(item.link);
-          if (!check.ok || !check.url) continue;
-          const normalizedUrl = check.url.toString();
-          if (seen.has(normalizedUrl)) continue;
-          seen.add(normalizedUrl);
-          const datePrefix = item.date ? `[${item.date}] ` : '';
-          results.push({
-            title: normalizeWhitespace(item.title || normalizedUrl),
-            url: normalizedUrl,
-            snippet: normalizeWhitespace(`${datePrefix}${item.snippet || ''}`).slice(0, 320),
-          });
-        }
-        if (results.length > 0) {
-          pushTrace(trace, {
-            stage: 'deep_research',
-            tool_name: 'searchWebSources',
-            input: cleanQuery,
-            url: endpoint,
-            summary: `Serper (${mode}${tbs ? `, ${tbs}` : ''}) returned ${results.length} safe results`,
-            ok: true,
-          });
-          return results;
-        }
-      } finally {
-        clearTimeout(timeout);
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      pushTrace(trace, {
-        stage: 'deep_research',
-        tool_name: 'searchWebSources',
-        input: cleanQuery,
-        url: endpoint,
-        summary: `Serper failed (${message}); falling back to DuckDuckGo HTML`,
-        ok: false,
-      });
     }
   }
 

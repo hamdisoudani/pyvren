@@ -74,6 +74,8 @@ const PLACEHOLDER_PATTERNS: Array<{ label: string; regex: RegExp }> = [
   { label: '[TODO]', regex: /\[todo\]/i },
   { label: '[Insert', regex: /\[insert\b/i },
   { label: '[XX]', regex: /\[xx\]/i },
+  { label: '[PLACEHOLDER]', regex: /\[placeholder\]/i },
+  { label: 'placeholder CVE (CVE-YYYY-XXXX)', regex: /\bCVE-(?:\d{4}|Y{4}|X{4})-X{3,}\b/i },
   { label: 'TODO:', regex: /\btodo:/i },
   { label: 'example.com', regex: /\bexample\.com\b/i },
   { label: 'lorem ipsum', regex: /\blorem\s+ipsum\b/i },

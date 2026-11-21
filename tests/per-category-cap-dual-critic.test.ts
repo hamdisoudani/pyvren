@@ -305,27 +305,41 @@ Avoid stacking three ControlNet preprocessors simultaneously on 12 GB cards. Off
 
         // Critic 1 (Editorial, Visuals & Tables)
         if (sys.includes('Critic 1')) {
+          const usrMsg = body.messages?.[1]?.content || '';
+          const fixed = usrMsg.includes('| Precision | Peak VRAM') && usrMsg.includes('wan22-graph.png');
           return new Response(
             JSON.stringify({
               model: body.model,
               choices: [
                 {
                   message: {
-                    content: JSON.stringify({
-                      editorial_tone: 88,
-                      factual_grounding: 90,
-                      visuals_and_tables: 64,
-                      verdict: 'revise',
-                      blocking_issues: [
-                        'Missing Markdown comparison table for FP16 vs FP8 vs GGUF Q4 VRAM',
-                        'No verified crawled reference image attached despite 1 available image',
-                      ],
-                      concrete_fixes: [
-                        'Add a Markdown table comparing FP16, FP8, and GGUF Q4 VRAM and latency',
-                        'Attach the crawled ComfyUI workflow graph image as cover_image_url and inline figure',
-                      ],
-                      notes: 'Voice and metrics are strong, but add a spec table and the crawled graph image.',
-                    }),
+                    content: JSON.stringify(
+                      fixed
+                        ? {
+                            editorial_tone: 92,
+                            factual_grounding: 94,
+                            visuals_and_tables: 92,
+                            verdict: 'pass',
+                            blocking_issues: [],
+                            concrete_fixes: [],
+                            notes: 'Revised draft includes the VRAM table and verified ComfyUI graph image.',
+                          }
+                        : {
+                            editorial_tone: 88,
+                            factual_grounding: 90,
+                            visuals_and_tables: 64,
+                            verdict: 'revise',
+                            blocking_issues: [
+                              'Missing Markdown comparison table for FP16 vs FP8 vs GGUF Q4 VRAM',
+                              'No verified crawled reference image attached despite 1 available image',
+                            ],
+                            concrete_fixes: [
+                              'Add a Markdown table comparing FP16, FP8, and GGUF Q4 VRAM and latency',
+                              'Attach the crawled ComfyUI workflow graph image as cover_image_url and inline figure',
+                            ],
+                            notes: 'Voice and metrics are strong, but add a spec table and the crawled graph image.',
+                          },
+                    ),
                   },
                 },
               ],
@@ -417,8 +431,8 @@ Avoid stacking three ControlNet preprocessors simultaneously on 12 GB cards. Off
       sources,
     );
 
-    // Must have invoked 3 calls: Critic 1 (Family A), Critic 2 (Family B), and Writer revision pass
-    expect(calledModels).toHaveLength(3);
+    // Must have invoked at least 5 calls: Critic 1 + Critic 2 (Round 0) -> Revision -> Critic 1 + Critic 2 (Round 1 re-audit)
+    expect(calledModels.length).toBeGreaterThanOrEqual(5);
     expect(getOpenRouterModelFamily(calledModels[0])).not.toBe(getOpenRouterModelFamily(calledModels[1]));
     expect(assessed.finalBreakdown.dual_critic_review?.cross_family_verified).toBe(true);
     expect(assessed.finalBreakdown.dual_critic_review?.revision_triggered).toBe(true);

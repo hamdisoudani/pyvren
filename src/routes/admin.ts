@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { getSessionSecret, type WorkerEnv } from '../env';
-import { runEditorialAgentDirect } from '../lib/agent';
+import { improveExistingPost, runEditorialAgentDirect } from '../lib/agent';
 import {
   buildClearSessionCookie,
   buildSessionCookie,
@@ -1657,6 +1657,150 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
     const limit = Number.isFinite(rawLimit) ? Math.min(100, Math.max(1, rawLimit)) : 30;
     const runs = await db.listAgentRuns(limit);
     return c.json({ runs, total: runs.length });
+  });
+
+  app.post('/api/admin/posts/:id/improve', async (c) => {
+    const id = parsePositiveInt(c.req.param('id'));
+    if (!id) {
+      return c.json({ error: 'Invalid post ID.' }, 400);
+    }
+
+    const db = createDatabase(c.env);
+    const existing = await db.getPostById(id);
+    if (!existing) {
+      return c.json({ error: 'Post not found.' }, 404);
+    }
+
+    const syncMode = c.req.query('sync') === 'true';
+    const settings = await db.getSettings();
+    const adminEmail = c.get('adminEmail') || 'agent-auto-improve';
+
+    if (syncMode || !c.env.EDITORIAL_AGENT_WORKFLOW) {
+      const result = await improveExistingPost(db, c.env, id, adminEmail);
+      return c.json({
+        ok: true,
+        execution_mode: 'sync',
+        previous_score: result.previousScore,
+        final_score: result.finalScore,
+        promoted_to_published: result.promotedToPublished,
+        post: result.post,
+      });
+    }
+
+    const run = await db.createAgentRun({
+      trigger_source: 'manual',
+      category_slug: existing.category_slug,
+      topic: `Auto-improve: ${existing.title}`,
+      archetype: existing.archetype,
+      model_used: settings.openrouter_model,
+      status: 'queued',
+      current_stage: 'queued',
+    });
+
+    const instance = await c.env.EDITORIAL_AGENT_WORKFLOW.create({
+      params: {
+        improve_post_id: existing.id,
+        category_slug: existing.category_slug,
+        archetype: existing.archetype,
+        trigger_source: 'manual',
+        force: true,
+        run_id: run.id,
+      },
+    });
+
+    const updatedRun =
+      (await db.updateAgentRun(run.id, {
+        workflow_instance_id: instance.id,
+        post_id: existing.id,
+        status: 'running',
+        current_stage: 'workflow_dispatched',
+      })) ?? run;
+
+    return c.json(
+      {
+        ok: true,
+        execution_mode: 'workflow',
+        run: updatedRun,
+        workflow_instance_id: instance.id,
+        post_id: existing.id,
+      },
+      202,
+    );
+  });
+
+  app.post('/api/admin/agent/runs/:id/retry', async (c) => {
+    const id = parsePositiveInt(c.req.param('id'));
+    if (!id) {
+      return c.json({ error: 'Invalid agent run ID.' }, 400);
+    }
+
+    const db = createDatabase(c.env);
+    const failedRun = await db.getAgentRunById(id);
+    if (!failedRun) {
+      return c.json({ error: 'Agent run not found.' }, 404);
+    }
+
+    const settings = await db.getSettings();
+    const categorySlug =
+      failedRun.category_slug && failedRun.category_slug !== 'auto'
+        ? failedRun.category_slug
+        : undefined;
+
+    const newRun = await db.createAgentRun({
+      trigger_source: 'manual',
+      category_slug: categorySlug || 'auto',
+      topic: `Rerun #${failedRun.id}: ${failedRun.topic || 'Autonomous discovery'}`,
+      archetype: 'auto',
+      model_used: settings.openrouter_model,
+      status: 'queued',
+      current_stage: 'queued',
+    });
+
+    const dispatchPayload: AgentDispatchPayload = {
+      category_slug: categorySlug,
+      trigger_source: 'manual',
+      force: true,
+      run_id: newRun.id,
+    };
+
+    if (c.env.EDITORIAL_AGENT_WORKFLOW) {
+      const instance = await c.env.EDITORIAL_AGENT_WORKFLOW.create({
+        params: dispatchPayload,
+      });
+      const updatedRun =
+        (await db.updateAgentRun(newRun.id, {
+          workflow_instance_id: instance.id,
+          status: 'running',
+          current_stage: 'workflow_dispatched',
+        })) ?? newRun;
+      return c.json(
+        {
+          ok: true,
+          execution_mode: 'workflow',
+          retried_from_run_id: failedRun.id,
+          run: updatedRun,
+          workflow_instance_id: instance.id,
+        },
+        202,
+      );
+    }
+
+    const bg = runEditorialAgentDirect(db, c.env, dispatchPayload).catch(() => {});
+    try {
+      c.executionCtx.waitUntil(bg);
+    } catch {
+      void bg;
+    }
+
+    return c.json(
+      {
+        ok: true,
+        execution_mode: 'background',
+        retried_from_run_id: failedRun.id,
+        run: newRun,
+      },
+      202,
+    );
   });
 
   app.get('/api/admin/agent/runs/:id', async (c) => {
