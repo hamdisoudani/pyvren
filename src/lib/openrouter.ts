@@ -37,11 +37,12 @@ export interface OpenRouterFreeModelInfo {
 
 export const CURATED_FREE_MODELS: string[] = [
   'openrouter/free',
-  'baidu/ernie-5.5-flash-preview:free',
   'nvidia/nemotron-3.5-lightning:free',
-  'particle-ai/particle-1:free',
-  'google/gemma-4-31b-it:free',
+  'recursive/flint-v1.0:free',
   'nvidia/nemotron-3.5-super-vl:free',
+  'baidu/ernie-5.5-flash-preview:free',
+  'google/gemma-4-31b-it:free',
+  'particle-ai/particle-1:free',
   'inclusionai/ling-3.2-flash:free',
   'nvidia/nemotron-3-ultra-550b-a55b:free',
   'google/gemma-4-26b-a4b-it:free',
@@ -55,13 +56,6 @@ const CURATED_FREE_MODEL_METADATA: Record<string, OpenRouterFreeModelInfo> = {
     supports_json: true,
     supports_tools: true,
   },
-  'baidu/ernie-5.5-flash-preview:free': {
-    id: 'baidu/ernie-5.5-flash-preview:free',
-    name: 'Baidu: ERNIE 5.5 Flash Preview (free)',
-    context_length: 1_024_000,
-    supports_json: true,
-    supports_tools: true,
-  },
   'nvidia/nemotron-3.5-lightning:free': {
     id: 'nvidia/nemotron-3.5-lightning:free',
     name: 'NVIDIA: Nemotron 3.5 Lightning (free)',
@@ -69,10 +63,24 @@ const CURATED_FREE_MODEL_METADATA: Record<string, OpenRouterFreeModelInfo> = {
     supports_json: true,
     supports_tools: true,
   },
-  'particle-ai/particle-1:free': {
-    id: 'particle-ai/particle-1:free',
-    name: 'Particle AI: Particle-1 (free)',
-    context_length: 1_048_576,
+  'recursive/flint-v1.0:free': {
+    id: 'recursive/flint-v1.0:free',
+    name: 'Recursive: Flint v1.0 (free)',
+    context_length: 262_144,
+    supports_json: true,
+    supports_tools: true,
+  },
+  'nvidia/nemotron-3.5-super-vl:free': {
+    id: 'nvidia/nemotron-3.5-super-vl:free',
+    name: 'NVIDIA: Nemotron 3.5 Super VL (free)',
+    context_length: 1_000_000,
+    supports_json: true,
+    supports_tools: true,
+  },
+  'baidu/ernie-5.5-flash-preview:free': {
+    id: 'baidu/ernie-5.5-flash-preview:free',
+    name: 'Baidu: ERNIE 5.5 Flash Preview (free)',
+    context_length: 1_024_000,
     supports_json: true,
     supports_tools: true,
   },
@@ -83,10 +91,10 @@ const CURATED_FREE_MODEL_METADATA: Record<string, OpenRouterFreeModelInfo> = {
     supports_json: true,
     supports_tools: true,
   },
-  'nvidia/nemotron-3.5-super-vl:free': {
-    id: 'nvidia/nemotron-3.5-super-vl:free',
-    name: 'NVIDIA: Nemotron 3.5 Super VL (free)',
-    context_length: 1_000_000,
+  'particle-ai/particle-1:free': {
+    id: 'particle-ai/particle-1:free',
+    name: 'Particle AI: Particle-1 (free)',
+    context_length: 1_048_576,
     supports_json: true,
     supports_tools: true,
   },
@@ -595,7 +603,9 @@ export async function callOpenRouter(
     const candidateModel = candidates[candidateIdx];
     const isLastCandidate = candidateIdx === candidates.length - 1;
     let useJsonMode = Boolean(opts.jsonMode);
+    let useReasoningControl = true;
     let retriedWithoutJsonFormat = false;
+    let retriedWithoutReasoning = false;
     let transientRetries = 0;
     const maxTransientRetries = isLastCandidate ? 1 : 0;
 
@@ -609,9 +619,12 @@ export async function callOpenRouter(
       if (useJsonMode) {
         bodyPayload.response_format = { type: 'json_object' };
       }
+      if (useReasoningControl) {
+        bodyPayload.reasoning = { effort: 'low' };
+      }
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 45_000);
+      const timeout = setTimeout(() => controller.abort(), 65_000);
 
       try {
         const response = await fetch(OPENROUTER_ENDPOINT, {
@@ -620,7 +633,7 @@ export async function callOpenRouter(
             Authorization: `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
             'HTTP-Referer': referer,
-            'X-Title': 'Pyvren Research',
+            'X-Title': 'Pyvren',
           },
           body: JSON.stringify(bodyPayload),
           signal: controller.signal,
@@ -630,12 +643,25 @@ export async function callOpenRouter(
 
         if (
           response.status === 400 &&
+          useReasoningControl &&
+          !retriedWithoutReasoning &&
+          rawText.toLowerCase().includes('reasoning')
+        ) {
+          useReasoningControl = false;
+          retriedWithoutReasoning = true;
+          clearTimeout(timeout);
+          continue;
+        }
+
+        if (
+          response.status === 400 &&
           useJsonMode &&
           !retriedWithoutJsonFormat &&
           isResponseFormatRejection(rawText)
         ) {
           useJsonMode = false;
           retriedWithoutJsonFormat = true;
+          clearTimeout(timeout);
           continue;
         }
 
