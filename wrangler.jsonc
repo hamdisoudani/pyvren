@@ -11,9 +11,6 @@
   "observability": {
     "enabled": true
   },
-  "limits": {
-    "cpu_ms": 30000
-  },
   "triggers": {
     "crons": ["0 * * * *"]
   },
@@ -24,8 +21,12 @@
       "class_name": "EditorialAgentWorkflow"
     }
   ],
+  "routes": [
+    { "pattern": "pyvren.com", "custom_domain": true }
+  ],
   "vars": {
     "SITE_NAME": "The Pyvren Dispatch",
+    "BASE_URL": "https://pyvren.com",
     "DEFAULT_OPENROUTER_MODEL": "openrouter/free",
     "ENVIRONMENT": "production"
   }
