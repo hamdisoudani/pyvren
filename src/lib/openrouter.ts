@@ -36,37 +36,22 @@ export interface OpenRouterFreeModelInfo {
 }
 
 export const CURATED_FREE_MODELS: string[] = [
-  'openrouter/free',
-  'nvidia/nemotron-3.5-lightning:free',
-  'recursive/flint-v1.0:free',
-  'nvidia/nemotron-3.5-super-vl:free',
   'baidu/ernie-5.5-flash-preview:free',
+  'nvidia/nemotron-3.5-super-vl:free',
   'google/gemma-4-31b-it:free',
   'particle-ai/particle-1:free',
-  'inclusionai/ling-3.2-flash:free',
   'nvidia/nemotron-3-ultra-550b-a55b:free',
+  'inclusionai/ling-3.2-flash:free',
+  'nvidia/nemotron-3.5-lightning:free',
+  'recursive/flint-v1.0:free',
   'google/gemma-4-26b-a4b-it:free',
 ];
 
 const CURATED_FREE_MODEL_METADATA: Record<string, OpenRouterFreeModelInfo> = {
-  'openrouter/free': {
-    id: 'openrouter/free',
-    name: 'OpenRouter: Free Router (Auto)',
-    context_length: 200_000,
-    supports_json: true,
-    supports_tools: true,
-  },
-  'nvidia/nemotron-3.5-lightning:free': {
-    id: 'nvidia/nemotron-3.5-lightning:free',
-    name: 'NVIDIA: Nemotron 3.5 Lightning (free)',
-    context_length: 1_000_000,
-    supports_json: true,
-    supports_tools: true,
-  },
-  'recursive/flint-v1.0:free': {
-    id: 'recursive/flint-v1.0:free',
-    name: 'Recursive: Flint v1.0 (free)',
-    context_length: 262_144,
+  'baidu/ernie-5.5-flash-preview:free': {
+    id: 'baidu/ernie-5.5-flash-preview:free',
+    name: 'Baidu: ERNIE 5.5 Flash Preview (free)',
+    context_length: 1_024_000,
     supports_json: true,
     supports_tools: true,
   },
@@ -74,13 +59,6 @@ const CURATED_FREE_MODEL_METADATA: Record<string, OpenRouterFreeModelInfo> = {
     id: 'nvidia/nemotron-3.5-super-vl:free',
     name: 'NVIDIA: Nemotron 3.5 Super VL (free)',
     context_length: 1_000_000,
-    supports_json: true,
-    supports_tools: true,
-  },
-  'baidu/ernie-5.5-flash-preview:free': {
-    id: 'baidu/ernie-5.5-flash-preview:free',
-    name: 'Baidu: ERNIE 5.5 Flash Preview (free)',
-    context_length: 1_024_000,
     supports_json: true,
     supports_tools: true,
   },
@@ -98,6 +76,13 @@ const CURATED_FREE_MODEL_METADATA: Record<string, OpenRouterFreeModelInfo> = {
     supports_json: true,
     supports_tools: true,
   },
+  'nvidia/nemotron-3-ultra-550b-a55b:free': {
+    id: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+    name: 'NVIDIA: Nemotron 3 Ultra (free)',
+    context_length: 1_000_000,
+    supports_json: true,
+    supports_tools: true,
+  },
   'inclusionai/ling-3.2-flash:free': {
     id: 'inclusionai/ling-3.2-flash:free',
     name: 'InclusionAI: Ling 3.2 Flash (free)',
@@ -105,10 +90,17 @@ const CURATED_FREE_MODEL_METADATA: Record<string, OpenRouterFreeModelInfo> = {
     supports_json: true,
     supports_tools: true,
   },
-  'nvidia/nemotron-3-ultra-550b-a55b:free': {
-    id: 'nvidia/nemotron-3-ultra-550b-a55b:free',
-    name: 'NVIDIA: Nemotron 3 Ultra (free)',
+  'nvidia/nemotron-3.5-lightning:free': {
+    id: 'nvidia/nemotron-3.5-lightning:free',
+    name: 'NVIDIA: Nemotron 3.5 Lightning (free)',
     context_length: 1_000_000,
+    supports_json: true,
+    supports_tools: true,
+  },
+  'recursive/flint-v1.0:free': {
+    id: 'recursive/flint-v1.0:free',
+    name: 'Recursive: Flint v1.0 (free)',
+    context_length: 262_144,
     supports_json: true,
     supports_tools: true,
   },
@@ -246,18 +238,17 @@ export async function listOpenRouterFreeModels(
       const name = typeof item.name === 'string' && item.name.trim() ? item.name.trim() : id;
       if (!id || seen.has(id)) continue;
 
-      const isRouter = id === 'openrouter/free';
+      // Exclude opaque auto-routers (openrouter/free, openrouter/auto) — always route to concrete $0 LLMs
+      if (id === 'openrouter/free' || id === 'openrouter/auto') continue;
+
       const hasZeroPricing = isZeroCostPricing(item.pricing);
-      if (!isRouter) {
-        if (!isFreeOpenRouterModel(id) && !hasZeroPricing) continue;
-        if (!hasZeroPricing) continue;
-        if (NON_LLM_MODEL_RE.test(id) || NON_LLM_MODEL_RE.test(name)) continue;
-      }
+      if (!isFreeOpenRouterModel(id) && !hasZeroPricing) continue;
+      if (!hasZeroPricing) continue;
+      if (NON_LLM_MODEL_RE.test(id) || NON_LLM_MODEL_RE.test(name)) continue;
 
       // Filter strictly to text-in / text-out LLMs
       const inputModalities = item.architecture?.input_modalities;
       if (
-        !isRouter &&
         Array.isArray(inputModalities) &&
         inputModalities.length > 0 &&
         !inputModalities.some((m) => typeof m === 'string' && m.toLowerCase() === 'text')
@@ -266,7 +257,6 @@ export async function listOpenRouterFreeModels(
       }
       const outputModalities = item.architecture?.output_modalities;
       if (
-        !isRouter &&
         Array.isArray(outputModalities) &&
         outputModalities.length > 0 &&
         !outputModalities.some((m) => typeof m === 'string' && m.toLowerCase() === 'text')
@@ -275,7 +265,6 @@ export async function listOpenRouterFreeModels(
       }
       const modality = item.architecture?.modality;
       if (
-        !isRouter &&
         typeof modality === 'string' &&
         modality.includes('->') &&
         !modality.toLowerCase().includes('->text')
@@ -285,7 +274,7 @@ export async function listOpenRouterFreeModels(
 
       const parsedCtx = Number(item.context_length);
       const contextLength = Number.isFinite(parsedCtx) && parsedCtx > 0 ? parsedCtx : 32_768;
-      if (!isRouter && contextLength < MIN_FREE_LLM_CONTEXT) {
+      if (contextLength < MIN_FREE_LLM_CONTEXT) {
         continue;
       }
 
@@ -293,10 +282,9 @@ export async function listOpenRouterFreeModels(
         ? item.supported_parameters
         : [];
       const supportsJson =
-        isRouter ||
         supportedParams.includes('response_format') ||
         supportedParams.includes('structured_outputs');
-      const supportsTools = isRouter || supportedParams.includes('tools');
+      const supportsTools = supportedParams.includes('tools');
 
       seen.add(id);
       filtered.push({
@@ -494,17 +482,13 @@ export function pickDistinctFreeCriticPair(opts: {
     'nvidia/nemotron-3.5-super-vl:free';
   const criticBFamily = getOpenRouterModelFamily(criticB);
 
-  // Family-diverse fallback lists for each critic (keeping Critic A and Critic B on distinct tracks)
+  // Family-diverse fallback lists for each critic (keeping Critic A and Critic B on distinct concrete tracks)
   const criticAFallbacks = concretePool
     .filter((id) => id !== criticA && id !== criticB && getOpenRouterModelFamily(id) !== criticBFamily)
-    .slice(0, 3);
+    .slice(0, 4);
   const criticBFallbacks = concretePool
     .filter((id) => id !== criticB && id !== criticA && getOpenRouterModelFamily(id) !== criticAFamily)
-    .slice(0, 3);
-  if (freeModelsOnly) {
-    if (!criticAFallbacks.includes('openrouter/free')) criticAFallbacks.push('openrouter/free');
-    if (!criticBFallbacks.includes('openrouter/free')) criticBFallbacks.push('openrouter/free');
-  }
+    .slice(0, 4);
 
   return {
     writerFamily,

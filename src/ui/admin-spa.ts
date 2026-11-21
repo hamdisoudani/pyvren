@@ -511,7 +511,7 @@ export function renderAdminSpaHtml(
         opts += '<option value="' + esc(m.id) + '"' + sel + '>' + esc(formatFreeModelLabel(m)) + '</option>';
       });
       if (!hasMatch && state.freeModels.length === 0) {
-        opts += '<option value="openrouter/free"' + (selectedId === 'openrouter/free' ? ' selected' : '') + '>openrouter/free</option>';
+        opts += '<option value="baidu/ernie-5.5-flash-preview:free"' + (selectedId === 'baidu/ernie-5.5-flash-preview:free' ? ' selected' : '') + '>baidu/ernie-5.5-flash-preview:free</option>';
       }
       return opts;
     }
@@ -1056,7 +1056,7 @@ export function renderAdminSpaHtml(
       var mode = (state.settings && state.settings.publishing_mode) || 'draft_review';
       var isAuto = mode === 'auto_publish';
       var polling = hasActiveRuns(state.runs);
-      var defaultModel = (state.settings && state.settings.openrouter_model) || 'openrouter/free';
+      var defaultModel = (state.settings && state.settings.openrouter_model) || 'baidu/ernie-5.5-flash-preview:free';
 
       var skillOptions = '<option value="">Auto-select category</option>' +
         state.skills.map(function (s) {
@@ -1324,28 +1324,28 @@ export function renderAdminSpaHtml(
                 '<select id="st-model-picker" data-sync-target="st-model" aria-label="Pick main model" class="admin-select font-tabular">' +
                   renderFreeModelOptions(s.openrouter_model || '', 'Choose $0 LLM...') +
                 '</select>' +
-                '<input id="st-model" name="openrouter_model" data-sync-picker="st-model-picker" type="text" value="' + esc(s.openrouter_model || '') + '" placeholder="openrouter/free" class="admin-input font-tabular">' +
+                '<input id="st-model" name="openrouter_model" data-sync-picker="st-model-picker" type="text" value="' + esc(s.openrouter_model || '') + '" placeholder="baidu/ernie-5.5-flash-preview:free" class="admin-input font-tabular">' +
               '</div>' +
               '<div class="space-y-2">' +
                 '<label class="block text-xs font-semibold text-ink-secondary" for="st-fb1">Fallback model 1</label>' +
                 '<select id="st-fb1-picker" data-sync-target="st-fb1" aria-label="Pick fallback model 1" class="admin-select font-tabular">' +
                   renderFreeModelOptions(s.fallback_model_1 || '', 'Choose fallback 1...') +
                 '</select>' +
-                '<input id="st-fb1" name="fallback_model_1" data-sync-picker="st-fb1-picker" type="text" value="' + esc(s.fallback_model_1 || '') + '" placeholder="Optional fallback model 1" class="admin-input font-tabular">' +
+                '<input id="st-fb1" name="fallback_model_1" data-sync-picker="st-fb1-picker" type="text" value="' + esc(s.fallback_model_1 || '') + '" placeholder="nvidia/nemotron-3.5-super-vl:free" class="admin-input font-tabular">' +
               '</div>' +
               '<div class="space-y-2">' +
                 '<label class="block text-xs font-semibold text-ink-secondary" for="st-fb2">Fallback model 2</label>' +
                 '<select id="st-fb2-picker" data-sync-target="st-fb2" aria-label="Pick fallback model 2" class="admin-select font-tabular">' +
                   renderFreeModelOptions(s.fallback_model_2 || '', 'Choose fallback 2...') +
                 '</select>' +
-                '<input id="st-fb2" name="fallback_model_2" data-sync-picker="st-fb2-picker" type="text" value="' + esc(s.fallback_model_2 || '') + '" placeholder="Optional fallback model 2" class="admin-input font-tabular">' +
+                '<input id="st-fb2" name="fallback_model_2" data-sync-picker="st-fb2-picker" type="text" value="' + esc(s.fallback_model_2 || '') + '" placeholder="google/gemma-4-31b-it:free" class="admin-input font-tabular">' +
               '</div>' +
               '<div class="space-y-2">' +
                 '<label class="block text-xs font-semibold text-ink-secondary" for="st-judge">Primary critic model (auto-paired with 2nd family)</label>' +
                 '<select id="st-judge-picker" data-sync-target="st-judge" aria-label="Pick primary critic model" class="admin-select font-tabular">' +
                   renderFreeModelOptions(s.judge_model || '', 'Choose $0 LLM...') +
                 '</select>' +
-                '<input id="st-judge" name="judge_model" data-sync-picker="st-judge-picker" type="text" value="' + esc(s.judge_model || '') + '" placeholder="openrouter/free" class="admin-input font-tabular">' +
+                '<input id="st-judge" name="judge_model" data-sync-picker="st-judge-picker" type="text" value="' + esc(s.judge_model || '') + '" placeholder="google/gemma-4-31b-it:free" class="admin-input font-tabular">' +
               '</div>' +
             '</div>' +
             '<p class="text-xs text-ink-muted">Every draft is audited in parallel by two distinct $0 LLM families: Critic 1 checks Pyvren tone, reference images &amp; data tables; Critic 2 checks SEO, GEO &amp; AdSense compliance, triggering an automatic revision pass if anything is missing.</p>' +
