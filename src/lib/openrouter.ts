@@ -37,11 +37,12 @@ export interface OpenRouterFreeModelInfo {
 
 export const CURATED_FREE_MODELS: string[] = [
   'openrouter/free',
+  'nvidia/nemotron-3-ultra-550b-a55b:free',
+  'google/gemma-4-31b-it:free',
   'baidu/ernie-5.5-flash-preview:free',
   'inclusionai/ling-3.2-flash:free',
+  'particle-ai/particle-1:free',
   'nvidia/nemotron-3.5-super-vl:free',
-  'dots-studio/dots-3-note-preview:free',
-  'google/gemma-4-31b-it:free',
   'google/gemma-4-26b-a4b-it:free',
 ];
 
@@ -50,6 +51,20 @@ const CURATED_FREE_MODEL_METADATA: Record<string, OpenRouterFreeModelInfo> = {
     id: 'openrouter/free',
     name: 'OpenRouter: Free Router (Auto)',
     context_length: 200_000,
+    supports_json: true,
+    supports_tools: true,
+  },
+  'nvidia/nemotron-3-ultra-550b-a55b:free': {
+    id: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+    name: 'NVIDIA: Nemotron 3 Ultra (free)',
+    context_length: 1_000_000,
+    supports_json: true,
+    supports_tools: true,
+  },
+  'google/gemma-4-31b-it:free': {
+    id: 'google/gemma-4-31b-it:free',
+    name: 'Google: Gemma 4 31B IT (free)',
+    context_length: 262_144,
     supports_json: true,
     supports_tools: true,
   },
@@ -67,24 +82,17 @@ const CURATED_FREE_MODEL_METADATA: Record<string, OpenRouterFreeModelInfo> = {
     supports_json: true,
     supports_tools: true,
   },
+  'particle-ai/particle-1:free': {
+    id: 'particle-ai/particle-1:free',
+    name: 'Particle AI: Particle-1 (free)',
+    context_length: 1_048_576,
+    supports_json: true,
+    supports_tools: true,
+  },
   'nvidia/nemotron-3.5-super-vl:free': {
     id: 'nvidia/nemotron-3.5-super-vl:free',
     name: 'NVIDIA: Nemotron 3.5 Super VL (free)',
     context_length: 1_000_000,
-    supports_json: true,
-    supports_tools: true,
-  },
-  'dots-studio/dots-3-note-preview:free': {
-    id: 'dots-studio/dots-3-note-preview:free',
-    name: 'Dots Studio: Dots 3 Note Preview (free)',
-    context_length: 512_000,
-    supports_json: true,
-    supports_tools: true,
-  },
-  'google/gemma-4-31b-it:free': {
-    id: 'google/gemma-4-31b-it:free',
-    name: 'Google: Gemma 4 31B IT (free)',
-    context_length: 262_144,
     supports_json: true,
     supports_tools: true,
   },

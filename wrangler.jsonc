@@ -25,7 +25,7 @@
     { "pattern": "pyvren.com", "custom_domain": true }
   ],
   "vars": {
-    "SITE_NAME": "The Pyvren Dispatch",
+    "SITE_NAME": "Pyvren",
     "BASE_URL": "https://pyvren.com",
     "DEFAULT_OPENROUTER_MODEL": "openrouter/free",
     "ENVIRONMENT": "production"

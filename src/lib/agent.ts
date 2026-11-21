@@ -539,7 +539,13 @@ export async function stageLoadContext(
   ).slice(0, 30);
 
   const maxPostsPerCategory = Math.max(1, settings.max_posts_per_day || 2);
-  const skill = selectSkillForRun(skills, payload.category_slug, recentPosts, maxPostsPerCategory);
+  const skill = selectSkillForRun(
+    skills,
+    payload.category_slug,
+    recentPosts,
+    maxPostsPerCategory,
+    recentRuns,
+  );
   const categoryPostsCreatedLast24h = postsLast24hRecords.filter(
     (p) => (p.category_slug || '').trim().toLowerCase() === skill.slug.toLowerCase(),
   ).length;

@@ -94,6 +94,7 @@ export function selectSkillForRun(
   requestedSlug?: string,
   recentPosts: PostRecord[] = [],
   maxPostsPerCategoryPerDay?: number,
+  recentRuns: Array<{ category_slug?: string; status?: string; created_at?: string }> = [],
 ): CategorySkill {
   if (!skills || skills.length === 0) {
     throw new Error('No category skills available for editorial run.');
@@ -110,10 +111,13 @@ export function selectSkillForRun(
   const enabled = skills.filter((s) => s.enabled);
   const baseCandidates = enabled.length > 0 ? enabled : skills;
 
-  const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+  const nowMs = Date.now();
+  const cutoff24h = nowMs - 24 * 60 * 60 * 1000;
+  const recentAttemptCooldownMs = nowMs - 3 * 60 * 60 * 1000;
   const latestByCategory = new Map<string, number>();
   const countByCategory = new Map<string, number>();
   const count24hByCategory = new Map<string, number>();
+  const latestAttemptByCategory = new Map<string, number>();
 
   for (const post of recentPosts) {
     const slug = (post.category_slug || '').toLowerCase();
@@ -130,6 +134,18 @@ export function selectSkillForRun(
     }
   }
 
+  for (const run of recentRuns) {
+    const slug = (run.category_slug || '').trim().toLowerCase();
+    if (!slug || slug === 'auto') continue;
+    if (run.status !== 'completed' && run.status !== 'skipped' && run.status !== 'failed') continue;
+    const ts = run.created_at ? Date.parse(run.created_at) : NaN;
+    if (!Number.isFinite(ts)) continue;
+    const prev = latestAttemptByCategory.get(slug) ?? 0;
+    if (ts > prev) {
+      latestAttemptByCategory.set(slug, ts);
+    }
+  }
+
   // When a per-category daily cap is supplied, skip categories already at/above cap if any uncapped category exists
   let candidates = baseCandidates;
   if (typeof maxPostsPerCategoryPerDay === 'number' && maxPostsPerCategoryPerDay > 0) {
@@ -141,6 +157,14 @@ export function selectSkillForRun(
     }
   }
 
+  // Avoid repeatedly re-probing a category that was just attempted/skipped within the last 3 hours
+  const notRecentlyAttempted = candidates.filter(
+    (s) => (latestAttemptByCategory.get(s.slug.toLowerCase()) ?? 0) < recentAttemptCooldownMs,
+  );
+  if (notRecentlyAttempted.length > 0) {
+    candidates = notRecentlyAttempted;
+  }
+
   const sorted = [...candidates].sort((a, b) => {
     const slugA = a.slug.toLowerCase();
     const slugB = b.slug.toLowerCase();
@@ -150,6 +174,13 @@ export function selectSkillForRun(
     const dayB = count24hByCategory.get(slugB) ?? 0;
     if (dayA !== dayB) {
       return dayA - dayB;
+    }
+
+    // Next prefer the category least recently attempted (prevents getting stuck on quiet beats)
+    const attA = latestAttemptByCategory.get(slugA) ?? 0;
+    const attB = latestAttemptByCategory.get(slugB) ?? 0;
+    if (attA !== attB) {
+      return attA - attB;
     }
 
     const tsA = latestByCategory.get(slugA) ?? 0;
