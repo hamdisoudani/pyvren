@@ -46,6 +46,7 @@ interface HuntTopicsStepOutput {
   searchQueries: string[];
   feedItems: FeedItem[];
   resolvedModel?: string;
+  fastestModels?: string[];
   trace: TraceEntry[];
   usage: TokenUsage;
 }
@@ -170,6 +171,7 @@ export class EditorialAgentWorkflow extends WorkflowEntrypoint<WorkerEnv, AgentD
             searchQueries: result.searchQueries,
             feedItems: result.feedItems,
             ...(result.resolvedModel ? { resolvedModel: result.resolvedModel } : {}),
+            ...(result.fastestModels ? { fastestModels: result.fastestModels } : {}),
             trace,
             usage,
           };
@@ -204,6 +206,9 @@ export class EditorialAgentWorkflow extends WorkflowEntrypoint<WorkerEnv, AgentD
 
       if (hunted.resolvedModel) {
         ctx.model = hunted.resolvedModel;
+      }
+      if (Array.isArray(hunted.fastestModels) && hunted.fastestModels.length > 0) {
+        ctx.fastestModels = hunted.fastestModels;
       }
 
       // Stage 3: Deep primary-source web search & webpage extraction

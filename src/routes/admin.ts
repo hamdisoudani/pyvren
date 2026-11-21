@@ -17,7 +17,13 @@ import {
 } from '../lib/db';
 import { lintPostPayload } from '../lib/linter';
 import { compileMarkdown } from '../lib/markdown';
-import { isFreeOpenRouterModel, listOpenRouterFreeModels } from '../lib/openrouter';
+import {
+  getCachedProbeResults,
+  isFreeOpenRouterModel,
+  listAllProviderFreeModels,
+  probeWorkingModelPool,
+  selectRecommendedTop3FromProbe,
+} from '../lib/openrouter';
 import {
   buildSecurityHeaders,
   checkRateLimit,
@@ -878,12 +884,97 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
   app.get('/api/admin/openrouter/free-models', async (c) => {
     const db = createDatabase(c.env);
     const settings = await db.getSettings();
-    const models = await listOpenRouterFreeModels(c.env, c.req.query('refresh') === '1');
+    const models = await listAllProviderFreeModels(c.env, c.req.query('refresh') === '1');
+    const probeResults = getCachedProbeResults();
     return c.json({
       free_models_only: settings.free_models_only,
       current_model: settings.openrouter_model,
+      fallback_model_1: settings.fallback_model_1,
+      fallback_model_2: settings.fallback_model_2,
       judge_model: settings.judge_model,
+      providers: {
+        openrouter: Boolean(c.env.OPENROUTER_API_KEY?.trim()),
+        nvidia_nim: Boolean(c.env.NVIDIA_NIM_API_KEY?.trim()),
+      },
+      probe_results: probeResults,
       models,
+    });
+  });
+
+  app.get('/api/admin/models/probe', async (c) => {
+    const results = getCachedProbeResults();
+    return c.json({
+      results,
+      recommended: selectRecommendedTop3FromProbe(results),
+      providers: {
+        openrouter: Boolean(c.env.OPENROUTER_API_KEY?.trim()),
+        nvidia_nim: Boolean(c.env.NVIDIA_NIM_API_KEY?.trim()),
+      },
+    });
+  });
+
+  app.post('/api/admin/models/probe', async (c) => {
+    const rawBody = await parseJsonBody(c.req.raw);
+    if (!rawBody.ok) {
+      return c.json({ error: 'Invalid JSON payload.' }, 400);
+    }
+    const bodyObj = (rawBody.data && typeof rawBody.data === 'object' ? rawBody.data : {}) as {
+      models?: unknown;
+      auto_apply?: unknown;
+      timeout_ms?: unknown;
+    };
+    const db = createDatabase(c.env);
+    const settings = await db.getSettings();
+
+    const customModels = Array.isArray(bodyObj.models)
+      ? bodyObj.models.filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
+      : [];
+    const candidates = Array.from(
+      new Set(
+        [
+          ...customModels,
+          settings.openrouter_model,
+          settings.fallback_model_1 || '',
+          settings.fallback_model_2 || '',
+          settings.judge_model,
+        ].filter(Boolean),
+      ),
+    );
+    const timeoutMs =
+      typeof bodyObj.timeout_ms === 'number' && Number.isFinite(bodyObj.timeout_ms)
+        ? bodyObj.timeout_ms
+        : 8_500;
+
+    const results = await probeWorkingModelPool(c.env, candidates, {
+      forceRefresh: true,
+      timeoutMs,
+    });
+    const recommended = selectRecommendedTop3FromProbe(results);
+    const models = await listAllProviderFreeModels(c.env, false);
+
+    let updatedSettings: SiteSettings | null = null;
+    if (bodyObj.auto_apply === true && recommended.main) {
+      const patch: Partial<SiteSettings> = {
+        openrouter_model: recommended.main,
+      };
+      if (recommended.fallback_1) {
+        patch.fallback_model_1 = recommended.fallback_1;
+      }
+      if (recommended.fallback_2) {
+        patch.fallback_model_2 = recommended.fallback_2;
+      }
+      updatedSettings = await db.updateSettings(patch);
+    }
+
+    return c.json({
+      results,
+      recommended,
+      models,
+      ...(updatedSettings ? { settings: updatedSettings } : {}),
+      providers: {
+        openrouter: Boolean(c.env.OPENROUTER_API_KEY?.trim()),
+        nvidia_nim: Boolean(c.env.NVIDIA_NIM_API_KEY?.trim()),
+      },
     });
   });
 
@@ -932,7 +1023,7 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
         return c.json(
           {
             error:
-              'Free-models-only mode is enabled. Choose $0 OpenRouter :free models (or disable free_models_only first).',
+              'Free-models-only mode is enabled. Choose $0 (:free or nim/*) models (or disable free_models_only first).',
           },
           400,
         );

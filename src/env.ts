@@ -11,8 +11,9 @@ export interface WorkerEnv {
   SUPABASE_PUBLISHABLE_KEY?: string;
   SUPABASE_SECRET_KEY?: string;
 
-  // OpenRouter
+  // LLM Providers (OpenRouter + NVIDIA NIM)
   OPENROUTER_API_KEY?: string;
+  NVIDIA_NIM_API_KEY?: string;
   DEFAULT_OPENROUTER_MODEL?: string;
 
   // Optional search & reader APIs

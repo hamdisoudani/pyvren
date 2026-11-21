@@ -31,8 +31,10 @@ import {
   CURATED_FREE_MODELS,
   callOpenRouter,
   extractJsonObject,
+  getFastestHealthyModelsFromCache,
   getOpenRouterModelFamily,
   pickDistinctFreeCriticPair,
+  probeWorkingModelPool,
   resolveFreeModelChain,
 } from './openrouter';
 import { isSafePublicUrl, slugify } from './security';
@@ -53,6 +55,7 @@ export interface AgentContext {
   archetype: Archetype;
   model: string;
   judgeModel: string;
+  fastestModels?: string[];
   recentTitles: string[];
   recentSlugs: string[];
   recentPosts: PostRecord[];
@@ -78,6 +81,7 @@ export interface TopicHuntOutput {
   searchQueries: string[];
   feedItems: FeedItem[];
   resolvedModel?: string;
+  fastestModels?: string[];
 }
 
 export interface PrimarySourceDoc {
@@ -588,6 +592,14 @@ function getConfiguredFallbackModels(settings: SiteSettings): string[] {
     .filter(Boolean);
 }
 
+function getEffectiveFallbackModels(ctx: AgentContext): string[] {
+  const configured = getConfiguredFallbackModels(ctx.settings);
+  const fastest = Array.isArray(ctx.fastestModels)
+    ? ctx.fastestModels
+    : getFastestHealthyModelsFromCache();
+  return Array.from(new Set([...configured, ...fastest])).filter((m) => m && m !== ctx.model);
+}
+
 export async function stageHuntTopics(
   env: WorkerEnv,
   ctx: AgentContext,
@@ -802,10 +814,55 @@ Evaluate novelty against today's date (${todayUtc}) and the Editorial Memory Led
 
   const minNoveltyThreshold = ctx.settings.min_novelty_score ?? 68;
 
+  // Live Working-Model Pool Probe (cached 15m; skipped in unit-test mock mode when cache is empty)
+  let fastestModels = getFastestHealthyModelsFromCache();
+  if (
+    fastestModels.length === 0 &&
+    !env.__TEST_DB__ &&
+    (Boolean(env.NVIDIA_NIM_API_KEY?.trim()) || Boolean(env.OPENROUTER_API_KEY?.trim()))
+  ) {
+    try {
+      const probePool = Array.from(
+        new Set(
+          [
+            ctx.model,
+            ...getConfiguredFallbackModels(ctx.settings),
+            ctx.judgeModel,
+          ].filter(Boolean),
+        ),
+      ).slice(0, 5);
+      const probeResults = await probeWorkingModelPool(env, probePool, { timeoutMs: 7_000 });
+      const working = probeResults.filter((r) => r.ok && r.json_ok);
+      fastestModels = working.map((r) => r.id);
+      const configuredFailed = probeResults.some((r) => r.id === ctx.model && !r.ok);
+      if (configuredFailed && fastestModels.length > 0) {
+        ctx.model = fastestModels[0];
+      }
+      pushTrace(trace, {
+        stage: 'hunt_topics',
+        tool_name: 'probe_working_model_pool',
+        input: `${probeResults.length} models`,
+        summary:
+          working.length > 0
+            ? `${working.length}/${probeResults.length} working — fastest: ${working
+                .slice(0, 3)
+                .map((r) => `${r.id} (${r.latency_ms}ms)`)
+                .join(', ')}`
+            : `0/${probeResults.length} models passed fast probe; falling back to provider failover chain`,
+        ok: working.length > 0,
+      });
+    } catch {
+      // Never block editorial run if live probe encounters transient network error
+    }
+  }
+  if (fastestModels.length > 0) {
+    ctx.fastestModels = fastestModels;
+  }
+
   try {
     const completion = await callOpenRouter(env, {
       model: ctx.model,
-      fallbackModels: getConfiguredFallbackModels(ctx.settings),
+      fallbackModels: getEffectiveFallbackModels(ctx),
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
@@ -922,6 +979,7 @@ Evaluate novelty against today's date (${todayUtc}) and the Editorial Memory Led
       searchQueries,
       feedItems,
       resolvedModel,
+      ...(fastestModels.length > 0 ? { fastestModels } : {}),
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -1194,7 +1252,7 @@ Write the complete publication-ready article now as a single valid JSON object a
 
   const draftRes = await callOpenRouter(env, {
     model: ctx.model,
-    fallbackModels: getConfiguredFallbackModels(ctx.settings),
+    fallbackModels: getEffectiveFallbackModels(ctx),
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
@@ -1230,7 +1288,7 @@ Write the complete publication-ready article now as a single valid JSON object a
     });
     const retryJsonRes = await callOpenRouter(env, {
       model: resolvedModel,
-      fallbackModels: getConfiguredFallbackModels(ctx.settings),
+      fallbackModels: getEffectiveFallbackModels(ctx),
       messages: [
         { role: 'system', content: systemPrompt },
         {
@@ -1304,7 +1362,7 @@ Return the FULL corrected JSON object with ALL lint errors resolved while preser
 
     const retryRes = await callOpenRouter(env, {
       model: resolvedModel,
-      fallbackModels: getConfiguredFallbackModels(ctx.settings),
+      fallbackModels: getEffectiveFallbackModels(ctx),
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: correctionPrompt },
@@ -1414,11 +1472,16 @@ export async function stageQualityAssessment(
   const criticPair = pickDistinctFreeCriticPair({
     writerModel: ctx.model,
     preferredJudgeModel: ctx.judgeModel,
-    fallbackModels: getConfiguredFallbackModels(ctx.settings),
+    fallbackModels: getEffectiveFallbackModels(ctx),
+    fastestHealthyIds: ctx.fastestModels || getFastestHealthyModelsFromCache(),
+    nimAvailable: Boolean(env.NVIDIA_NIM_API_KEY?.trim()),
     freeModelsOnly,
   });
 
-  const sharedDraftBrief = `CATEGORY: ${ctx.skill.name} (${ctx.archetype})
+  const todayUtc = new Date().toISOString().slice(0, 10);
+
+  const sharedDraftBrief = `CURRENT DATE (UTC): ${todayUtc}
+CATEGORY: ${ctx.skill.name} (${ctx.archetype})
 TITLE (${activeDraft.title.length} chars): ${activeDraft.title}
 META DESCRIPTION (${activeDraft.description.length} chars): ${activeDraft.description}
 TLDR: ${activeDraft.tldr_summary}
@@ -1436,6 +1499,7 @@ PRIMARY SOURCES:
 ${sourceExcerpts}`;
 
   const criticASystem = `You are Critic 1 (Principal Technical Editor) reviewing a draft for ${ctx.settings.site_name}.
+CURRENT DATE (UTC): ${todayUtc}. Dates and source URLs on or before ${todayUtc} are CURRENT, NOT future-dated.
 Audit STRICTLY on four dimensions:
 1. editorial_tone (0-100): Does it match Pyvren's crisp, human-sounding staff-engineer voice (varied sentence length, concrete verdicts, zero AI slop, zero filler transitions like "Furthermore/Moreover/In conclusion", zero walls of bold-colon bullets)?
 2. factual_grounding (0-100): Are benchmarks, versions, pricing, dates, and technical claims genuinely supported by the primary sources?
@@ -1454,6 +1518,7 @@ Return ONLY valid JSON:
 }`;
 
   const criticBSystem = `You are Critic 2 (SEO, GEO/AEO & Google AdSense Publisher Compliance Auditor) reviewing a draft for ${ctx.settings.site_name}.
+CURRENT DATE (UTC): ${todayUtc}. Dates and source URLs on or before ${todayUtc} are CURRENT, NOT future-dated.
 Audit STRICTLY on four dimensions:
 1. seo_score (0-100): Search-intent headline (45-75 chars), compelling meta description (120-160 chars), logical H2/H3 hierarchy, scannable formatting, deep inline source links, zero keyword stuffing.
 2. geo_clarity (0-100): Answer-first opening, crisp TL;DR, factual key_facts with units/numbers, and genuinely useful FAQ answers extractable by Google AI Overviews, Perplexity, and ChatGPT Search.
@@ -1765,7 +1830,7 @@ Apply ALL requested editorial, table, reference-image, SEO, GEO, and AdSense ref
     try {
       const reviseRes = await callOpenRouter(env, {
         model: ctx.model,
-        fallbackModels: getConfiguredFallbackModels(ctx.settings),
+        fallbackModels: getEffectiveFallbackModels(ctx),
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: revisionPrompt },

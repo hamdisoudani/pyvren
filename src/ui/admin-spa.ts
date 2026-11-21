@@ -358,6 +358,10 @@ export function renderAdminSpaHtml(
       skills: [],
       runs: [],
       freeModels: [],
+      probeResults: [],
+      probeRecommended: null,
+      probingModels: false,
+      providers: { openrouter: false, nvidia_nim: false },
       securityLogs: [],
       ipBlocks: [],
       securityFilter: 'all',
@@ -485,9 +489,13 @@ export function renderAdminSpaHtml(
         seen[id] = true;
         var ctx = typeof item === 'object' ? Number(item.context_length || item.contextLength || 0) : 0;
         var name = typeof item === 'object' && item.name ? String(item.name).trim() : '';
+        var provider = typeof item === 'object' && item.provider ? String(item.provider) : (id.indexOf('nim/') === 0 ? 'nvidia_nim' : 'openrouter');
+        var latency = typeof item === 'object' && typeof item.latency_ms === 'number' && isFinite(item.latency_ms) ? Math.round(item.latency_ms) : null;
         out.push({
           id: id,
           name: name,
+          provider: provider,
+          latency_ms: latency,
           context_length: isFinite(ctx) && ctx > 0 ? ctx : 0
         });
       });
@@ -496,10 +504,15 @@ export function renderAdminSpaHtml(
 
     function formatFreeModelLabel(m) {
       if (!m || !m.id) return '';
-      if (m.context_length && m.context_length >= 1000) {
-        return m.id + ' (' + Math.round(m.context_length / 1000) + 'k ctx)';
+      var prefix = m.provider === 'nvidia_nim' || m.id.indexOf('nim/') === 0 ? '[NIM] ' : '[$0] ';
+      var parts = [];
+      if (m.latency_ms != null) {
+        parts.push(m.latency_ms >= 1000 ? (m.latency_ms / 1000).toFixed(1) + 's' : m.latency_ms + 'ms');
       }
-      return m.id;
+      if (m.context_length && m.context_length >= 1000) {
+        parts.push(Math.round(m.context_length / 1000) + 'k ctx');
+      }
+      return prefix + m.id + (parts.length > 0 ? ' (' + parts.join(' · ') + ')' : '');
     }
 
     function renderFreeModelOptions(selectedId, placeholderText) {
@@ -641,6 +654,10 @@ export function renderAdminSpaHtml(
         state.skills = Array.isArray(results[2]) ? results[2] : ((results[2] && results[2].skills) || []);
         state.runs = Array.isArray(results[3]) ? results[3] : ((results[3] && results[3].runs) || []);
         state.freeModels = normalizeFreeModels(results[4]);
+        state.probeResults = (results[4] && Array.isArray(results[4].probe_results)) ? results[4].probe_results : [];
+        if (results[4] && results[4].providers) {
+          state.providers = results[4].providers;
+        }
         state.securityLogs = (results[5] && Array.isArray(results[5].logs)) ? results[5].logs : [];
         state.ipBlocks = (results[6] && Array.isArray(results[6].blocks)) ? results[6].blocks : [];
         state.hasLoadedOnce = true;
@@ -677,10 +694,47 @@ export function renderAdminSpaHtml(
       try {
         var res = await apiFetch('/api/admin/openrouter/free-models?refresh=1');
         state.freeModels = normalizeFreeModels(res);
+        if (res && Array.isArray(res.probe_results)) state.probeResults = res.probe_results;
+        if (res && res.providers) state.providers = res.providers;
         toast('Updated model list (' + state.freeModels.length + ' available)', 'success');
         render();
       } catch (err) {
         toast((err && err.message) || 'Failed refreshing models', 'error');
+      }
+    }
+
+    async function probeModelsNow(autoApply) {
+      if (state.probingModels) return;
+      state.probingModels = true;
+      render();
+      try {
+        var res = await apiFetch('/api/admin/models/probe', {
+          method: 'POST',
+          body: { auto_apply: Boolean(autoApply) }
+        });
+        state.probeResults = (res && Array.isArray(res.results)) ? res.results : [];
+        state.probeRecommended = (res && res.recommended) || null;
+        if (res && Array.isArray(res.models)) {
+          state.freeModels = normalizeFreeModels(res.models);
+        }
+        if (res && res.providers) state.providers = res.providers;
+        if (res && res.settings) state.settings = res.settings;
+        var working = state.probeResults.filter(function (r) { return r && r.ok && r.json_ok; });
+        if (working.length > 0) {
+          var fastest = working[0];
+          toast(
+            (autoApply ? 'Applied top ' + Math.min(3, working.length) + ' fastest: ' : 'Tested pool: ') +
+            working.length + '/' + state.probeResults.length + ' working — fastest ' + fastest.id + ' (' + fastest.latency_ms + 'ms)',
+            'success'
+          );
+        } else {
+          toast('Probe finished: 0 models responded within timeout', 'error');
+        }
+      } catch (err) {
+        toast((err && err.message) || 'Model speed test failed', 'error');
+      } finally {
+        state.probingModels = false;
+        render();
       }
     }
 
@@ -1308,12 +1362,44 @@ export function renderAdminSpaHtml(
 
           '<div class="editorial-card p-5 sm:p-6 space-y-4">' +
             '<div class="flex flex-wrap items-center justify-between gap-2">' +
-              '<div class="flex items-center gap-2">' +
+              '<div class="flex flex-wrap items-center gap-2">' +
                 '<h2 class="text-sm font-semibold text-ink">Models &amp; Dual-Family Critic Loop</h2>' +
                 '<span class="badge-editorial badge-success">' + state.freeModels.length + ' verified $0 LLMs</span>' +
+                (state.providers && state.providers.nvidia_nim ? '<span class="badge-editorial badge-accent">NIM active</span>' : '') +
               '</div>' +
-              '<button type="button" data-action="refresh-free-models" class="btn-ghost text-xs px-2.5 py-1.5 rounded-lg">Refresh list</button>' +
+              '<div class="flex flex-wrap items-center gap-2">' +
+                '<button type="button" data-action="probe-models" ' + (state.probingModels ? 'disabled ' : '') + 'class="btn-ghost text-xs px-2.5 py-1.5 rounded-lg">' + (state.probingModels ? 'Testing pool...' : 'Test &amp; rank fastest') + '</button>' +
+                '<button type="button" data-action="probe-apply-top3" ' + (state.probingModels ? 'disabled ' : '') + 'class="btn-accent text-xs px-2.5 py-1.5 rounded-lg font-semibold">' + (state.probingModels ? 'Running...' : 'Auto-apply top 3') + '</button>' +
+                '<button type="button" data-action="refresh-free-models" class="btn-ghost text-xs px-2.5 py-1.5 rounded-lg">Refresh list</button>' +
+              '</div>' +
             '</div>' +
+            (Array.isArray(state.probeResults) && state.probeResults.length > 0
+              ? '<div class="rounded-xl border border-hairline bg-subtle/50 p-3 space-y-2">' +
+                  '<div class="flex flex-wrap items-center justify-between gap-2 text-[11px] font-tabular text-ink-muted">' +
+                    '<span>Live model pool benchmark (sorted fastest first)</span>' +
+                    '<span>' + state.probeResults.filter(function (r) { return r && r.ok && r.json_ok; }).length + '/' + state.probeResults.length + ' healthy</span>' +
+                  '</div>' +
+                  '<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">' +
+                    state.probeResults.map(function (r) {
+                      var ok = Boolean(r && r.ok && r.json_ok);
+                      var provTag = r.provider === 'nvidia_nim' ? 'NIM' : 'POOL';
+                      var speed = r.latency_ms >= 1000 ? (r.latency_ms / 1000).toFixed(2) + 's' : r.latency_ms + 'ms';
+                      return '<div class="rounded-lg border border-hairline bg-surface px-3 py-2 flex items-center justify-between gap-2 text-xs">' +
+                        '<div class="min-w-0">' +
+                          '<div class="flex items-center gap-1.5">' +
+                            '<span class="badge-editorial ' + (ok ? 'badge-success' : 'badge-danger') + '">' + (ok ? 'OK' : 'FAIL') + '</span>' +
+                            '<span class="badge-editorial font-tabular">' + provTag + '</span>' +
+                            '<span class="font-tabular text-[11px] text-ink-faint">' + esc(r.family || '') + '</span>' +
+                          '</div>' +
+                          '<p class="font-tabular text-[11px] text-ink truncate mt-1" title="' + esc(r.id) + '">' + esc(r.id) + '</p>' +
+                          (r.error ? '<p class="text-[10px] text-[var(--danger)] truncate mt-0.5">' + esc(r.error) + '</p>' : '') +
+                        '</div>' +
+                        '<span class="font-tabular text-xs font-semibold shrink-0 ' + (ok ? 'text-ink' : 'text-ink-faint') + '">' + esc(speed) + '</span>' +
+                      '</div>';
+                    }).join('') +
+                  '</div>' +
+                '</div>'
+              : '') +
             '<div class="flex items-center gap-2.5">' +
               '<input id="st-free-only" name="free_models_only" type="checkbox"' + (s.free_models_only !== false ? ' checked' : '') + ' class="h-4 w-4 accent-[var(--accent)]">' +
               '<label for="st-free-only" class="text-sm text-ink cursor-pointer">Restrict to $0 input / $0 output free LLMs only</label>' +
@@ -1324,21 +1410,21 @@ export function renderAdminSpaHtml(
                 '<select id="st-model-picker" data-sync-target="st-model" aria-label="Pick main model" class="admin-select font-tabular">' +
                   renderFreeModelOptions(s.openrouter_model || '', 'Choose $0 LLM...') +
                 '</select>' +
-                '<input id="st-model" name="openrouter_model" data-sync-picker="st-model-picker" type="text" value="' + esc(s.openrouter_model || '') + '" placeholder="baidu/ernie-5.5-flash-preview:free" class="admin-input font-tabular">' +
+                '<input id="st-model" name="openrouter_model" data-sync-picker="st-model-picker" type="text" value="' + esc(s.openrouter_model || '') + '" placeholder="nim/nvidia/nemotron-3.5-super-vl-120b-a12b" class="admin-input font-tabular">' +
               '</div>' +
               '<div class="space-y-2">' +
                 '<label class="block text-xs font-semibold text-ink-secondary" for="st-fb1">Fallback model 1</label>' +
                 '<select id="st-fb1-picker" data-sync-target="st-fb1" aria-label="Pick fallback model 1" class="admin-select font-tabular">' +
                   renderFreeModelOptions(s.fallback_model_1 || '', 'Choose fallback 1...') +
                 '</select>' +
-                '<input id="st-fb1" name="fallback_model_1" data-sync-picker="st-fb1-picker" type="text" value="' + esc(s.fallback_model_1 || '') + '" placeholder="nvidia/nemotron-3.5-super-vl:free" class="admin-input font-tabular">' +
+                '<input id="st-fb1" name="fallback_model_1" data-sync-picker="st-fb1-picker" type="text" value="' + esc(s.fallback_model_1 || '') + '" placeholder="baidu/ernie-5.5-flash-preview:free" class="admin-input font-tabular">' +
               '</div>' +
               '<div class="space-y-2">' +
                 '<label class="block text-xs font-semibold text-ink-secondary" for="st-fb2">Fallback model 2</label>' +
                 '<select id="st-fb2-picker" data-sync-target="st-fb2" aria-label="Pick fallback model 2" class="admin-select font-tabular">' +
                   renderFreeModelOptions(s.fallback_model_2 || '', 'Choose fallback 2...') +
                 '</select>' +
-                '<input id="st-fb2" name="fallback_model_2" data-sync-picker="st-fb2-picker" type="text" value="' + esc(s.fallback_model_2 || '') + '" placeholder="google/gemma-4-31b-it:free" class="admin-input font-tabular">' +
+                '<input id="st-fb2" name="fallback_model_2" data-sync-picker="st-fb2-picker" type="text" value="' + esc(s.fallback_model_2 || '') + '" placeholder="nim/nvidia/nemotron-3-ultra-550b-a55b" class="admin-input font-tabular">' +
               '</div>' +
               '<div class="space-y-2">' +
                 '<label class="block text-xs font-semibold text-ink-secondary" for="st-judge">Primary critic model (auto-paired with 2nd family)</label>' +
@@ -1348,7 +1434,7 @@ export function renderAdminSpaHtml(
                 '<input id="st-judge" name="judge_model" data-sync-picker="st-judge-picker" type="text" value="' + esc(s.judge_model || '') + '" placeholder="google/gemma-4-31b-it:free" class="admin-input font-tabular">' +
               '</div>' +
             '</div>' +
-            '<p class="text-xs text-ink-muted">Every draft is audited in parallel by two distinct $0 LLM families: Critic 1 checks Pyvren tone, reference images &amp; data tables; Critic 2 checks SEO, GEO &amp; AdSense compliance, triggering an automatic revision pass if anything is missing.</p>' +
+            '<p class="text-xs text-ink-muted">The backend automatically probes active providers, prefers the fastest healthy JSON-compliant models, fails over seamlessly across providers on rate limits, and audits every draft with two distinct model families.</p>' +
           '</div>' +
 
           '<div class="editorial-card p-5 sm:p-6 space-y-4">' +
@@ -1989,6 +2075,10 @@ export function renderAdminSpaHtml(
           toast('Refreshed', 'success');
         } else if (action === 'refresh-free-models') {
           await refreshFreeModelsOnly();
+        } else if (action === 'probe-models') {
+          await probeModelsNow(false);
+        } else if (action === 'probe-apply-top3') {
+          await probeModelsNow(true);
         } else if (action === 'refresh-runs') {
           await refreshRunsOnly();
           render();
