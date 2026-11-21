@@ -2831,7 +2831,7 @@ export async function improveExistingPost(
     published_at:
       existing.published_at || (nextStatus === 'published' ? new Date().toISOString() : null),
     last_edited_by: editedBy,
-  });
+  }, { actor: 'admin', adminEmail: editedBy });
 
   const savedPost = updatedPost || existing;
 

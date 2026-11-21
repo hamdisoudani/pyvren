@@ -305,7 +305,7 @@ export class EditorialAgentWorkflow extends WorkflowEntrypoint<WorkerEnv, AgentD
                   existing.published_at ||
                   (nextStatus === 'published' ? new Date().toISOString() : null),
                 last_edited_by: 'agent-auto-improve',
-              })) || existing;
+              }, { actor: 'admin', adminEmail: 'agent-auto-improve' })) || existing;
 
             const reason = `Auto-improved post #${saved.id} (${existing.quality_score} -> ${assessed.finalScore}/100, lint=${finalLint.passed ? 'PASS' : 'FAIL'}, status=${nextStatus})`;
             await db.updateAgentRun(prep.runId, {
