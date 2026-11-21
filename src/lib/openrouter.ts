@@ -37,12 +37,13 @@ export interface OpenRouterFreeModelInfo {
 
 export const CURATED_FREE_MODELS: string[] = [
   'openrouter/free',
-  'nvidia/nemotron-3-ultra-550b-a55b:free',
-  'google/gemma-4-31b-it:free',
   'baidu/ernie-5.5-flash-preview:free',
-  'inclusionai/ling-3.2-flash:free',
+  'nvidia/nemotron-3.5-lightning:free',
   'particle-ai/particle-1:free',
+  'google/gemma-4-31b-it:free',
   'nvidia/nemotron-3.5-super-vl:free',
+  'inclusionai/ling-3.2-flash:free',
+  'nvidia/nemotron-3-ultra-550b-a55b:free',
   'google/gemma-4-26b-a4b-it:free',
 ];
 
@@ -54,20 +55,6 @@ const CURATED_FREE_MODEL_METADATA: Record<string, OpenRouterFreeModelInfo> = {
     supports_json: true,
     supports_tools: true,
   },
-  'nvidia/nemotron-3-ultra-550b-a55b:free': {
-    id: 'nvidia/nemotron-3-ultra-550b-a55b:free',
-    name: 'NVIDIA: Nemotron 3 Ultra (free)',
-    context_length: 1_000_000,
-    supports_json: true,
-    supports_tools: true,
-  },
-  'google/gemma-4-31b-it:free': {
-    id: 'google/gemma-4-31b-it:free',
-    name: 'Google: Gemma 4 31B IT (free)',
-    context_length: 262_144,
-    supports_json: true,
-    supports_tools: true,
-  },
   'baidu/ernie-5.5-flash-preview:free': {
     id: 'baidu/ernie-5.5-flash-preview:free',
     name: 'Baidu: ERNIE 5.5 Flash Preview (free)',
@@ -75,10 +62,10 @@ const CURATED_FREE_MODEL_METADATA: Record<string, OpenRouterFreeModelInfo> = {
     supports_json: true,
     supports_tools: true,
   },
-  'inclusionai/ling-3.2-flash:free': {
-    id: 'inclusionai/ling-3.2-flash:free',
-    name: 'InclusionAI: Ling 3.2 Flash (free)',
-    context_length: 1_048_576,
+  'nvidia/nemotron-3.5-lightning:free': {
+    id: 'nvidia/nemotron-3.5-lightning:free',
+    name: 'NVIDIA: Nemotron 3.5 Lightning (free)',
+    context_length: 1_000_000,
     supports_json: true,
     supports_tools: true,
   },
@@ -89,9 +76,30 @@ const CURATED_FREE_MODEL_METADATA: Record<string, OpenRouterFreeModelInfo> = {
     supports_json: true,
     supports_tools: true,
   },
+  'google/gemma-4-31b-it:free': {
+    id: 'google/gemma-4-31b-it:free',
+    name: 'Google: Gemma 4 31B IT (free)',
+    context_length: 262_144,
+    supports_json: true,
+    supports_tools: true,
+  },
   'nvidia/nemotron-3.5-super-vl:free': {
     id: 'nvidia/nemotron-3.5-super-vl:free',
     name: 'NVIDIA: Nemotron 3.5 Super VL (free)',
+    context_length: 1_000_000,
+    supports_json: true,
+    supports_tools: true,
+  },
+  'inclusionai/ling-3.2-flash:free': {
+    id: 'inclusionai/ling-3.2-flash:free',
+    name: 'InclusionAI: Ling 3.2 Flash (free)',
+    context_length: 1_048_576,
+    supports_json: true,
+    supports_tools: true,
+  },
+  'nvidia/nemotron-3-ultra-550b-a55b:free': {
+    id: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+    name: 'NVIDIA: Nemotron 3 Ultra (free)',
     context_length: 1_000_000,
     supports_json: true,
     supports_tools: true,
@@ -485,6 +493,10 @@ export function pickDistinctFreeCriticPair(opts: {
   const criticBFallbacks = concretePool
     .filter((id) => id !== criticB && id !== criticA && getOpenRouterModelFamily(id) !== criticAFamily)
     .slice(0, 3);
+  if (freeModelsOnly) {
+    if (!criticAFallbacks.includes('openrouter/free')) criticAFallbacks.push('openrouter/free');
+    if (!criticBFallbacks.includes('openrouter/free')) criticBFallbacks.push('openrouter/free');
+  }
 
   return {
     writerFamily,
@@ -599,7 +611,7 @@ export async function callOpenRouter(
       }
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 90_000);
+      const timeout = setTimeout(() => controller.abort(), 45_000);
 
       try {
         const response = await fetch(OPENROUTER_ENDPOINT, {
