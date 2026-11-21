@@ -290,15 +290,33 @@ function collectCrawledImages(primarySources: PrimarySourceDoc[]): ExtractedWebI
   return out;
 }
 
+function trimAtWordBoundary(text: string, maxLen: number): string {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (clean.length <= maxLen) return clean;
+  const slice = clean.slice(0, maxLen);
+  // Prefer ending cleanly at a sentence period if it keeps >= 75% of budget
+  const lastPeriod = slice.lastIndexOf('. ');
+  if (lastPeriod >= Math.floor(maxLen * 0.72)) {
+    return slice.slice(0, lastPeriod + 1).trim();
+  }
+  const lastSpace = slice.lastIndexOf(' ');
+  const trimmed = (lastSpace >= Math.floor(maxLen * 0.65) ? slice.slice(0, lastSpace) : slice)
+    .replace(/[,;:\-–—\s]+$/, '')
+    .trim();
+  return trimmed;
+}
+
 function normalizeDraftPayload(
   raw: Partial<DraftArticlePayload>,
   fallbackTopic: string,
   primarySources: PrimarySourceDoc[],
 ): DraftArticlePayload {
-  const title = typeof raw.title === 'string' && raw.title.trim() ? raw.title.trim() : fallbackTopic.slice(0, 68);
+  const rawTitle = typeof raw.title === 'string' && raw.title.trim() ? raw.title.trim() : fallbackTopic.slice(0, 68);
+  const title = rawTitle.length > 70 ? trimAtWordBoundary(rawTitle, 68) : rawTitle;
   const slugSource = typeof raw.slug === 'string' && raw.slug.trim() ? raw.slug.trim() : title;
   const slug = slugify(slugSource, 80) || slugify(title, 80) || 'technical-briefing';
-  const description = typeof raw.description === 'string' ? raw.description.trim() : '';
+  const rawDescription = typeof raw.description === 'string' ? raw.description.trim() : '';
+  const description = rawDescription.length > 165 ? trimAtWordBoundary(rawDescription, 160) : rawDescription;
   const tldr_summary = typeof raw.tldr_summary === 'string' ? raw.tldr_summary.trim() : '';
   let body_markdown = typeof raw.body_markdown === 'string' ? raw.body_markdown.trim() : '';
 
@@ -652,10 +670,9 @@ export async function stageHuntTopics(
 
   const seedQueries = hasExplicitTopic
     ? [cleanRequested]
-    : (ctx.skill.search_queries_json || []).slice(0, 2);
+    : (ctx.skill.search_queries_json || []).slice(0, 1);
 
-  const shouldSearchSeed =
-    hasExplicitTopic || Boolean(env.SERPER_API_KEY?.trim()) || rawFeedItems.length < 3;
+  const shouldSearchSeed = hasExplicitTopic || rawFeedItems.length < 4;
   const rawSearchHits: SearchSourceItem[] = shouldSearchSeed
     ? (
         await Promise.all(
@@ -1071,7 +1088,7 @@ export async function stageDeepResearch(
   const hasSerperKey = Boolean(env.SERPER_API_KEY?.trim());
   const queries = Array.from(
     new Set([topic, ...searchQueries].map((q) => q.trim()).filter(Boolean)),
-  ).slice(0, hasSerperKey ? 3 : 2);
+  ).slice(0, hasSerperKey ? 2 : 1);
 
   // Conserve Cloudflare Workers Free-plan subrequest budget: skip DuckDuckGo HTML scraping when
   // authoritative feeds already supply >= 3 deep candidates and SERPER_API_KEY is not configured.
@@ -1149,8 +1166,8 @@ export async function stageDeepResearch(
   candidates.sort((a, b) => b.score - a.score);
 
   const primarySources: PrimarySourceDoc[] = [];
-  const maxReadsToAttempt = Math.min(candidates.length, 6);
-  const targetSourceCount = 4;
+  const maxReadsToAttempt = Math.min(candidates.length, 4);
+  const targetSourceCount = 3;
 
   for (let i = 0; i < maxReadsToAttempt && primarySources.length < targetSourceCount; i++) {
     const candidate = candidates[i];
@@ -2151,12 +2168,8 @@ Return ONLY the complete SOTA revised RFC 8259 JSON object ready for immediate p
               summary: `Auto-improved draft via ${revModel} (round ${round}): verified score ${oldScore} -> ${postAudit.overall}/100 (lint=${candidateLint.passed ? 'PASS' : 'FAIL'}, table=${hasMarkdownDataTable(candidateDraft.body_markdown)}, images=${hasGroundedReferenceImages(candidateDraft)})`,
               ok: true,
             });
-            // Stop early once SOTA bar is cleared with clean lint & zero blocking issues
-            if (
-              activeLint.passed &&
-              latestAudit.overall >= Math.max(minPublishScore, 84) &&
-              latestAudit.combinedBlocking.length === 0
-            ) {
+            // Stop early once deterministic lint passes and verified dual-critic score clears publishing bar
+            if (activeLint.passed && latestAudit.overall >= Math.max(minPublishScore, 80)) {
               break;
             }
           } else {

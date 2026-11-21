@@ -205,7 +205,7 @@ export class EditorialAgentWorkflow extends WorkflowEntrypoint<WorkerEnv, AgentD
         trackedRunId = prep.runId;
 
         if (typeof step.sleep === 'function') {
-          await step.sleep('yield-budget-improve', '10 seconds');
+          await step.sleep('yield-budget-improve', '25 seconds');
         }
 
         const improved = await step.do<PersistStepOutput>(
@@ -480,7 +480,7 @@ export class EditorialAgentWorkflow extends WorkflowEntrypoint<WorkerEnv, AgentD
 
       // Reset Cloudflare Workers Free-plan 50-subrequest invocation budget before drafting
       if (typeof step.sleep === 'function') {
-        await step.sleep('yield-budget-draft', '10 seconds');
+        await step.sleep('yield-budget-draft', '15 seconds');
       }
 
       // Stage 4: Draft structured JSON & deterministic self-correction loop
@@ -517,9 +517,9 @@ export class EditorialAgentWorkflow extends WorkflowEntrypoint<WorkerEnv, AgentD
         },
       );
 
-      // Reset Cloudflare Workers Free-plan 50-subrequest invocation budget before dual-critic + persist
+      // Reset Cloudflare Workers Free-plan 50-subrequest invocation budget before dual-critic
       if (typeof step.sleep === 'function') {
-        await step.sleep('yield-budget-critic', '10 seconds');
+        await step.sleep('yield-budget-critic', '25 seconds');
       }
 
       // Stage 5: Cross-family dual-model critic review & revision loop
@@ -558,6 +558,11 @@ export class EditorialAgentWorkflow extends WorkflowEntrypoint<WorkerEnv, AgentD
           };
         },
       );
+
+      // Reset Cloudflare Workers Free-plan 50-subrequest invocation budget before final persistence
+      if (typeof step.sleep === 'function') {
+        await step.sleep('yield-budget-persist', '15 seconds');
+      }
 
       // Stage 6: Persist article with hard publishing gate & finalize agent_runs
       const persisted = await step.do<PersistStepOutput>(

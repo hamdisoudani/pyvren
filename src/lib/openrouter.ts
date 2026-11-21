@@ -221,7 +221,7 @@ const FREE_MODELS_CACHE_TTL_MS = 15 * 60 * 1_000;
 const PROBE_CACHE_TTL_MS = 15 * 60 * 1_000;
 const TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);
 const FAILOVER_STATUSES = new Set([402, 404, 429, 502, 503, 504]);
-const MAX_FAILOVER_CANDIDATES = 8;
+const MAX_FAILOVER_CANDIDATES = 4;
 const RATE_LIMIT_COOLDOWN_MS = 2 * 60 * 1_000;
 
 interface FreeModelsCache {
@@ -646,7 +646,7 @@ export async function probeWorkingModelPool(
           return Boolean(orKey);
         }),
     ),
-  ).slice(0, 6);
+  ).slice(0, 4);
 
   const timeoutMs = Math.max(2_000, Math.min(15_000, opts?.timeoutMs ?? 8_000));
   const referer = normalizeBaseUrl(env.BASE_URL);
