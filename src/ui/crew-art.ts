@@ -195,6 +195,17 @@ export function renderTopicSketchIcon(slugOrAll: string, size = 18): string {
         <path d="M6.2 6.5L7.6 7.9L10.2 5.2" stroke="var(--topic-accent, var(--accent))" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>`;
 
+    case 'generative-media-comfyui':
+      // Hand-drawn cinema frame + ComfyUI connected workflow nodes
+      return `<svg ${common}>
+        <rect x="2.8" y="4.2" width="18.4" height="15.6" rx="3.4" fill="var(--bg-surface)" stroke="currentColor" stroke-width="1.85" stroke-linejoin="round"/>
+        <path d="M2.8 8.4H21.2" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M7.2 4.2L9 8.4M12.6 4.2L14.4 8.4M17.2 4.2L18.6 8.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <circle cx="8" cy="14.2" r="2" fill="var(--topic-accent, var(--accent))" stroke="currentColor" stroke-width="1.4"/>
+        <circle cx="16.2" cy="14.2" r="2" fill="var(--bg-surface)" stroke="var(--topic-accent, var(--accent))" stroke-width="1.8"/>
+        <path d="M10 14.2C11.8 14.2 12.4 14.2 14.2 14.2" stroke="var(--topic-accent, var(--accent))" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>`;
+
     default:
       // 'all' / folded sketchbook newspaper dispatch
       return `<svg ${common}>
@@ -385,6 +396,19 @@ export function renderTopicCrewSvg(categorySlug: string, instanceKey = 't'): str
           <ellipse cx="0" cy="0" rx="8.5" ry="19" fill="none" stroke-opacity="0.5"/>
           <line x1="-19" y1="0" x2="19" y2="0" stroke-opacity="0.5"/>
           <line x1="14" y1="14" x2="25" y2="25" stroke="var(--topic-accent, var(--accent))" stroke-width="3.2"/>
+        </g>`;
+      break;
+    case 'generative-media-comfyui':
+      propSvg = `
+        <g transform="translate(116, 48)" stroke="var(--ink-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="0" y="6" width="52" height="38" rx="6" fill="var(--bg-elevated)"/>
+          <line x1="0" y1="16" x2="52" y2="16" stroke-width="1.9"/>
+          <line x1="12" y1="6" x2="17" y2="16" stroke-width="1.8"/>
+          <line x1="25" y1="6" x2="30" y2="16" stroke-width="1.8"/>
+          <line x1="38" y1="6" x2="43" y2="16" stroke-width="1.8"/>
+          <circle cx="15" cy="30" r="5" fill="var(--topic-accent, var(--accent))"/>
+          <circle cx="37" cy="30" r="5" fill="var(--bg-surface)" stroke="var(--topic-accent, var(--accent))" stroke-width="2.2"/>
+          <path d="M20 30 H32" stroke="var(--topic-accent, var(--accent))" stroke-width="2.2"/>
         </g>`;
       break;
     default:

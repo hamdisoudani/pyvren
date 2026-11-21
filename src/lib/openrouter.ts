@@ -368,6 +368,128 @@ export function resolveFreeModelChain(
   return ordered;
 }
 
+/**
+ * Normalizes an OpenRouter model ID into its underlying provider/architecture family
+ * (e.g. `google/gemma-4-31b-it:free` -> `google`, `meta-llama/llama-3.3-70b-instruct:free` -> `meta-llama`).
+ */
+export function getOpenRouterModelFamily(modelId: string | undefined): string {
+  const raw = (modelId || '').trim().toLowerCase();
+  if (!raw || raw === 'openrouter/free' || raw === 'openrouter/auto') {
+    return 'router';
+  }
+  const slashIdx = raw.indexOf('/');
+  const prefix = slashIdx > 0 ? raw.slice(0, slashIdx) : raw;
+  const slug = slashIdx > 0 ? raw.slice(slashIdx + 1) : raw;
+
+  if (prefix.includes('google') || slug.includes('gemma') || slug.includes('gemini')) return 'google';
+  if (prefix.includes('meta') || slug.includes('llama')) return 'meta-llama';
+  if (prefix.includes('deepseek') || slug.includes('deepseek')) return 'deepseek';
+  if (prefix.includes('qwen') || slug.includes('qwen')) return 'qwen';
+  if (prefix.includes('nvidia') || slug.includes('nemotron')) return 'nvidia';
+  if (prefix.includes('mistral') || slug.includes('mistral') || slug.includes('ministral')) return 'mistral';
+  if (prefix.includes('openai') || slug.includes('gpt-oss') || slug.includes('gpt-')) return 'openai';
+  if (prefix.includes('anthropic') || slug.includes('claude')) return 'anthropic';
+  if (prefix.includes('z-ai') || slug.includes('glm-')) return 'z-ai';
+  if (prefix.includes('moonshot') || slug.includes('kimi')) return 'moonshot';
+  if (prefix.includes('nous') || slug.includes('hermes')) return 'nous';
+  if (prefix.includes('minimax') || slug.includes('minimax')) return 'minimax';
+  return prefix || 'unknown';
+}
+
+export interface DistinctCriticPair {
+  writerFamily: string;
+  criticA: string;
+  criticAFamily: string;
+  criticAFallbacks: string[];
+  criticB: string;
+  criticBFamily: string;
+  criticBFallbacks: string[];
+  crossFamily: boolean;
+}
+
+/**
+ * Selects TWO distinct $0 OpenRouter LLM families for cross-family editorial review:
+ * - Critic A (Editorial craft, Pyvren tone, reference images & tables) — different family from writer when possible
+ * - Critic B (SEO, GEO/AEO & AdSense compliance) — strictly different family from Critic A (and writer when possible)
+ */
+export function pickDistinctFreeCriticPair(opts: {
+  writerModel?: string;
+  preferredJudgeModel?: string;
+  fallbackModels?: string[];
+  liveFreeIds?: string[];
+  freeModelsOnly?: boolean;
+}): DistinctCriticPair {
+  const freeModelsOnly = opts.freeModelsOnly !== false;
+  const writerFamily = getOpenRouterModelFamily(opts.writerModel);
+
+  // Build deduplicated pool of concrete models (skip generic router 'openrouter/free' when choosing explicit families)
+  const rawPool = resolveFreeModelChain(
+    opts.preferredJudgeModel,
+    freeModelsOnly,
+    opts.liveFreeIds,
+    opts.fallbackModels,
+  );
+  const concretePool = rawPool.filter(
+    (id) => id !== 'openrouter/free' && id !== 'openrouter/auto' && !NON_LLM_MODEL_RE.test(id),
+  );
+
+  // Also ensure curated multi-family free models are always represented as backup
+  for (const id of CURATED_FREE_MODELS) {
+    if (id !== 'openrouter/free' && !concretePool.includes(id)) {
+      concretePool.push(id);
+    }
+  }
+
+  // Pick Critic A: prefer concrete model from a DIFFERENT family than writer (or preferredJudgeModel if concrete & different)
+  const preferredClean = (opts.preferredJudgeModel || '').trim();
+  const preferredIsConcrete =
+    preferredClean.length > 0 &&
+    preferredClean !== 'openrouter/free' &&
+    preferredClean !== 'openrouter/auto' &&
+    (!freeModelsOnly || isFreeOpenRouterModel(preferredClean));
+
+  let criticA = '';
+  if (preferredIsConcrete && getOpenRouterModelFamily(preferredClean) !== writerFamily) {
+    criticA = preferredClean;
+  } else {
+    criticA =
+      concretePool.find((id) => getOpenRouterModelFamily(id) !== writerFamily) ||
+      (preferredIsConcrete ? preferredClean : concretePool[0]) ||
+      'google/gemma-4-31b-it:free';
+  }
+  const criticAFamily = getOpenRouterModelFamily(criticA);
+
+  // Pick Critic B: MUST be a DIFFERENT family than Critic A (and ideally also different from writer)
+  const criticB =
+    concretePool.find((id) => {
+      const fam = getOpenRouterModelFamily(id);
+      return fam !== criticAFamily && fam !== writerFamily;
+    }) ||
+    concretePool.find((id) => getOpenRouterModelFamily(id) !== criticAFamily) ||
+    concretePool.find((id) => id !== criticA) ||
+    'nvidia/nemotron-3.5-super-vl:free';
+  const criticBFamily = getOpenRouterModelFamily(criticB);
+
+  // Family-diverse fallback lists for each critic (keeping Critic A and Critic B on distinct tracks)
+  const criticAFallbacks = concretePool
+    .filter((id) => id !== criticA && id !== criticB && getOpenRouterModelFamily(id) !== criticBFamily)
+    .slice(0, 3);
+  const criticBFallbacks = concretePool
+    .filter((id) => id !== criticB && id !== criticA && getOpenRouterModelFamily(id) !== criticAFamily)
+    .slice(0, 3);
+
+  return {
+    writerFamily,
+    criticA,
+    criticAFamily,
+    criticAFallbacks,
+    criticB,
+    criticBFamily,
+    criticBFallbacks,
+    crossFamily: criticAFamily !== criticBFamily && criticAFamily !== 'router' && criticBFamily !== 'router',
+  };
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

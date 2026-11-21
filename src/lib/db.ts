@@ -153,15 +153,16 @@ export const DEFAULT_SEEDED_SKILLS: CategorySkill[] = [
     system_instructions:
       'Lead with hard numbers: tokens/second, TTFT, $/1M input & output tokens, VRAM footprint at FP8/Q4_K_M, effective context accuracy before context rot (~32K+ tokens), and real latency tradeoffs across vLLM, SGLang, llama.cpp, or OpenRouter routing. Compare at least 3 models or runtimes in a crisp Markdown table. Explain exact failure modes (context poisoning, distraction, KV-cache OOM) rather than repeating vendor press releases. Vary sentence length naturally like a real benchmark engineer.',
     research_feeds_json: [
+      'openrouter_free_models',
       'openrouter_newest_models',
       'huggingface_trending',
       'github_llm_releases',
-      'arxiv_ai',
+      'hn_ai_benchmarks',
     ],
     search_queries_json: [
-      'open weights local LLM coding benchmark quantization VRAM tokens per second',
-      'context engineering context rot long context benchmark LLM',
-      'small language models SLM vs frontier LLM latency cost enterprise',
+      'new LLM model release OpenRouter free model benchmark tokens per second',
+      'open weights local LLM coding benchmark quantization VRAM context rot',
+      'frontier LLM leaderboard ARC-AGI SWE-bench GPQA cost comparison',
     ],
     preferred_archetypes_json: ['benchmark-index', 'architecture-analysis'],
     required_sections_json: [
@@ -261,36 +262,88 @@ export const DEFAULT_SEEDED_SKILLS: CategorySkill[] = [
   {
     id: 6,
     slug: 'dev-tooling-benchmarks',
-    name: 'Critical CVEs, CISA KEV & Supply-Chain Patch Logs',
+    name: 'Cyber Breaches, Zero-Days & CISA KEV Patch Logs',
     description:
-      'Rapid-response technical teardowns of newly exploited CISA KEV vulnerabilities, critical GitHub Security Advisories, npm/PyPI supply-chain attacks, and zero-downtime upgrade logs.',
+      'Rapid-response technical teardowns of major cybersecurity breaches, newly exploited CISA KEV zero-days, critical GitHub Security Advisories, supply-chain attacks, and defensive remediation logs.',
     enabled: true,
-    priority: 82,
-    target_audience: 'DevSecOps engineers, incident responders, and backend maintainers',
+    priority: 90,
+    target_audience: 'DevSecOps engineers, incident responders, CISOs, and backend maintainers',
     system_instructions:
-      'Lead immediately with the blast-radius summary: exact CVE ID, CVSS score, CISA KEV due date, affected version ranges, and fixed version. Never pad the opening with generic security platitudes ("cybersecurity is more important than ever"). Provide the exact root-cause mechanism from the primary advisory/commit, copy-paste upgrade & lockfile verification commands, and a concrete regression test or CI check.',
-    research_feeds_json: ['cisa_kev', 'github_advisories', 'hn_top_infra'],
+      'Lead immediately with verified incident facts and blast radius: affected organizations/systems, CVE IDs, CVSS scores, CISA KEV due dates, initial access vector, affected version ranges, and confirmed fixes. Keep framing strictly defensive and AdSense-safe (never publish working exploit payloads or attack instructions). Provide the technical root cause from primary advisories/incident reports, a clear affected-systems & remediation Markdown table, and exact defensive upgrade/detection commands.',
+    research_feeds_json: [
+      'bleepingcomputer_rss',
+      'thehackernews_rss',
+      'cisa_kev',
+      'github_advisories',
+    ],
     search_queries_json: [
-      'CISA KEV newly added exploited vulnerability remediation 2026',
-      'GitHub Security Advisory critical npm python rust vulnerability patch',
+      'major cybersecurity breach incident technical root cause remediation 2026',
+      'CISA KEV newly added zero-day exploited vulnerability patch guidance',
+      'GitHub Security Advisory critical npm python supply-chain attack fix',
     ],
     preferred_archetypes_json: ['advisory-teardown', 'migration-fix-log'],
     required_sections_json: [
-      'Affected Versions & Remediation Matrix',
-      'Technical Root Cause (Primary Advisory)',
-      'Exact Upgrade & Verification Commands',
-      'CI Detection & Regression Guard',
+      'Incident Timeline & Blast-Radius Table',
+      'Technical Root Cause & Attack Vector (Defensive Analysis)',
+      'Exact Patch, Upgrade & Verification Commands',
+      'Detection Rules & Hardening Checklist',
     ],
     quality_rubric_json: {
       min_primary_sources: 3,
       require_table_or_code: true,
-      min_words: 600,
+      min_words: 650,
       geo_faq_count: 3,
     },
     banned_patterns_json: [
       'cybersecurity is more important than ever',
       'stay vigilant',
       'bad actors are always evolving',
+    ],
+    created_at: SEED_TIMESTAMP,
+    updated_at: SEED_TIMESTAMP,
+  },
+  {
+    id: 7,
+    slug: 'generative-media-comfyui',
+    name: 'ComfyUI Workflows, AI Video & Open Media Models',
+    description:
+      'Hands-on engineering guides to ComfyUI custom nodes & production graphs, newly dropped open and frontier AI video/image/audio models (Wan, Flux, LTX-Video, Kling, Veo), VRAM quantization, and workflow best practices.',
+    enabled: true,
+    priority: 92,
+    target_audience: 'Creative technologists, generative media engineers, ComfyUI builders, and AI video teams',
+    system_instructions:
+      'Write like an engineer running local & cloud ComfyUI graphs on real GPUs. Lead with concrete specs: model architecture, parameter count, resolution/FPS limits, VRAM footprint at FP16/FP8/GGUF Q4, seconds-per-clip on RTX 4090/5090/H100, and exact ComfyUI node wiring or JSON workflow parameters (sampler, scheduler, CFG, TeaCache/SageAttention flags). Always include a Markdown comparison table across competing video/image models or node setups, reference grounded visual samples from crawled model cards when available, and include a candid "Failure Modes & VRAM Traps" section.',
+    research_feeds_json: [
+      'comfyui_releases',
+      'github_trending_comfyui_video',
+      'huggingface_trending_media',
+      'hn_ai_video_media',
+    ],
+    search_queries_json: [
+      'ComfyUI custom nodes workflow best practices FP8 GGUF VRAM benchmark 2026',
+      'new open source AI video model release Wan LTX-Video HunyuanVideo benchmark',
+      'Flux Qwen-Image Veo Kling Sora video generation quality latency comparison',
+    ],
+    preferred_archetypes_json: ['benchmark-index', 'architecture-analysis'],
+    required_sections_json: [
+      'Model & Workflow Verdict',
+      'VRAM, Speed & Quality Comparison Table',
+      'ComfyUI Node Graph & Reproducible Settings',
+      'Failure Modes, Artifacts & VRAM Optimization',
+      'Best-Practice Production Checklist',
+    ],
+    quality_rubric_json: {
+      min_primary_sources: 3,
+      require_table_or_code: true,
+      min_words: 700,
+      geo_faq_count: 3,
+      require_concrete_metrics: true,
+    },
+    banned_patterns_json: [
+      'hollywood is dead',
+      'stunning visuals with one click',
+      'unleash your creativity',
+      'magic prompt',
     ],
     created_at: SEED_TIMESTAMP,
     updated_at: SEED_TIMESTAMP,
@@ -1852,7 +1905,7 @@ export async function countPostsCreatedInLastHours(
   db: DatabaseAdapter,
   hours = 24,
 ): Promise<number> {
-  const posts = await db.listPosts({ limit: 50, excludeHeavyHtml: true });
+  const posts = await db.listPosts({ limit: 100, excludeHeavyHtml: true });
   const cutoffMs = Date.now() - Math.max(0, hours) * 60 * 60 * 1000;
 
   let count = 0;
@@ -1863,6 +1916,26 @@ export async function countPostsCreatedInLastHours(
     }
   }
   return count;
+}
+
+export async function countPostsByCategoryInLastHours(
+  db: DatabaseAdapter,
+  hours = 24,
+): Promise<Record<string, number>> {
+  const posts = await db.listPosts({ limit: 100, excludeHeavyHtml: true });
+  const cutoffMs = Date.now() - Math.max(0, hours) * 60 * 60 * 1000;
+  const counts: Record<string, number> = {};
+
+  for (const post of posts) {
+    const createdMs = new Date(post.created_at).getTime();
+    if (Number.isFinite(createdMs) && createdMs >= cutoffMs) {
+      const slug = (post.category_slug || '').trim().toLowerCase();
+      if (slug) {
+        counts[slug] = (counts[slug] || 0) + 1;
+      }
+    }
+  }
+  return counts;
 }
 
 export function createDatabase(env: WorkerEnv): DatabaseAdapter {

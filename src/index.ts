@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { WorkerEnv } from './env';
 import { runEditorialAgentDirect } from './lib/agent';
 import {
+  countPostsByCategoryInLastHours,
   countPostsCreatedInLastHours,
   createDatabase,
   DEFAULT_SEEDED_SETTINGS,
@@ -24,6 +25,7 @@ export function shouldExecuteScheduledDiscovery(
   now: Date,
   postsLast24h: number,
   hasActiveRun: boolean,
+  enabledCategoryCount = 1,
 ): { shouldRun: boolean; reason: string } {
   if (!settings.schedule_enabled) {
     return { shouldRun: false, reason: 'schedule_disabled' };
@@ -33,8 +35,9 @@ export function shouldExecuteScheduledDiscovery(
     return { shouldRun: false, reason: 'active_run_in_progress' };
   }
 
-  const maxPostsPerDay = Math.max(1, settings.max_posts_per_day || 2);
-  if (postsLast24h >= maxPostsPerDay) {
+  const maxPostsPerCategory = Math.max(1, settings.max_posts_per_day || 2);
+  const totalDailyCap = maxPostsPerCategory * Math.max(1, enabledCategoryCount);
+  if (postsLast24h >= totalDailyCap) {
     return { shouldRun: false, reason: 'daily_post_cap_reached' };
   }
 
@@ -185,16 +188,29 @@ const worker: ExportedHandler<WorkerEnv> = {
       return;
     }
 
-    const [activeRun, postsLast24h] = await Promise.all([
+    const [activeRun, postsLast24h, categoryCountsLast24h, allSkills] = await Promise.all([
       recoverStaleAndFindActiveRun(db),
       countPostsCreatedInLastHours(db, 24),
+      countPostsByCategoryInLastHours(db, 24),
+      db.listSkills(true),
     ]);
+
+    const enabledCategoryCount = Math.max(1, allSkills.length);
+    const maxPostsPerCategory = Math.max(1, settings.max_posts_per_day || 2);
+    const hasUncappedCategory =
+      allSkills.length === 0 ||
+      allSkills.some((s) => (categoryCountsLast24h[s.slug.toLowerCase()] || 0) < maxPostsPerCategory);
+
+    if (!hasUncappedCategory) {
+      return;
+    }
 
     const decision = shouldExecuteScheduledDiscovery(
       settings,
       now,
       postsLast24h,
       activeRun !== null,
+      enabledCategoryCount,
     );
 
     if (!decision.shouldRun) {

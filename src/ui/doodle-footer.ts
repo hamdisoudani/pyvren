@@ -22,17 +22,17 @@ const LINK_COLUMNS: DoodleLinkColumn[] = [
     links: [
       { label: 'All Stories', href: '/blog' },
       { label: 'Coding & MCP', href: '/category/ai-coding-agents-mcp' },
-      { label: 'AI Security', href: '/category/ai-security-jailbreaks' },
-      { label: 'Frontier LLMs', href: '/category/ai-llms' },
+      { label: 'LLMs & Free Models', href: '/category/ai-llms' },
+      { label: 'ComfyUI & Video', href: '/category/generative-media-comfyui' },
     ],
   },
   {
     heading: 'Topics',
     links: [
+      { label: 'AI Security', href: '/category/ai-security-jailbreaks' },
+      { label: 'Breaches & CVEs', href: '/category/dev-tooling-benchmarks' },
       { label: 'Cloud & GPU', href: '/category/cloud-gpu-infra' },
       { label: 'Web & Search', href: '/category/agentic-browser-web-data' },
-      { label: 'CVEs & Patches', href: '/category/dev-tooling-benchmarks' },
-      { label: 'Search Archive', href: '/blog#search' },
     ],
   },
   {

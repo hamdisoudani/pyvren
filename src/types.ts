@@ -100,6 +100,29 @@ export interface HumanitySignals {
   human_likeness_score: number;
 }
 
+export interface DualCriticEntry {
+  role: 'editorial_visuals_tone' | 'seo_geo_adsense';
+  model: string;
+  family: string;
+  verdict: 'pass' | 'revise' | 'unavailable';
+  scores: Record<string, number>;
+  blocking_issues: string[];
+  concrete_fixes: string[];
+  notes: string;
+}
+
+export interface DualCriticReviewSummary {
+  writer_model: string;
+  writer_family: string;
+  critics: DualCriticEntry[];
+  cross_family_verified: boolean;
+  has_reference_images: boolean;
+  has_data_table: boolean;
+  revision_triggered: boolean;
+  revision_applied: boolean;
+  revision_reason?: string;
+}
+
 export interface QualityBreakdown {
   overall: number;
   seo_structure: number;
@@ -111,6 +134,7 @@ export interface QualityBreakdown {
   warnings: string[];
   judge_notes?: string;
   humanity_signals?: HumanitySignals;
+  dual_critic_review?: DualCriticReviewSummary;
 }
 
 export type PostCreateRecord = Omit<

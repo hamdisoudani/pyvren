@@ -686,6 +686,287 @@ export async function fetchAuthoritativeFeed(
         return items;
       }
 
+      case 'openrouter_free_models': {
+        const url = 'https://openrouter.ai/api/v1/models';
+        const res = await safeFetch(url, {
+          headers: { 'User-Agent': BOT_USER_AGENT, Accept: 'application/json' },
+          timeoutMs: 14_000,
+          maxBytes: 4_000_000,
+        });
+        if (res.status < 200 || res.status >= 300) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const parsed = JSON.parse(res.text) as {
+          data?: Array<{
+            id?: string;
+            name?: string;
+            created?: number;
+            context_length?: number;
+            description?: string;
+            pricing?: { prompt?: string | number; completion?: string | number };
+          }>;
+        };
+        const isZeroCost = (val?: string | number): boolean => {
+          if (val === undefined || val === null || val === '') return false;
+          const n = typeof val === 'number' ? val : Number.parseFloat(String(val));
+          return Number.isFinite(n) && n === 0;
+        };
+        const models = Array.isArray(parsed.data) ? parsed.data : [];
+        const newestFree = [...models]
+          .filter(
+            (m) =>
+              Boolean(m?.id && m.id.includes('/')) &&
+              (m.id!.endsWith(':free') ||
+                (isZeroCost(m.pricing?.prompt) && isZeroCost(m.pricing?.completion))) &&
+              isZeroCost(m.pricing?.prompt) &&
+              isZeroCost(m.pricing?.completion) &&
+              (m.context_length ?? 0) >= 8192,
+          )
+          .sort((a, b) => (Number(b.created) || 0) - (Number(a.created) || 0))
+          .slice(0, 12);
+
+        const items: FeedItem[] = [];
+        for (const m of newestFree) {
+          const id = m.id!.trim().replace(/^\/+/, '');
+          const modelUrl = `https://openrouter.ai/${id}`;
+          if (!isSafePublicUrl(modelUrl).ok) continue;
+          const name = (m.name || id).trim();
+          const ctxLabel = m.context_length
+            ? m.context_length >= 1000
+              ? `${Math.round(m.context_length / 1000)}k`
+              : String(m.context_length)
+            : 'N/A';
+          const createdIso =
+            m.created && Number.isFinite(m.created) && m.created > 0
+              ? new Date(m.created * 1000).toISOString()
+              : undefined;
+          items.push({
+            title: normalizeWhitespace(`New $0 Free LLM on OpenRouter: ${name} (${id}) — ${ctxLabel} ctx`),
+            url: modelUrl,
+            summary: normalizeWhitespace(
+              `Verified $0/M input & $0/M output free LLM | Context: ${m.context_length ?? 'N/A'} tokens. ${m.description || ''}`,
+            ).slice(0, 420),
+            published: createdIso,
+          });
+        }
+        pushTrace(trace, {
+          stage: 'hunt_topics',
+          tool_name: 'fetchAuthoritativeFeed',
+          input: feedName,
+          url,
+          summary: `Fetched ${items.length} newest $0 free LLMs from OpenRouter API`,
+          ok: true,
+        });
+        return items;
+      }
+
+      case 'comfyui_releases': {
+        const repos = [
+          'comfyanonymous/ComfyUI',
+          'Comfy-Org/ComfyUI_frontend',
+          'Comfy-Org/ComfyUI-Manager',
+        ];
+        const settled = await Promise.allSettled(
+          repos.map(async (repo) => {
+            const url = `https://api.github.com/repos/${repo}/releases?per_page=3`;
+            const res = await safeFetch(url, {
+              headers: {
+                'User-Agent': BOT_USER_AGENT,
+                Accept: 'application/vnd.github+json',
+              },
+              timeoutMs: 12_000,
+              maxBytes: 500_000,
+            });
+            if (res.status < 200 || res.status >= 300) {
+              throw new Error(`${repo} HTTP ${res.status}`);
+            }
+            const releases = JSON.parse(res.text) as Array<{
+              tag_name?: string;
+              name?: string;
+              html_url?: string;
+              published_at?: string;
+              created_at?: string;
+              body?: string;
+            }>;
+            return (Array.isArray(releases) ? releases : [])
+              .slice(0, 3)
+              .filter((rel) => Boolean(rel.html_url && isSafePublicUrl(rel.html_url).ok))
+              .map((rel): FeedItem => {
+                const tag = rel.tag_name || rel.name || 'release';
+                const pub = rel.published_at || rel.created_at;
+                const notesExcerpt = normalizeWhitespace(
+                  (rel.body || '').replace(/[#*`>]/g, ' '),
+                ).slice(0, 360);
+                return {
+                  title: normalizeWhitespace(
+                    `${repo} ${tag}${rel.name && rel.name !== rel.tag_name ? ` — ${rel.name}` : ''}`,
+                  ),
+                  url: rel.html_url!,
+                  summary: normalizeWhitespace(
+                    `${pub ? `[Released ${pub}] ` : ''}${notesExcerpt || `New ${repo} release ${tag}`}`,
+                  ).slice(0, 420),
+                  published: pub,
+                };
+              });
+          }),
+        );
+        const fulfilled = settled.filter(
+          (r): r is PromiseFulfilledResult<FeedItem[]> => r.status === 'fulfilled',
+        );
+        if (fulfilled.length === 0) {
+          throw new Error('All ComfyUI GitHub release fetches failed');
+        }
+        const items = fulfilled
+          .flatMap((r) => r.value)
+          .sort((a, b) => (b.published || '').localeCompare(a.published || ''));
+        pushTrace(trace, {
+          stage: 'hunt_topics',
+          tool_name: 'fetchAuthoritativeFeed',
+          input: feedName,
+          url: 'https://api.github.com/repos/Comfy-Org/*/releases',
+          summary: `Fetched ${items.length} latest ComfyUI core, frontend & manager releases`,
+          ok: true,
+        });
+        return items;
+      }
+
+      case 'github_trending_comfyui_video': {
+        const url = `https://api.github.com/search/repositories?q=(ComfyUI+OR+%22video+generation%22+OR+%22Wan2%22+OR+%22LTX-Video%22+OR+HunyuanVideo+OR+Flux)+pushed:%3E${fourteenDaysAgoIsoDate}&sort=stars&order=desc&per_page=10`;
+        return await fetchGithubTrendingRepos(
+          feedName,
+          url,
+          'trending ComfyUI & AI video/image GitHub repositories',
+          trace,
+        );
+      }
+
+      case 'huggingface_trending_media': {
+        const pipelines = ['text-to-video', 'image-to-video', 'text-to-image'];
+        const settled = await Promise.allSettled(
+          pipelines.map(async (pipe) => {
+            const url = `https://huggingface.co/api/models?pipeline_tag=${encodeURIComponent(pipe)}&sort=trendingScore&direction=-1&limit=5`;
+            const res = await safeFetch(url, {
+              headers: { 'User-Agent': BOT_USER_AGENT, Accept: 'application/json' },
+              timeoutMs: 12_000,
+              maxBytes: 400_000,
+            });
+            if (res.status < 200 || res.status >= 300) {
+              throw new Error(`${pipe} HTTP ${res.status}`);
+            }
+            const rows = JSON.parse(res.text) as Array<{
+              id?: string;
+              modelId?: string;
+              likes?: number;
+              downloads?: number;
+              lastModified?: string;
+              pipeline_tag?: string;
+            }>;
+            return (Array.isArray(rows) ? rows : [])
+              .map((m): FeedItem | null => {
+                const id = (m.id || m.modelId || '').trim();
+                if (!id || !id.includes('/')) return null;
+                const modelUrl = `https://huggingface.co/${id}`;
+                if (!isSafePublicUrl(modelUrl).ok) return null;
+                return {
+                  title: normalizeWhitespace(
+                    `Trending Open Media Model (${m.pipeline_tag || pipe}): ${id}`,
+                  ),
+                  url: modelUrl,
+                  summary: normalizeWhitespace(
+                    `Hugging Face trending ${m.pipeline_tag || pipe} release — ${m.likes ?? 0} likes, ${m.downloads ?? 0} downloads.`,
+                  ),
+                  published: m.lastModified,
+                };
+              })
+              .filter((item): item is FeedItem => item !== null);
+          }),
+        );
+        const fulfilled = settled.filter(
+          (r): r is PromiseFulfilledResult<FeedItem[]> => r.status === 'fulfilled',
+        );
+        if (fulfilled.length === 0) {
+          throw new Error('All Hugging Face media model fetches failed');
+        }
+        const seen = new Set<string>();
+        const items = fulfilled
+          .flatMap((r) => r.value)
+          .filter((item) => {
+            if (seen.has(item.url)) return false;
+            seen.add(item.url);
+            return true;
+          })
+          .slice(0, 12);
+        pushTrace(trace, {
+          stage: 'hunt_topics',
+          tool_name: 'fetchAuthoritativeFeed',
+          input: feedName,
+          url: 'https://huggingface.co/api/models?pipeline_tag=text-to-video,image-to-video,text-to-image',
+          summary: `Fetched ${items.length} trending Hugging Face video & image models`,
+          ok: true,
+        });
+        return items;
+      }
+
+      case 'hn_ai_video_media': {
+        const url = `https://hn.algolia.com/api/v1/search_by_date?query=ComfyUI%20OR%20%22video%20model%22%20OR%20Veo%20OR%20Sora%20OR%20Kling%20OR%20Wan%20OR%20Flux%20OR%20LTX&tags=story&numericFilters=points>15,created_at_i>${sevenDaysAgoUnix}`;
+        return await fetchAlgoliaHnStories(feedName, url, 'HN ComfyUI & AI video/image stories (>15 pts, 7d)', trace);
+      }
+
+      case 'hn_ai_benchmarks': {
+        const url = `https://hn.algolia.com/api/v1/search_by_date?query=benchmark%20OR%20leaderboard%20OR%20%22ARC-AGI%22%20OR%20%22SWE-bench%22%20OR%20OpenRouter%20OR%20%22open%20weights%22&tags=story&numericFilters=points>25,created_at_i>${sevenDaysAgoUnix}`;
+        return await fetchAlgoliaHnStories(feedName, url, 'HN AI benchmark & model release stories (>25 pts, 7d)', trace);
+      }
+
+      case 'bleepingcomputer_rss': {
+        const url = 'https://www.bleepingcomputer.com/feed/';
+        const res = await safeFetch(url, {
+          headers: {
+            'User-Agent': BOT_USER_AGENT,
+            Accept: 'application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8',
+          },
+          timeoutMs: 12_000,
+          maxBytes: 800_000,
+        });
+        if (res.status < 200 || res.status >= 300) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const items = parseRssOrAtomXml(res.text, 12);
+        pushTrace(trace, {
+          stage: 'hunt_topics',
+          tool_name: 'fetchAuthoritativeFeed',
+          input: feedName,
+          url,
+          summary: `Fetched ${items.length} BleepingComputer breach & cybersecurity RSS entries`,
+          ok: true,
+        });
+        return items;
+      }
+
+      case 'thehackernews_rss': {
+        const url = 'https://feeds.feedburner.com/TheHackersNews';
+        const res = await safeFetch(url, {
+          headers: {
+            'User-Agent': BOT_USER_AGENT,
+            Accept: 'application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8',
+          },
+          timeoutMs: 12_000,
+          maxBytes: 800_000,
+        });
+        if (res.status < 200 || res.status >= 300) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const items = parseRssOrAtomXml(res.text, 12);
+        pushTrace(trace, {
+          stage: 'hunt_topics',
+          tool_name: 'fetchAuthoritativeFeed',
+          input: feedName,
+          url,
+          summary: `Fetched ${items.length} The Hacker News cybersecurity breach & CVE RSS entries`,
+          ok: true,
+        });
+        return items;
+      }
+
       case 'cloudflare_changelog_rss': {
         const url = 'https://developers.cloudflare.com/changelog/rss/index.xml';
         const res = await safeFetch(url, {

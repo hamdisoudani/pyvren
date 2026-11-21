@@ -66,6 +66,8 @@ interface DraftRefineStepOutput {
 interface QualityAssessmentStepOutput {
   finalScore: number;
   finalBreakdown: QualityBreakdown;
+  revisedDraft?: DraftArticlePayload;
+  revisedLintResult?: LintResult;
   trace: TraceEntry[];
   usage: TokenUsage;
 }
@@ -292,6 +294,8 @@ export class EditorialAgentWorkflow extends WorkflowEntrypoint<WorkerEnv, AgentD
           return {
             finalScore: result.finalScore,
             finalBreakdown: result.finalBreakdown,
+            ...(result.revisedDraft ? { revisedDraft: result.revisedDraft } : {}),
+            ...(result.revisedLintResult ? { revisedLintResult: result.revisedLintResult } : {}),
             trace,
             usage,
           };
@@ -310,8 +314,8 @@ export class EditorialAgentWorkflow extends WorkflowEntrypoint<WorkerEnv, AgentD
           const { post, run } = await stagePersistWithGate(
             db,
             ctx,
-            drafted.draft,
-            drafted.lintResult,
+            assessed.revisedDraft || drafted.draft,
+            assessed.revisedLintResult || drafted.lintResult,
             assessed.finalScore,
             assessed.finalBreakdown,
             loaded.runId,

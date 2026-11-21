@@ -61,6 +61,7 @@ export function renderAdminSpaHtml(
     'cloud-gpu-infra': renderTopicSketchIcon('cloud-gpu-infra', 15),
     'agentic-browser-web-data': renderTopicSketchIcon('agentic-browser-web-data', 15),
     'dev-tooling-benchmarks': renderTopicSketchIcon('dev-tooling-benchmarks', 15),
+    'generative-media-comfyui': renderTopicSketchIcon('generative-media-comfyui', 15),
     default: renderTopicSketchIcon('all', 15),
   };
 
@@ -304,32 +305,32 @@ export function renderAdminSpaHtml(
 
     var SCHEDULE_PRESETS = [
       {
-        label: '3x / day (08, 14, 20 UTC)',
-        runs_per_day: 3,
-        preferred_hours_utc_json: [8, 14, 20],
+        label: 'Full 7-beat (16x/day · 2/cat = 14/day)',
+        runs_per_day: 16,
+        preferred_hours_utc_json: [0, 2, 4, 6, 8, 9, 10, 12, 13, 14, 16, 17, 18, 20, 21, 22],
+        max_posts_per_day: 2,
+        min_novelty_score: 65
+      },
+      {
+        label: 'Hourly sweep (24x/day · 2/cat = 14/day)',
+        runs_per_day: 24,
+        preferred_hours_utc_json: [],
         max_posts_per_day: 2,
         min_novelty_score: 68
       },
       {
-        label: '2x / day (09, 18 UTC)',
-        runs_per_day: 2,
-        preferred_hours_utc_json: [9, 18],
+        label: 'Balanced (7x/day · 1/cat = 7/day)',
+        runs_per_day: 7,
+        preferred_hours_utc_json: [2, 6, 9, 12, 15, 18, 21],
         max_posts_per_day: 1,
-        min_novelty_score: 72
+        min_novelty_score: 70
       },
       {
-        label: '4x / day (00, 06, 12, 18 UTC)',
-        runs_per_day: 4,
-        preferred_hours_utc_json: [0, 6, 12, 18],
-        max_posts_per_day: 3,
-        min_novelty_score: 65
-      },
-      {
-        label: '1x / day (13 UTC)',
-        runs_per_day: 1,
-        preferred_hours_utc_json: [13],
-        max_posts_per_day: 1,
-        min_novelty_score: 75
+        label: 'Light (3x/day · 08, 14, 20 UTC)',
+        runs_per_day: 3,
+        preferred_hours_utc_json: [8, 14, 20],
+        max_posts_per_day: 2,
+        min_novelty_score: 68
       }
     ];
 
@@ -1242,16 +1243,22 @@ export function renderAdminSpaHtml(
 
     function renderSettingsTab() {
       var s = state.settings || {};
-      var prefHoursVal = Array.isArray(s.preferred_hours_utc_json) && s.preferred_hours_utc_json.length > 0
+      var prefHoursVal = Array.isArray(s.preferred_hours_utc_json)
         ? s.preferred_hours_utc_json.join(', ')
         : '8, 14, 20';
+      var enabledCats = (state.skills || []).filter(function (sk) { return sk && sk.enabled; }).length || 7;
+      var perCatCap = s.max_posts_per_day != null ? Number(s.max_posts_per_day) : 2;
+      var totalDailyCapacity = perCatCap * enabledCats;
 
       return '<section class="space-y-6">' +
         '<h1 class="font-masthead text-2xl sm:text-3xl font-black text-ink">Settings</h1>' +
 
         '<form id="settings-form" class="space-y-5">' +
           '<div class="editorial-card p-5 sm:p-6 space-y-4">' +
-            '<h2 class="text-sm font-semibold text-ink">Publishing &amp; Schedule</h2>' +
+            '<div class="flex flex-wrap items-center justify-between gap-2">' +
+              '<h2 class="text-sm font-semibold text-ink">Publishing &amp; Schedule</h2>' +
+              '<span class="badge-editorial badge-accent font-tabular">Up to ' + totalDailyCapacity + ' posts/day (' + perCatCap + '/cat × ' + enabledCats + ' beats)</span>' +
+            '</div>' +
 
             '<div class="flex flex-wrap items-center gap-2">' +
               SCHEDULE_PRESETS.map(function (sp, idx) {
@@ -1272,16 +1279,16 @@ export function renderAdminSpaHtml(
                 '<input id="st-score" name="min_publish_score" type="number" min="50" max="100" value="' + esc(s.min_publish_score != null ? s.min_publish_score : 80) + '" class="admin-input">' +
               '</div>' +
               '<div class="space-y-1.5">' +
-                '<label class="block text-xs font-semibold text-ink-secondary" for="st-rpd">Runs per day (1–24)</label>' +
+                '<label class="block text-xs font-semibold text-ink-secondary" for="st-rpd">Discovery runs per day (1–24)</label>' +
                 '<input id="st-rpd" name="runs_per_day" type="number" min="1" max="24" value="' + esc(s.runs_per_day != null ? s.runs_per_day : 3) + '" class="admin-input">' +
               '</div>' +
               '<div class="space-y-1.5">' +
-                '<label class="block text-xs font-semibold text-ink-secondary" for="st-hours">Preferred UTC hours</label>' +
-                '<input id="st-hours" name="preferred_hours_utc" type="text" value="' + esc(prefHoursVal) + '" placeholder="8, 14, 20" class="admin-input font-tabular">' +
+                '<label class="block text-xs font-semibold text-ink-secondary" for="st-hours">Preferred UTC hours (blank = even interval)</label>' +
+                '<input id="st-hours" name="preferred_hours_utc" type="text" value="' + esc(prefHoursVal) + '" placeholder="Leave blank for even hourly sweep" class="admin-input font-tabular">' +
               '</div>' +
               '<div class="space-y-1.5">' +
-                '<label class="block text-xs font-semibold text-ink-secondary" for="st-max-posts">Max posts per day (1–24)</label>' +
-                '<input id="st-max-posts" name="max_posts_per_day" type="number" min="1" max="24" value="' + esc(s.max_posts_per_day != null ? s.max_posts_per_day : 2) + '" class="admin-input">' +
+                '<label class="block text-xs font-semibold text-ink-secondary" for="st-max-posts">Max posts per category / day (1–24)</label>' +
+                '<input id="st-max-posts" name="max_posts_per_day" type="number" min="1" max="24" value="' + esc(perCatCap) + '" class="admin-input">' +
               '</div>' +
               '<div class="space-y-1.5">' +
                 '<label class="block text-xs font-semibold text-ink-secondary" for="st-novelty">Minimum novelty score (0–100)</label>' +
@@ -1302,7 +1309,7 @@ export function renderAdminSpaHtml(
           '<div class="editorial-card p-5 sm:p-6 space-y-4">' +
             '<div class="flex flex-wrap items-center justify-between gap-2">' +
               '<div class="flex items-center gap-2">' +
-                '<h2 class="text-sm font-semibold text-ink">Models</h2>' +
+                '<h2 class="text-sm font-semibold text-ink">Models &amp; Dual-Family Critic Loop</h2>' +
                 '<span class="badge-editorial badge-success">' + state.freeModels.length + ' verified $0 LLMs</span>' +
               '</div>' +
               '<button type="button" data-action="refresh-free-models" class="btn-ghost text-xs px-2.5 py-1.5 rounded-lg">Refresh list</button>' +
@@ -1334,13 +1341,14 @@ export function renderAdminSpaHtml(
                 '<input id="st-fb2" name="fallback_model_2" data-sync-picker="st-fb2-picker" type="text" value="' + esc(s.fallback_model_2 || '') + '" placeholder="Optional fallback model 2" class="admin-input font-tabular">' +
               '</div>' +
               '<div class="space-y-2">' +
-                '<label class="block text-xs font-semibold text-ink-secondary" for="st-judge">Audit model</label>' +
-                '<select id="st-judge-picker" data-sync-target="st-judge" aria-label="Pick audit model" class="admin-select font-tabular">' +
+                '<label class="block text-xs font-semibold text-ink-secondary" for="st-judge">Primary critic model (auto-paired with 2nd family)</label>' +
+                '<select id="st-judge-picker" data-sync-target="st-judge" aria-label="Pick primary critic model" class="admin-select font-tabular">' +
                   renderFreeModelOptions(s.judge_model || '', 'Choose $0 LLM...') +
                 '</select>' +
                 '<input id="st-judge" name="judge_model" data-sync-picker="st-judge-picker" type="text" value="' + esc(s.judge_model || '') + '" placeholder="openrouter/free" class="admin-input font-tabular">' +
               '</div>' +
             '</div>' +
+            '<p class="text-xs text-ink-muted">Every draft is audited in parallel by two distinct $0 LLM families: Critic 1 checks Pyvren tone, reference images &amp; data tables; Critic 2 checks SEO, GEO &amp; AdSense compliance, triggering an automatic revision pass if anything is missing.</p>' +
           '</div>' +
 
           '<div class="editorial-card p-5 sm:p-6 space-y-4">' +

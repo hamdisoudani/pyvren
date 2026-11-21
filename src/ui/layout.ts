@@ -47,9 +47,15 @@ export const TOPIC_ATLAS_ITEMS = [
   },
   {
     href: '/category/ai-llms',
-    label: 'Frontier LLMs',
+    label: 'LLMs & Free Models',
     slug: 'ai-llms',
-    blurb: 'Model weights, local SLMs, VRAM & context windows.',
+    blurb: 'Frontier drops, $0 OpenRouter models, local SLMs & benchmarks.',
+  },
+  {
+    href: '/category/generative-media-comfyui',
+    label: 'ComfyUI & Video',
+    slug: 'generative-media-comfyui',
+    blurb: 'ComfyUI graphs, custom nodes, AI video models & VRAM math.',
   },
   {
     href: '/category/cloud-gpu-infra',
@@ -65,9 +71,9 @@ export const TOPIC_ATLAS_ITEMS = [
   },
   {
     href: '/category/dev-tooling-benchmarks',
-    label: 'CVEs & Patches',
+    label: 'Breaches & CVEs',
     slug: 'dev-tooling-benchmarks',
-    blurb: 'Exploited advisories, root causes & clean upgrades.',
+    blurb: 'Major cyber breaches, CISA KEV zero-days & clean patch logs.',
   },
 ] as const;
 

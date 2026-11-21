@@ -57,13 +57,22 @@ export const CATEGORY_META: Record<string, CategoryMeta> = {
     motif: 'web',
   },
   'dev-tooling-benchmarks': {
-    shortLabel: 'CVES & PATCHES',
-    navLabel: 'CVEs & Patches',
+    shortLabel: 'BREACHES & CVES',
+    navLabel: 'Breaches & CVEs',
     crewName: 'Morel',
     color: '#C2410C',
     darkColor: '#FB923C',
     bgTint: '#FFF7ED',
     motif: 'radar',
+  },
+  'generative-media-comfyui': {
+    shortLabel: 'COMFYUI & VIDEO',
+    navLabel: 'ComfyUI & Video',
+    crewName: 'Kino',
+    color: '#BE185D',
+    darkColor: '#F472B6',
+    bgTint: '#FDF2F8',
+    motif: 'frames',
   },
 };
 

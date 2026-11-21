@@ -93,6 +93,7 @@ export function selectSkillForRun(
   skills: CategorySkill[],
   requestedSlug?: string,
   recentPosts: PostRecord[] = [],
+  maxPostsPerCategoryPerDay?: number,
 ): CategorySkill {
   if (!skills || skills.length === 0) {
     throw new Error('No category skills available for editorial run.');
@@ -107,10 +108,12 @@ export function selectSkillForRun(
   }
 
   const enabled = skills.filter((s) => s.enabled);
-  const candidates = enabled.length > 0 ? enabled : skills;
+  const baseCandidates = enabled.length > 0 ? enabled : skills;
 
+  const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
   const latestByCategory = new Map<string, number>();
   const countByCategory = new Map<string, number>();
+  const count24hByCategory = new Map<string, number>();
 
   for (const post of recentPosts) {
     const slug = (post.category_slug || '').toLowerCase();
@@ -121,11 +124,34 @@ export function selectSkillForRun(
       latestByCategory.set(slug, ts);
     }
     countByCategory.set(slug, (countByCategory.get(slug) ?? 0) + 1);
+    const createdMs = Date.parse(post.created_at);
+    if (Number.isFinite(createdMs) && createdMs >= cutoff24h) {
+      count24hByCategory.set(slug, (count24hByCategory.get(slug) ?? 0) + 1);
+    }
+  }
+
+  // When a per-category daily cap is supplied, skip categories already at/above cap if any uncapped category exists
+  let candidates = baseCandidates;
+  if (typeof maxPostsPerCategoryPerDay === 'number' && maxPostsPerCategoryPerDay > 0) {
+    const uncapped = baseCandidates.filter(
+      (s) => (count24hByCategory.get(s.slug.toLowerCase()) ?? 0) < maxPostsPerCategoryPerDay,
+    );
+    if (uncapped.length > 0) {
+      candidates = uncapped;
+    }
   }
 
   const sorted = [...candidates].sort((a, b) => {
     const slugA = a.slug.toLowerCase();
     const slugB = b.slug.toLowerCase();
+
+    // First prefer categories with fewer posts in the last 24h so every beat gets fair daily coverage
+    const dayA = count24hByCategory.get(slugA) ?? 0;
+    const dayB = count24hByCategory.get(slugB) ?? 0;
+    if (dayA !== dayB) {
+      return dayA - dayB;
+    }
+
     const tsA = latestByCategory.get(slugA) ?? 0;
     const tsB = latestByCategory.get(slugB) ?? 0;
 
