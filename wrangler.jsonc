@@ -22,7 +22,8 @@
     }
   ],
   "routes": [
-    { "pattern": "pyvren.com", "custom_domain": true }
+    { "pattern": "pyvren.com", "custom_domain": true },
+    { "pattern": "www.pyvren.com/*", "zone_name": "pyvren.com" }
   ],
   "vars": {
     "SITE_NAME": "Pyvren",

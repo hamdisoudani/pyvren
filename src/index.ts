@@ -8,6 +8,14 @@ import {
   DEFAULT_SEEDED_SETTINGS,
   recoverStaleAndFindActiveRun,
 } from './lib/db';
+import {
+  buildEdgeCacheKey,
+  extractEdgeFormatKey,
+  extractEdgeThemeKey,
+  getDefaultEdgeCache,
+  isCacheablePublicResponse,
+  isPublicEdgeCacheableRequest,
+} from './lib/edge-cache';
 import { buildSecurityHeaders } from './lib/security';
 import { getTurnstileSiteKey } from './lib/turnstile';
 import { createAdminRoutes } from './routes/admin';
@@ -79,7 +87,32 @@ export function shouldExecuteScheduledDiscovery(
 export function createApp(): Hono<{ Bindings: WorkerEnv }> {
   const app = new Hono<{ Bindings: WorkerEnv }>();
 
-  // Global security headers middleware
+  // 1. Canonical HTTPS + www -> apex 301 redirect in production
+  app.use('*', async (c, next) => {
+    if (c.env.ENVIRONMENT !== 'test') {
+      try {
+        const reqUrl = new URL(c.req.url);
+        const host = reqUrl.hostname.toLowerCase();
+        if (host === 'www.pyvren.com' || (host === 'pyvren.com' && reqUrl.protocol === 'http:')) {
+          reqUrl.protocol = 'https:';
+          reqUrl.hostname = 'pyvren.com';
+          return new Response(null, {
+            status: 301,
+            headers: {
+              Location: reqUrl.toString(),
+              'Cache-Control': 'public, max-age=86400',
+              ...buildSecurityHeaders(),
+            },
+          });
+        }
+      } catch {
+        // Proceed normally if URL parsing fails
+      }
+    }
+    await next();
+  });
+
+  // 2. Global security headers middleware
   app.use('*', async (c, next) => {
     await next();
     const secHeaders = buildSecurityHeaders({
@@ -87,6 +120,58 @@ export function createApp(): Hono<{ Bindings: WorkerEnv }> {
     });
     for (const [name, value] of Object.entries(secHeaders)) {
       c.header(name, value);
+    }
+  });
+
+  // 3. Cloudflare Edge Cache for public anonymous GET routes (theme- & format-aware)
+  app.use('*', async (c, next) => {
+    const edgeCache = getDefaultEdgeCache();
+    if (!edgeCache || !isPublicEdgeCacheableRequest(c.req.raw, c.env)) {
+      await next();
+      return;
+    }
+
+    const pathname = c.req.path;
+    const themeKey = extractEdgeThemeKey(c.req.raw, pathname);
+    const formatKey = extractEdgeFormatKey(c.req.raw, pathname);
+    const cacheKey = buildEdgeCacheKey(c.req.url, themeKey, formatKey);
+
+    try {
+      const cached = await edgeCache.match(cacheKey);
+      if (cached) {
+        const hitHeaders = new Headers(cached.headers);
+        hitHeaders.set('X-Pyvren-Cache', 'HIT');
+        return new Response(cached.body, {
+          status: cached.status,
+          statusText: cached.statusText,
+          headers: hitHeaders,
+        });
+      }
+    } catch {
+      // Fall through to origin render if cache match fails
+    }
+
+    await next();
+
+    const originRes = c.res;
+    if (originRes && isCacheablePublicResponse(originRes)) {
+      // Clone before setting MISS header so cached copy carries clean headers
+      const toCache = originRes.clone();
+      const cacheHeaders = new Headers(toCache.headers);
+      cacheHeaders.delete('X-Pyvren-Cache');
+      const cacheableCopy = new Response(toCache.body, {
+        status: toCache.status,
+        statusText: toCache.statusText,
+        headers: cacheHeaders,
+      });
+
+      try {
+        c.executionCtx.waitUntil(edgeCache.put(cacheKey, cacheableCopy).catch(() => undefined));
+      } catch {
+        // Safe fallback when ExecutionContext is absent
+        void edgeCache.put(cacheKey, cacheableCopy).catch(() => undefined);
+      }
+      c.header('X-Pyvren-Cache', 'MISS');
     }
   });
 

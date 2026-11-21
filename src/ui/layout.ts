@@ -30,7 +30,7 @@ export interface PublicLayoutOptions {
 }
 
 const GOOGLE_FONTS_HREF =
-  'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;0,6..72,700&family=Oswald:wght@600;700&family=Playfair+Display:ital,wght@0,700;0,900;1,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap';
+  'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Newsreader:opsz,wght@6..72,400;6..72,600;6..72,700&family=Oswald:wght@600;700&family=Playfair+Display:wght@700;900&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap';
 
 export const TOPIC_ATLAS_ITEMS = [
   {
@@ -241,10 +241,10 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
   <meta name="twitter:image" content="${escapeHtml(resolvedOgImage)}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="preload" as="style" href="${GOOGLE_FONTS_HREF}">
-  <link rel="stylesheet" href="${GOOGLE_FONTS_HREF}" media="print" onload="this.media='all'">
-  <noscript><link rel="stylesheet" href="${GOOGLE_FONTS_HREF}"></noscript>
+  <link rel="preload" as="style" href="/assets/app.css">
   <link rel="stylesheet" href="/assets/app.css">
+  <link rel="preload" as="style" href="${GOOGLE_FONTS_HREF}" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="${GOOGLE_FONTS_HREF}"></noscript>
   <script>(function(){try{var c=(document.cookie.match(/(?:^|;\\s*)pyvren_theme=(dark|light)(?:;|$)/)||[])[1];var s=localStorage.getItem('pyvren-theme');var pref=(s==='dark'||s==='light')?s:((c==='dark'||c==='light')?c:(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));document.documentElement.setAttribute('data-theme',pref);if(c!==pref){document.cookie='pyvren_theme='+pref+'; path=/; max-age=31536000; SameSite=Lax';}}catch(e){}})();</script>
   <script>(function(){
     function frame(img){return img.closest?img.closest('.story-media'):null;}
@@ -295,7 +295,7 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
     <a href="/llms-full.txt">Full Markdown Corpus</a>
     <a href="/api/v1/map">Agent Navigation JSON Map</a>
     <a href="/api/v1/posts">Headless Posts JSON API</a>
-    <a href="/api/v1/search?q=ai">Search JSON API</a>
+    <a href="/api/v1/search">Search JSON API</a>
   </nav>
 
   <header class="editorial-topbar sticky top-0 z-40 border-b border-hairline">
@@ -322,7 +322,7 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
           </summary>
           <div class="topics-popover absolute left-1/2 -translate-x-1/2 mt-2.5 w-[38rem] p-4 z-50">
             <div class="px-2 pb-2.5 mb-2 border-b border-hairline flex items-center justify-between">
-              <span class="font-tabular text-[11px] uppercase tracking-[0.1em] font-bold text-ink-muted">Six Engineering Beats</span>
+              <span class="font-tabular text-[11px] uppercase tracking-[0.1em] font-bold text-ink-muted">Seven Engineering Beats</span>
               <a href="/blog" class="font-tabular text-xs font-semibold text-accent hover:underline">Browse all stories &rarr;</a>
             </div>
             <div class="grid grid-cols-2 gap-1.5">

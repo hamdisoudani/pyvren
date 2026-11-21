@@ -6,7 +6,7 @@ import {
   type PostRelationship,
   type TopicCluster,
 } from '../lib/relations';
-import { escapeHtml } from '../lib/security';
+import { escapeHtml, slugify } from '../lib/security';
 import type { Archetype, CategorySkill, PostImage, PostRecord, SiteSettings } from '../types';
 import {
   renderHeroCrewSceneSvg,
@@ -19,6 +19,25 @@ import {
 import { renderPublicLayout } from './layout';
 
 const HAMDI_LINKEDIN_URL = 'https://www.linkedin.com/in/hamdisoudani/';
+
+const COUNT_WORDS: Record<number, string> = {
+  1: 'One',
+  2: 'Two',
+  3: 'Three',
+  4: 'Four',
+  5: 'Five',
+  6: 'Six',
+  7: 'Seven',
+  8: 'Eight',
+  9: 'Nine',
+  10: 'Ten',
+  11: 'Eleven',
+  12: 'Twelve',
+};
+
+function formatCountWord(count: number): string {
+  return COUNT_WORDS[count] || String(count);
+}
 
 const ARCHETYPE_LABELS: Record<Archetype, string> = {
   'advisory-teardown': 'Security Advisory',
@@ -221,7 +240,7 @@ function renderCtaStrip(settings: SiteSettings): string {
     settings.cta_body ||
     'Every dispatch blends hands-on engineering judgment with verified primary sources, reproducible configs, and clear tradeoffs.';
 
-  return `<section class="mt-16 border-t border-b border-hairline bg-subtle/60">
+  return `<section class="mt-16 border-t border-b border-hairline bg-subtle/60" style="content-visibility:auto;contain-intrinsic-size:auto 240px">
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-11 sm:py-14 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-7">
     <div class="max-w-2xl space-y-2.5">
       <p class="inline-flex items-center gap-2 font-tabular text-[11px] uppercase tracking-[0.12em] text-accent font-semibold">
@@ -247,12 +266,13 @@ function renderTopicClusterChips(clusters: TopicCluster[], limit = 10): string {
   if (clusters.length === 0) return '';
   return clusters
     .slice(0, limit)
-    .map(
-      (cluster) => `<a href="/blog?q=${encodeURIComponent(cluster.query)}" class="rel-chip topic-tone" style="--topic-light:${cluster.color}; --topic-dark:${cluster.darkColor};">
+    .map((cluster) => {
+      const tagSlug = slugify(cluster.query || cluster.label, 64) || 'ai';
+      return `<a href="/tag/${encodeURIComponent(tagSlug)}" class="rel-chip topic-tone" style="--topic-light:${cluster.color}; --topic-dark:${cluster.darkColor};">
       <span>${escapeHtml(cluster.label)}</span>
       <span class="font-tabular text-[10px] text-ink-faint">${cluster.count}</span>
-    </a>`,
-    )
+    </a>`;
+    })
     .join('\n');
 }
 
@@ -422,7 +442,7 @@ export function renderLandingPage(opts: {
         </div>
 
         <h1 class="font-masthead text-3xl sm:text-5xl lg:text-[3.35rem] font-bold leading-[1.06] tracking-tight text-ink">
-          Field notes &amp; benchmarks for <span class="text-accent">builders who read the source.</span>
+          AI Engineering, Security &amp; Cloud Benchmarks <span class="text-accent">from the primary source.</span>
         </h1>
 
         <p class="text-base sm:text-lg text-ink-secondary leading-relaxed max-w-2xl">
@@ -639,12 +659,16 @@ export function renderLandingPage(opts: {
     </div>
   </div>
 </section>`;
-  } else {
+  }
+
+  const beatCountWord = formatCountWord(Math.max(1, enabledSkills.length));
+
+  if (!leadPost) {
     leadSpreadHtml = `<section class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10 pb-4">
       <div class="editorial-card p-8 sm:p-10 text-center space-y-4">
         <div class="mx-auto w-40 h-28">${renderTopicCrewSvg('ai-coding-agents-mcp', 'empty-home')}</div>
         <h2 class="font-masthead text-2xl sm:text-3xl font-bold text-ink">Fresh dispatches are on Py’s drafting desk.</h2>
-        <p class="text-sm sm:text-base text-ink-secondary max-w-xl mx-auto">Explore our six engineering beats below while the next primary-source story is prepared.</p>
+        <p class="text-sm sm:text-base text-ink-secondary max-w-xl mx-auto">Explore our ${escapeHtml(beatCountWord.toLowerCase())} engineering beats below while the next primary-source story is prepared.</p>
       </div>
     </section>`;
   }
@@ -682,17 +706,17 @@ export function renderLandingPage(opts: {
 </section>`
       : '';
 
-  // 4. 6 Illustrated Py Topic Cards (Swipeable Mobile Carousel -> 3-Col Desktop Grid)
+  // 4. Illustrated Py Topic Cards (Swipeable Mobile Carousel -> 3-Col Desktop Grid)
   const topicsSectionHtml =
     enabledSkills.length > 0
-      ? `<section id="categories" aria-labelledby="topics-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 scroll-mt-24" data-carousel-root>
+      ? `<section id="categories" aria-labelledby="topics-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 scroll-mt-24" style="content-visibility:auto;contain-intrinsic-size:auto 620px" data-carousel-root>
   <div class="double-rule-top pt-4 pb-5 flex flex-col sm:flex-row sm:items-end justify-between gap-3">
     <div>
       <p class="inline-flex items-center gap-1.5 font-tabular text-[11px] uppercase tracking-[0.14em] text-accent font-semibold">
         ${renderUiSketchIcon('layers', 14)}
         <span>Subject Atlas</span>
       </p>
-      <h2 id="topics-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1">Six Engineering Beats</h2>
+      <h2 id="topics-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1">${escapeHtml(beatCountWord)} Engineering Beats</h2>
     </div>
     <p class="text-xs sm:text-sm text-ink-muted max-w-md">Swipe on mobile or choose a beat — each section pairs primary benchmarks with Py’s sketchbook illustrations.</p>
   </div>
@@ -734,7 +758,7 @@ export function renderLandingPage(opts: {
       : '';
 
   // 5. Human + Agent Co-Work Note & Hamdi Soudani Profile Card
-  const coWorkNoteHtml = `<section aria-labelledby="cowork-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-16">
+  const coWorkNoteHtml = `<section aria-labelledby="cowork-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-16" style="content-visibility:auto;contain-intrinsic-size:auto 420px">
   <div class="field-note p-6 sm:p-9">
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
       <div class="lg:col-span-7 space-y-3.5">
@@ -790,7 +814,7 @@ ${renderCtaStrip(settings)}`;
 
   const baseUrl = normalizeBaseUrl(settings.base_url);
   return renderPublicLayout({
-    title: `${siteName} — AI, Security & Cloud Engineering Stories`,
+    title: `${siteName} — AI Engineering, Security, LLMs & Cloud Benchmarks`,
     description: tagline,
     canonicalUrl: `${baseUrl}/`,
     settings,
@@ -824,6 +848,8 @@ export function renderBlogIndexPage(opts: {
   posts: PostRecord[];
   skills: CategorySkill[];
   activeCategory?: string;
+  activeTagSlug?: string;
+  activeTagLabel?: string;
   page: number;
   totalPages: number;
   query?: string;
@@ -835,6 +861,8 @@ export function renderBlogIndexPage(opts: {
     posts,
     skills,
     activeCategory,
+    activeTagSlug,
+    activeTagLabel,
     page,
     totalPages,
     query,
@@ -843,10 +871,16 @@ export function renderBlogIndexPage(opts: {
   } = opts;
   const activeSkill = activeCategory ? skills.find((s) => s.slug === activeCategory) : undefined;
   const trimmedQuery = (query || '').trim();
+  const resolvedTagSlug = (activeTagSlug || '').trim();
+  const resolvedTagLabel = (activeTagLabel || resolvedTagSlug.replace(/-/g, ' ')).trim();
   const activeMeta = activeCategory ? getCategoryMeta(activeCategory) : null;
   const defaultAuthor = settings.default_author || 'Hamdi Soudani';
 
   const buildIndexUrl = (targetPage: number, cat?: string, q?: string): string => {
+    if (resolvedTagSlug && !cat && !q) {
+      const base = `/tag/${encodeURIComponent(resolvedTagSlug)}`;
+      return targetPage > 1 ? `${base}?page=${targetPage}` : base;
+    }
     const params = new URLSearchParams();
     if (cat) params.set('category', cat);
     if (q) params.set('q', q);
@@ -915,6 +949,22 @@ export function renderBlogIndexPage(opts: {
       </div>`
       : '';
 
+  const eyebrowLabel = activeSkill
+    ? `${activeMeta?.shortLabel || 'Beat'} Beat`
+    : resolvedTagSlug
+      ? 'Indexed Topic'
+      : 'Complete Dispatch Archive';
+  const headingLabel = activeSkill
+    ? activeSkill.name
+    : resolvedTagSlug
+      ? `${resolvedTagLabel} Dispatches & Benchmarks`
+      : 'Dispatches & Benchmarks';
+  const introLabel = activeSkill
+    ? activeSkill.description
+    : resolvedTagSlug
+      ? `Primary-source engineering dispatches, benchmarks, and field notes tagged ${resolvedTagLabel} — co-crafted by ${defaultAuthor} & Pyvren.`
+      : 'Deep dives, security advisories, and reproducible engineering benchmarks — co-crafted by Hamdi Soudani & Pyvren.';
+
   const indexBody = `<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
   <header class="field-note p-5 sm:p-8 space-y-6">
     <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
@@ -923,17 +973,13 @@ export function renderBlogIndexPage(opts: {
         <div class="space-y-2 max-w-2xl min-w-0">
           <p class="topic-tone inline-flex items-center gap-1.5 font-tabular text-[11px] uppercase tracking-[0.13em] topic-accent-text font-semibold" style="--topic-light:${activeMeta ? activeMeta.color : 'var(--accent)'}; --topic-dark:${activeMeta ? activeMeta.darkColor : 'var(--accent)'};">
             ${renderTopicSketchIcon(activeSkill ? activeSkill.slug : 'all', 16)}
-            <span>${activeSkill ? `${escapeHtml(activeMeta?.shortLabel || 'Beat')} Beat` : 'Complete Dispatch Archive'}</span>
+            <span>${escapeHtml(eyebrowLabel)}</span>
           </p>
           <h1 class="font-masthead text-2xl sm:text-4xl lg:text-[2.65rem] font-bold text-ink leading-[1.1]">
-            ${activeSkill ? escapeHtml(activeSkill.name) : 'Dispatches & Benchmarks'}
+            ${escapeHtml(headingLabel)}
           </h1>
           <p class="text-sm sm:text-base text-ink-secondary leading-relaxed">
-            ${
-              activeSkill
-                ? escapeHtml(activeSkill.description)
-                : 'Deep dives, security advisories, and reproducible engineering benchmarks — co-crafted by Hamdi Soudani & Pyvren.'
-            }
+            ${escapeHtml(introLabel)}
           </p>
         </div>
       </div>
@@ -957,7 +1003,7 @@ export function renderBlogIndexPage(opts: {
         ${renderBeatStrip({ skills, activeSlug: activeCategory, query: trimmedQuery, mode: 'archive' })}
       </div>
       ${
-        trimmedQuery || activeCategory
+        trimmedQuery || activeCategory || resolvedTagSlug
           ? `<a href="/blog" class="font-tabular text-xs font-semibold text-ink-muted hover:text-accent underline underline-offset-2 shrink-0">Reset</a>`
           : ''
       }
@@ -982,16 +1028,24 @@ export function renderBlogIndexPage(opts: {
 
   const baseUrl = normalizeBaseUrl(settings.base_url);
   const siteName = settings.site_name || 'The Pyvren Dispatch';
-  const canonicalPath = activeSkill ? `/category/${encodeURIComponent(activeSkill.slug)}` : '/blog';
+  const canonicalPath = activeSkill
+    ? `/category/${encodeURIComponent(activeSkill.slug)}`
+    : resolvedTagSlug
+      ? `/tag/${encodeURIComponent(resolvedTagSlug)}`
+      : '/blog';
   const pageTitle = activeSkill
     ? `${activeSkill.name} — ${siteName}`
-    : trimmedQuery
-      ? `Search: ${trimmedQuery} — ${siteName}`
-      : `Dispatches & Benchmarks — ${siteName}`;
+    : resolvedTagSlug
+      ? `${resolvedTagLabel} Engineering Benchmarks & Field Notes — ${siteName}`
+      : trimmedQuery
+        ? `Search: ${trimmedQuery} — ${siteName}`
+        : `Dispatches & Benchmarks — ${siteName}`;
   const pageDesc = activeSkill
     ? activeSkill.description
-    : settings.site_tagline ||
-      'Field notes, benchmarks, and deep dives into AI, security, and cloud craft.';
+    : resolvedTagSlug
+      ? `Primary-source engineering dispatches, benchmarks, and technical analysis covering ${resolvedTagLabel} on ${siteName}.`
+      : settings.site_tagline ||
+        'Field notes, benchmarks, and deep dives into AI, security, and cloud craft.';
 
   return renderPublicLayout({
     title: pageTitle,
@@ -1000,7 +1054,10 @@ export function renderBlogIndexPage(opts: {
     settings,
     ogType: 'website',
     currentPath: canonicalPath,
-    robotsMeta: trimmedQuery || rateLimitRetrySeconds ? 'noindex, follow' : undefined,
+    robotsMeta:
+      trimmedQuery || rateLimitRetrySeconds || (resolvedTagSlug && posts.length === 0)
+        ? 'noindex, follow'
+        : undefined,
     initialTheme,
     bodyHtml: indexBody,
   });
@@ -1234,10 +1291,10 @@ export function renderBlogPostPage(opts: {
       ? `<div class="mt-10 pt-6 border-t border-hairline flex flex-wrap items-center gap-2">
       <span class="font-tabular text-[11px] uppercase tracking-[0.12em] text-ink-faint mr-1">Filed under:</span>
       ${post.tags_json
-        .map(
-          (tag) =>
-            `<a href="/blog?q=${encodeURIComponent(tag)}" class="rel-chip">${escapeHtml(tag)}</a>`,
-        )
+        .map((tag) => {
+          const tagSlug = slugify(tag, 64) || 'ai';
+          return `<a href="/tag/${encodeURIComponent(tagSlug)}" class="rel-chip">${escapeHtml(tag)}</a>`;
+        })
         .join('')}
     </div>`
       : '';

@@ -3,7 +3,7 @@ import { normalizeBaseUrl, type WorkerEnv } from '../env';
 import { createDatabase } from '../lib/db';
 import { compileMarkdown } from '../lib/markdown';
 import { computePostRelationships } from '../lib/relations';
-import { checkRateLimit, computeEtag, extractClientIp } from '../lib/security';
+import { checkRateLimit, computeEtag, extractClientIp, slugify } from '../lib/security';
 import type { PostRecord } from '../types';
 import {
   renderBlogIndexPage,
@@ -16,6 +16,39 @@ import { formatPostAsMarkdownDocument } from './seo';
 
 const BLOG_PAGE_SIZE = 10;
 
+const TAG_ACRONYMS: Record<string, string> = {
+  ai: 'AI',
+  api: 'API',
+  ci: 'CI',
+  cd: 'CD',
+  cisa: 'CISA',
+  cli: 'CLI',
+  cve: 'CVE',
+  cves: 'CVEs',
+  gpu: 'GPU',
+  gpus: 'GPUs',
+  http: 'HTTP',
+  https: 'HTTPS',
+  kev: 'KEV',
+  llm: 'LLM',
+  llms: 'LLMs',
+  mcp: 'MCP',
+  rag: 'RAG',
+  slm: 'SLM',
+  sql: 'SQL',
+  tls: 'TLS',
+  vram: 'VRAM',
+};
+
+function formatTagSlugLabel(tagSlug: string): string {
+  if (tagSlug === 'ci-cd') return 'CI/CD';
+  return tagSlug
+    .split('-')
+    .filter(Boolean)
+    .map((part) => TAG_ACRONYMS[part.toLowerCase()] || `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(' ');
+}
+
 function extractThemeCookie(req: Request): 'light' | 'dark' | undefined {
   const cookieHeader = req.headers.get('cookie') || '';
   if (!cookieHeader) return undefined;
@@ -25,7 +58,7 @@ function extractThemeCookie(req: Request): 'light' | 'dark' | undefined {
 }
 
 function buildAgentDiscoveryLinkHeader(baseUrl: string): string {
-  return `<${baseUrl}/llms.txt>; rel="service-doc"; type="text/markdown", <${baseUrl}/api/v1/map>; rel="describedby"; type="application/json"`;
+  return `</assets/app.css>; rel="preload"; as="style", <${baseUrl}/llms.txt>; rel="service-doc"; type="text/markdown", <${baseUrl}/api/v1/map>; rel="describedby"; type="application/json"`;
 }
 
 function stripWeakEtagPrefix(tag: string): string {
@@ -282,6 +315,77 @@ export function createPublicRoutes(): Hono<{ Bindings: WorkerEnv }> {
     });
   });
 
+  // 3b. Clean SEO-friendly Tag / Topic Cluster Archive Page (/tag/:tag)
+  app.get('/tag/:tag', async (c) => {
+    const initialTheme = extractThemeCookie(c.req.raw);
+    const rawTag = decodeURIComponent((c.req.param('tag') || '').trim());
+    const tagSlug = slugify(rawTag, 64);
+    const db = createDatabase(c.env);
+    const [settings, skills] = await Promise.all([db.getSettings(), db.listSkills(true)]);
+
+    if (!tagSlug) {
+      const html = renderNotFoundPage({ settings, initialTheme });
+      return htmlResponse(html, 404, { 'Cache-Control': 'no-store' });
+    }
+
+    const baseUrl = normalizeBaseUrl(settings.base_url || c.env.BASE_URL);
+    const rawPage = Number.parseInt(c.req.query('page') || '1', 10);
+    const requestedPage = Number.isFinite(rawPage) && rawPage >= 1 ? rawPage : 1;
+    const tagSearchPhrase = tagSlug.replace(/-/g, ' ');
+
+    const [allPublishedRaw, keywordMatched] = await Promise.all([
+      db.listPosts({ status: 'published', limit: 200, excludeHeavyHtml: true }),
+      db.listPosts({ status: 'published', search: tagSearchPhrase, limit: 200, excludeHeavyHtml: true }),
+    ]);
+
+    const seenIds = new Set<number>();
+    const matchedPosts: PostRecord[] = [];
+    let resolvedLabel = '';
+
+    for (const post of allPublishedRaw) {
+      if (post.status !== 'published') continue;
+      const tags = Array.isArray(post.tags_json) ? post.tags_json : [];
+      const keywords = Array.isArray(post.keywords_json) ? post.keywords_json : [];
+      const exactTag = tags.find((t) => slugify(t, 64) === tagSlug);
+      const exactKeyword = keywords.find((k) => slugify(k, 64) === tagSlug);
+      if (exactTag || exactKeyword) {
+        if (!resolvedLabel) resolvedLabel = (exactTag || exactKeyword || '').trim();
+        if (!seenIds.has(post.id)) {
+          seenIds.add(post.id);
+          matchedPosts.push(post);
+        }
+      }
+    }
+
+    for (const post of keywordMatched) {
+      if (post.status !== 'published' || seenIds.has(post.id)) continue;
+      seenIds.add(post.id);
+      matchedPosts.push(post);
+    }
+
+    const activeTagLabel = resolvedLabel || formatTagSlugLabel(tagSlug);
+    const totalPages = Math.max(1, Math.ceil(matchedPosts.length / BLOG_PAGE_SIZE));
+    const safePage = Math.min(requestedPage, totalPages);
+    const offset = (safePage - 1) * BLOG_PAGE_SIZE;
+    const posts = matchedPosts.slice(offset, offset + BLOG_PAGE_SIZE);
+
+    const html = renderBlogIndexPage({
+      settings,
+      posts,
+      skills,
+      activeTagSlug: tagSlug,
+      activeTagLabel,
+      page: safePage,
+      totalPages,
+      initialTheme,
+    });
+
+    return htmlResponse(html, 200, {
+      Link: buildAgentDiscoveryLinkHeader(baseUrl),
+      'Cache-Control': 'public, max-age=120, s-maxage=600, stale-while-revalidate=3600',
+    });
+  });
+
   // 4. Single Published Blog Post Page (strictly published only; 404 for drafts/missing; ETag/304 + Markdown negotiation)
   app.get('/blog/:slug', async (c) => {
     const initialTheme = extractThemeCookie(c.req.raw);
@@ -298,10 +402,12 @@ export function createPublicRoutes(): Hono<{ Bindings: WorkerEnv }> {
 
     const baseUrl = normalizeBaseUrl(settings.base_url || c.env.BASE_URL);
     const encodedSlug = encodeURIComponent(post.slug);
-    const linkHeader = `<${baseUrl}/blog/${encodedSlug}.md>; rel="alternate"; type="text/markdown", <${baseUrl}/llms.txt>; rel="service-doc"; type="text/markdown", <${baseUrl}/blog/${encodedSlug}>; rel="canonical"`;
+    const markdownLinkHeader = `<${baseUrl}/blog/${encodedSlug}.md>; rel="alternate"; type="text/markdown", <${baseUrl}/llms.txt>; rel="service-doc"; type="text/markdown", <${baseUrl}/blog/${encodedSlug}>; rel="canonical"`;
+    const htmlLinkHeader = `</assets/app.css>; rel="preload"; as="style", ${markdownLinkHeader}`;
     const varyHeader = 'Accept, Accept-Encoding';
     const accept = (c.req.header('accept') || '').toLowerCase();
     const wantsMarkdown = accept.includes('text/markdown') && !accept.includes('text/html');
+    const linkHeader = wantsMarkdown ? markdownLinkHeader : htmlLinkHeader;
 
     const etag = await computeEtag([
       post.slug,
@@ -381,8 +487,10 @@ export function createPublicRoutes(): Hono<{ Bindings: WorkerEnv }> {
       const initialTheme = extractThemeCookie(c.req.raw);
       const db = createDatabase(c.env);
       const settings = await db.getSettings();
+      const baseUrl = normalizeBaseUrl(settings.base_url || c.env.BASE_URL);
       const html = renderTrustPage({ settings, kind, initialTheme });
       return htmlResponse(html, 200, {
+        Link: buildAgentDiscoveryLinkHeader(baseUrl),
         'Cache-Control': 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400',
       });
     });

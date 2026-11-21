@@ -15,6 +15,7 @@ import {
   ensureUniqueSlug,
   recoverStaleAndFindActiveRun,
 } from '../lib/db';
+import { purgePublicEdgeCache } from '../lib/edge-cache';
 import { lintPostPayload } from '../lib/linter';
 import { compileMarkdown } from '../lib/markdown';
 import {
@@ -518,6 +519,39 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
 
     c.set('adminEmail', auth.email || 'admin');
     await next();
+
+    const method = c.req.method.toUpperCase();
+    const path = c.req.path;
+    const isContentMutation =
+      (method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE') &&
+      (path.startsWith('/api/admin/posts') ||
+        path === '/api/admin/settings' ||
+        path.startsWith('/api/admin/skills'));
+
+    if (isContentMutation && c.res && c.res.status >= 200 && c.res.status < 300) {
+      const resClone = c.res.clone();
+      const purgePromise = (async () => {
+        let slug: string | undefined;
+        let categorySlug: string | undefined;
+        try {
+          const data = (await resClone.json()) as {
+            post?: { slug?: string; category_slug?: string };
+            skill?: { slug?: string };
+          };
+          slug = data?.post?.slug;
+          categorySlug = data?.post?.category_slug || data?.skill?.slug;
+        } catch {
+          // Non-JSON or empty response; still purge root/index caches
+        }
+        await purgePublicEdgeCache(c.env.BASE_URL, { slug, categorySlug });
+      })();
+
+      try {
+        c.executionCtx.waitUntil(purgePromise);
+      } catch {
+        void purgePromise;
+      }
+    }
   });
 
   // =========================================================================

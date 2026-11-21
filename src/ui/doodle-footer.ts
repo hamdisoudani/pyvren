@@ -657,7 +657,7 @@ export function renderDoodleCrewFooter(settings: SiteSettings): string {
       </div>`,
   ).join('\n      ');
 
-  return `<footer class="dcf" data-dcf-footer data-play="0">
+  return `<footer class="dcf" data-dcf-footer data-play="0" style="content-visibility:auto;contain-intrinsic-size:auto 540px">
   <div class="dcf-inner">
     <div class="dcf-top">
       <div class="dcf-brand">
