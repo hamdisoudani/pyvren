@@ -211,7 +211,7 @@ function renderDoodleStageSvg(): string {
       </g>
 
       <!-- CHARACTER 1: Yeti (Bruno) standing in front of letter 0 (P) -->
-      <g class="dcf-char" data-char="yeti" data-name="Bruno" data-say="0% AI slop. 100% primary sources." data-bx="150" data-by="166">
+      <g class="dcf-char" data-char="yeti" data-name="Bruno" data-say="Every benchmark verified at the source." data-bx="150" data-by="166">
         <g class="dcf-char-body" transform="translate(150, 314)">
           <!-- Ground shadow -->
           <ellipse cx="0" cy="2" rx="36" ry="6" fill="var(--dcf-ink)" opacity="0.14"/>

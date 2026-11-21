@@ -771,7 +771,7 @@ export function renderLandingPage(opts: {
         <div class="p-4 rounded-xl bg-subtle/75 border border-hairline space-y-2">
           <p class="inline-flex items-center gap-1.5 font-tabular text-[11px] font-bold text-ink">
             ${renderUiSketchIcon('ledger', 14)}
-            <span>NO FLUFF OR SLOP</span>
+            <span>PRIMARY SOURCES ONLY</span>
           </p>
           <p class="text-xs sm:text-sm text-ink-secondary leading-relaxed">Warm newsprint or obsidian dark mode, colorized code blocks, full-width benchmark tables, and honest tradeoffs.</p>
         </div>

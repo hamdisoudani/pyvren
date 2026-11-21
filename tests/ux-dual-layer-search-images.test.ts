@@ -394,6 +394,13 @@ describe('Dual-Layer UX (Humans vs Agents), Theme Persistence, Rate-Limited Sear
     expect(adminHtml).toContain('skeleton-shimmer');
     expect(adminHtml).toContain('data-snake-pupil');
     expect(adminHtml).not.toContain('bootstrap-form');
+    expect(adminHtml).not.toContain('Supabase');
+    expect(adminHtml).not.toContain('Cloudflare');
+    expect(adminHtml).not.toContain('OpenRouter');
+    expect(adminHtml).not.toContain('env-locked');
+    expect(adminHtml).not.toContain('Edge Native');
+    expect(adminHtml).not.toContain('Strict Gate');
+    expect(adminHtml).not.toContain('$0 Guard');
 
     // Login behind reverse proxy / preview tunnel (X-Forwarded-Host matches Origin) succeeds
     const proxyLogin = await app.request(
