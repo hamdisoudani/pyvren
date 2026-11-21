@@ -408,7 +408,7 @@ export function renderLandingPage(opts: {
   const topicClusters = buildTopicClusters(pool, skills);
   const leadRelations = leadPost ? computePostRelationships(leadPost, pool, 3) : [];
 
-  // 1. Sketchbook Studio Hero (Cartoon Py Snake + Vren Wren Desk Scene)
+  // 1. Sketchbook Studio Hero (Py, the house python, at the research desk)
   const heroHtml = `<section class="border-b border-hairline bg-paper">
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-7 pb-8 sm:pt-10 sm:pb-11">
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-center">
@@ -463,7 +463,7 @@ export function renderLandingPage(opts: {
         }
       </div>
 
-      <!-- Right 5 cols: Cartoon Py (Snake) + Vren (Wren) Studio Scene -->
+      <!-- Right 5 cols: Py studio scene -->
       <div class="lg:col-span-5">
         <div class="rounded-2xl border-[1.5px] border-strong/80 bg-surface p-3 sm:p-4 shadow-[4px_4px_0_0_var(--border-hairline)]">
           ${renderHeroCrewSceneSvg()}
@@ -643,7 +643,7 @@ export function renderLandingPage(opts: {
     leadSpreadHtml = `<section class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-10 pb-4">
       <div class="editorial-card p-8 sm:p-10 text-center space-y-4">
         <div class="mx-auto w-40 h-28">${renderTopicCrewSvg('ai-coding-agents-mcp', 'empty-home')}</div>
-        <h2 class="font-masthead text-2xl sm:text-3xl font-bold text-ink">Fresh dispatches are on Py &amp; Vren’s drafting desk.</h2>
+        <h2 class="font-masthead text-2xl sm:text-3xl font-bold text-ink">Fresh dispatches are on Py’s drafting desk.</h2>
         <p class="text-sm sm:text-base text-ink-secondary max-w-xl mx-auto">Explore our six engineering beats below while the next primary-source story is prepared.</p>
       </div>
     </section>`;
@@ -682,7 +682,7 @@ export function renderLandingPage(opts: {
 </section>`
       : '';
 
-  // 4. 6 Illustrated Py + Vren Topic Cards (Swipeable Mobile Carousel -> 3-Col Desktop Grid)
+  // 4. 6 Illustrated Py Topic Cards (Swipeable Mobile Carousel -> 3-Col Desktop Grid)
   const topicsSectionHtml =
     enabledSkills.length > 0
       ? `<section id="categories" aria-labelledby="topics-heading" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-16 scroll-mt-24" data-carousel-root>
@@ -694,7 +694,7 @@ export function renderLandingPage(opts: {
       </p>
       <h2 id="topics-heading" class="font-masthead text-2xl sm:text-3xl font-bold text-ink mt-1">Six Engineering Beats</h2>
     </div>
-    <p class="text-xs sm:text-sm text-ink-muted max-w-md">Swipe on mobile or choose a beat — each section pairs primary benchmarks with Py &amp; Vren’s sketchbook illustrations.</p>
+    <p class="text-xs sm:text-sm text-ink-muted max-w-md">Swipe on mobile or choose a beat — each section pairs primary benchmarks with Py’s sketchbook illustrations.</p>
   </div>
 
   <div class="mobile-carousel mobile-carousel--compact md:grid md:grid-cols-2 lg:grid-cols-3 md:gap-5" data-carousel-track>
@@ -711,7 +711,7 @@ export function renderLandingPage(opts: {
                     ${renderTopicSketchIcon(skill.slug, 15)}
                     <span>${escapeHtml(meta.shortLabel)}</span>
                   </span>
-                  <span class="font-tabular text-[10px] text-ink-faint">Py &amp; Vren</span>
+                  <span class="font-tabular text-[10px] text-ink-faint">Illustrated</span>
                 </div>
                 <div class="h-28 w-full max-w-[190px] mx-auto">
                   ${crewSvg}
@@ -1042,8 +1042,8 @@ export function renderBlogPostPage(opts: {
 
   const relationships = computePostRelationships(post, relatedPosts, 3);
 
-  // Hero visual: real crawled primary reference image (with automatic onerror swap to Cartoon Py+Vren),
-  // OR automatic Cartoon Py (Python snake) + Vren (Wren) wide banner when no cover image exists!
+  // Hero visual: real crawled primary reference image (skeleton while loading, automatic Py backup on error),
+  // OR the Py category illustration when no cover image exists.
   const hasRealCover = Boolean(
     post.cover_image_url && post.cover_image_url.trim().startsWith('https://'),
   );
@@ -1053,15 +1053,16 @@ export function renderBlogPostPage(opts: {
 
   const heroVisualHtml = hasRealCover
     ? `<figure class="article-hero-figure max-w-4xl">
-        <img
-          src="${escapeHtml(post.cover_image_url!.trim())}"
-          alt="${escapeHtml(post.cover_image_alt || post.title)}"
-          data-fallback-category="${escapeHtml(post.category_slug)}"
-          data-fallback-label="${escapeHtml(post.title)}"
-          loading="eager"
-          decoding="async"
-          referrerpolicy="no-referrer"
-        />
+        ${renderStoryCoverMedia({
+          coverImageUrl: post.cover_image_url,
+          coverImageAlt: post.cover_image_alt || post.title,
+          categorySlug: post.category_slug,
+          archetype: formatArchetype(post.archetype),
+          title: post.title,
+          instanceKey: `post-cover-${post.id}`,
+          aspectClass: 'aspect-[16/9]',
+          eager: true,
+        })}
         <figcaption class="article-hero-caption flex flex-wrap items-center justify-between gap-2">
           <span class="inline-flex items-center gap-1.5">
             ${renderUiSketchIcon('note', 13)}
@@ -1121,7 +1122,7 @@ export function renderBlogPostPage(opts: {
                     loading="lazy"
                     decoding="async"
                     referrerpolicy="no-referrer"
-                    class="w-full aspect-[16/10] object-cover bg-subtle"
+                    class="skeleton-img w-full aspect-[16/10] object-cover"
                   >
                   <figcaption class="editorial-caption flex items-center justify-between gap-2">
                     <span class="truncate">${escapeHtml(img.caption || img.alt || 'Reference diagram')}</span>
@@ -1303,7 +1304,7 @@ export function renderBlogPostPage(opts: {
     </section>`
       : '';
 
-  // Bottom Creator & Co-Work Card featuring Py + Vren Emblem & Hamdi Soudani's LinkedIn
+  // Bottom Creator & Co-Work Card featuring the Py emblem & Hamdi Soudani's LinkedIn
   const authorCardHtml = `<section aria-label="About the authors" class="field-note mt-12 p-6 sm:p-7">
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-5">
       <div class="flex items-start gap-4">
@@ -1759,7 +1760,7 @@ export function renderNotFoundPage(opts: {
   </p>
   <h1 class="font-masthead text-3xl sm:text-5xl font-bold text-ink">We couldn’t find that dispatch</h1>
   <p class="text-base text-ink-muted max-w-lg mx-auto leading-relaxed">
-    Py &amp; Vren searched every shelf of ${escapeHtml(siteName)}, but this story may have moved or the link has a typo.
+    Py searched every shelf of ${escapeHtml(siteName)}, but this story may have moved or the link has a typo.
   </p>
   <div class="pt-2 flex flex-wrap items-center justify-center gap-3">
     <a href="/" class="btn-accent rounded-lg px-5">Back to Home</a>

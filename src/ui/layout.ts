@@ -3,7 +3,7 @@ import { getCategoryMeta } from '../lib/relations';
 import { escapeHtml, safeJsonLd } from '../lib/security';
 import type { SiteSettings } from '../types';
 import {
-  renderMastheadNibSvg,
+  renderPyvrenWordmark,
   renderTopicSketchIcon,
   renderUiSketchIcon,
 } from './crew-art';
@@ -71,19 +71,6 @@ export const TOPIC_ATLAS_ITEMS = [
   },
 ] as const;
 
-function formatMastheadUtcDate(date: Date = new Date()): string {
-  try {
-    return new Intl.DateTimeFormat('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      timeZone: 'UTC',
-    }).format(date);
-  } catch {
-    return date.toUTCString().slice(0, 16);
-  }
-}
-
 export function renderPublicLayout(opts: PublicLayoutOptions): string {
   const {
     title,
@@ -113,7 +100,6 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
   const defaultAuthor = settings.default_author || 'Hamdi Soudani';
   const adsenseClientId = (settings.adsense_client_id || '').trim();
   const resolvedOgImage = ogImageUrl || `${baseUrl}/og/default.svg`;
-  const mastheadDate = formatMastheadUtcDate();
   const htmlThemeAttr =
     initialTheme === 'dark'
       ? ' data-theme="dark"'
@@ -248,6 +234,40 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
   <noscript><link rel="stylesheet" href="${GOOGLE_FONTS_HREF}"></noscript>
   <link rel="stylesheet" href="/assets/app.css">
   <script>(function(){try{var c=(document.cookie.match(/(?:^|;\\s*)pyvren_theme=(dark|light)(?:;|$)/)||[])[1];var s=localStorage.getItem('pyvren-theme');var pref=(s==='dark'||s==='light')?s:((c==='dark'||c==='light')?c:(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));document.documentElement.setAttribute('data-theme',pref);if(c!==pref){document.cookie='pyvren_theme='+pref+'; path=/; max-age=31536000; SameSite=Lax';}}catch(e){}})();</script>
+  <script>(function(){
+    function frame(img){return img.closest?img.closest('.story-media'):null;}
+    function ready(img){
+      img.classList.add('is-loaded');
+      var f=frame(img);if(f&&img.hasAttribute('data-story-cover'))f.classList.add('media-ready');
+    }
+    function fail(img){
+      if(img.hasAttribute('data-story-cover')){
+        var f=frame(img);if(f)f.classList.add('media-fallback');
+        if(img.parentNode)img.parentNode.removeChild(img);
+        return;
+      }
+      if(img.getAttribute('data-pyvren-fallback')==='1'){img.classList.add('is-loaded');return;}
+      img.setAttribute('data-pyvren-fallback','1');
+      var post=img.closest?img.closest('[data-post-category]'):null;
+      var cat=img.getAttribute('data-fallback-category')||(post?post.getAttribute('data-post-category'):'')||'';
+      var label=img.getAttribute('data-fallback-label')||img.getAttribute('alt')||'Pyvren';
+      img.removeAttribute('srcset');
+      img.src='/og/fallback.svg?category='+encodeURIComponent(cat)+'&label='+encodeURIComponent(label.slice(0,44));
+    }
+    document.addEventListener('load',function(e){var t=e.target;if(t&&t.tagName==='IMG')ready(t);},true);
+    document.addEventListener('error',function(e){var t=e.target;if(t&&t.tagName==='IMG')fail(t);},true);
+    function scan(){
+      var list=document.images;
+      for(var i=list.length-1;i>=0;i--){
+        var img=list[i];
+        if(!img.complete||!img.getAttribute('src'))continue;
+        if(img.naturalWidth===0)fail(img);else ready(img);
+      }
+    }
+    document.addEventListener('DOMContentLoaded',scan);
+    window.addEventListener('load',scan);
+  })();</script>
+  <noscript><style>.story-real-img{opacity:1!important}.media-skeleton{display:none!important}</style></noscript>
   ${jsonLdScripts}
   ${adsenseScriptTag}
   ${extraHead}
@@ -266,22 +286,10 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
   </nav>
 
   <header class="editorial-topbar sticky top-0 z-40 border-b border-hairline">
-    <div class="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-8 h-16 sm:h-[4.25rem] flex items-center justify-between gap-3">
-      <!-- Left: Py (Snake) + Vren (Wren) Emblem & Masthead Wordmark -->
-      <div class="flex items-center gap-2.5 min-w-0">
-        <a href="/" class="inline-flex items-center gap-2.5 group min-w-0" aria-label="${escapeHtml(siteName)} home">
-          <span class="transition-transform duration-200 group-hover:-rotate-6">${renderMastheadNibSvg(36)}</span>
-          <span class="min-w-0">
-            <span class="block font-masthead font-black text-lg sm:text-2xl tracking-tight leading-none text-ink group-hover:text-accent transition-colors truncate">
-              ${escapeHtml(siteName)}
-            </span>
-            <span class="hidden sm:flex items-center gap-1.5 mt-1 font-tabular text-[10px] tracking-[0.04em] text-ink-muted">
-              <span>${escapeHtml(defaultAuthor)} &times; Pyvren</span>
-              <span aria-hidden="true">&middot;</span>
-              <time>${escapeHtml(mastheadDate)}</time>
-            </span>
-          </span>
-        </a>
+    <div class="max-w-7xl mx-auto px-3.5 sm:px-6 lg:px-8 h-[4.5rem] sm:h-20 flex items-center justify-between gap-3">
+      <!-- Left: Pyvren wordmark — Py (the snake mark) + "vren" -->
+      <div class="flex items-center min-w-0 pt-0.5">
+        ${renderPyvrenWordmark({ siteName, variant: 'header' })}
       </div>
 
       <!-- Center (Desktop): Clean Single-Row Editorial Links + Illustrated Topics Atlas Popover -->
@@ -340,7 +348,7 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
           <summary class="list-none inline-flex items-center justify-center w-9 h-9 rounded-lg border border-hairline bg-surface text-ink-secondary hover:text-ink hover:border-strong cursor-pointer" aria-label="Open menu">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
           </summary>
-          <div class="topics-popover fixed inset-x-3 top-[4.4rem] sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-80 overflow-hidden z-50">
+          <div class="topics-popover fixed inset-x-3 top-[4.9rem] sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-80 overflow-hidden z-50">
             <div class="px-4 py-3 bg-subtle border-b border-hairline flex items-center justify-between">
               <span class="font-tabular text-[11px] font-bold uppercase tracking-[0.08em] text-ink">Browse Beats</span>
               <a href="/blog" class="font-tabular text-xs font-semibold text-accent">All Dispatches &rarr;</a>
@@ -441,22 +449,32 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
       try{activeBeat.scrollIntoView({inline:'center',block:'nearest'});}catch(e){}
     }
 
-    // Auto-backup Cartoon Pyvren (Py Snake + Vren Wren) fallback if ANY image fails to load
-    document.addEventListener('error',function(ev){
-      var t=ev.target;
-      if(!t||t.tagName!=='IMG')return;
-      if(t.hasAttribute('data-story-cover')){
-        // Hide failed external cover to reveal the inline Cartoon Py + Vren SVG base plate underneath
-        t.style.display='none';
-        return;
-      }
-      if(t.getAttribute('data-pyvren-fallback')==='1')return;
-      t.setAttribute('data-pyvren-fallback','1');
-      var parentPost=t.closest?t.closest('[data-post-category]'):null;
-      var cat=t.getAttribute('data-fallback-category')||(parentPost?parentPost.getAttribute('data-post-category'):'')||'';
-      var alt=t.getAttribute('data-fallback-label')||t.getAttribute('alt')||'The Pyvren Dispatch';
-      t.src='/og/fallback.svg?category='+encodeURIComponent(cat)+'&label='+encodeURIComponent(alt.slice(0,44));
-    },true);
+    // Py's eyes follow the pointer (wordmark, hero & illustrations). Desktop pointers only.
+    var pupils=Array.prototype.slice.call(document.querySelectorAll('[data-snake-pupil]'));
+    var reduceMotion=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if(pupils.length>0&&!reduceMotion){
+      var ptrX=0,ptrY=0,eyeRaf=0;
+      var updateEyes=function(){
+        eyeRaf=0;
+        var vh=window.innerHeight||0;
+        for(var i=0;i<pupils.length;i++){
+          var p=pupils[i];
+          var sclera=p.previousElementSibling;
+          if(!sclera||!sclera.getBoundingClientRect)continue;
+          var r=sclera.getBoundingClientRect();
+          if(r.width===0||r.bottom<0||r.top>vh)continue;
+          var dx=ptrX-(r.left+r.width/2),dy=ptrY-(r.top+r.height/2);
+          var dist=Math.sqrt(dx*dx+dy*dy)||1;
+          var reach=Math.min(1,dist/240)*2.1;
+          p.setAttribute('transform','translate('+((dx/dist)*reach-1).toFixed(2)+' '+((dy/dist)*reach).toFixed(2)+')');
+        }
+      };
+      window.addEventListener('pointermove',function(e){
+        if(e.pointerType==='touch')return;
+        ptrX=e.clientX;ptrY=e.clientY;
+        if(!eyeRaf)eyeRaf=window.requestAnimationFrame(updateEyes);
+      },{passive:true});
+    }
 
     // Header search toggle & "/" keyboard shortcut
     var searchPanel=document.getElementById('header-search-panel');
@@ -516,6 +534,10 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
         timer=setTimeout(function(){
           if(controller&&controller.abort)controller.abort();
           controller=typeof AbortController!=='undefined'?new AbortController():null;
+          var skRow='<div class="search-skeleton-row" aria-hidden="true"><span class="skeleton-line skeleton-shimmer" style="width:28%"></span><span class="skeleton-line skeleton-line--lg skeleton-shimmer" style="width:82%"></span><span class="skeleton-line skeleton-shimmer" style="width:64%"></span></div>';
+          box.innerHTML=skRow+skRow+skRow;
+          box.setAttribute('aria-busy','true');
+          box.classList.remove('hidden');
           var catInput=form.querySelector('input[name="category"]');
           var cat=catInput&&catInput.value?'&category='+encodeURIComponent(catInput.value):'';
           fetch('/api/v1/search?limit=6&q='+encodeURIComponent(q)+cat,controller?{signal:controller.signal}:{})
@@ -526,7 +548,8 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
               return r.json();
             })
             .then(function(data){
-              if(!data)return;
+              box.removeAttribute('aria-busy');
+              if(!data){closeBox();return;}
               if(data.rateLimited){
                 box.innerHTML='<div class="px-4 py-3 text-xs text-accent font-medium">'+esc(data.message)+'</div>';
                 box.classList.remove('hidden');
@@ -554,6 +577,8 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
             })
             .catch(function(err){
               if(err&&err.name==='AbortError')return;
+              box.removeAttribute('aria-busy');
+              box.innerHTML='<div class="px-4 py-3 text-xs text-ink-muted">Search is unavailable right now. Press Enter to search the full archive.</div>';
             });
         },220);
       });

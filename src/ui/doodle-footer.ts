@@ -1,5 +1,6 @@
 import { escapeHtml } from '../lib/security';
 import type { SiteSettings } from '../types';
+import { renderPyvrenWordmark } from './crew-art';
 
 interface DoodleLinkColumn {
   heading: string;
@@ -86,27 +87,6 @@ function renderFloaterGlyph(kind: FloaterSpec['kind'], accent?: boolean): string
     case 'plane':
       return `<path d="M-12 2 L12 -8 L4 11 L-1 4 Z M12 -8 L-1 4 L-2 9" fill="var(--dcf-surface)" stroke="${stroke}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>`;
   }
-}
-
-function renderMiniYetiLogo(): string {
-  return `<svg class="dcf-mini-yeti" width="42" height="42" viewBox="0 0 44 44" fill="none" aria-hidden="true">
-  <rect x="2" y="2" width="40" height="40" rx="11" fill="var(--dcf-surface)" stroke="var(--dcf-ink)" stroke-width="2.1"/>
-  <g transform="translate(23, 10)" stroke="var(--dcf-ink)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M-6 2 L-10 -3 L-7 -4 L-4 0" fill="var(--dcf-bg)"/>
-    <ellipse cx="0" cy="2" rx="6" ry="4.8" fill="var(--dcf-bg)"/>
-    <circle cx="2.2" cy="1" r="1.2" fill="var(--dcf-ink)" stroke="none"/>
-    <path d="M5.8 1 L9.4 2.2 L5.8 3.4 Z" fill="var(--dcf-accent)" stroke-width="1.3"/>
-  </g>
-  <g stroke="var(--dcf-ink)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M9.5 34 C9.5 28.5 16 27.5 23 28.5 C30.5 29.5 34.5 27 34.5 23 C34.5 18.2 28.5 15.5 21.5 15.5 C14.5 15.5 10.5 19 11.2 23.5 C11.8 27 16.5 28 22.5 27.2" fill="var(--dcf-surface)"/>
-    <circle cx="17.5" cy="20.5" r="3" fill="var(--dcf-bg)" stroke-width="1.8"/>
-    <circle cx="25.2" cy="20.5" r="3" fill="var(--dcf-bg)" stroke-width="1.8"/>
-    <circle cx="18.2" cy="20.5" r="1.4" fill="var(--dcf-ink)" stroke="none"/>
-    <circle cx="25.9" cy="20.5" r="1.4" fill="var(--dcf-ink)" stroke="none"/>
-    <path d="M17.8 25 C20 26.8 23.2 26.8 25.4 25" fill="none" stroke-width="1.7"/>
-    <path d="M28.5 24.2 L33.2 24.8 M33.2 24.8 L35.4 23.3 M33.2 24.8 L35.2 26.5" stroke="var(--dcf-accent)" stroke-width="1.8"/>
-  </g>
-</svg>`;
 }
 
 function renderBoltIcon(): string {
@@ -681,10 +661,7 @@ export function renderDoodleCrewFooter(settings: SiteSettings): string {
   <div class="dcf-inner">
     <div class="dcf-top">
       <div class="dcf-brand">
-        <a href="/" class="dcf-brand-link" aria-label="${escapeHtml(siteName)} home">
-          ${renderMiniYetiLogo()}
-          <span class="dcf-brand-name font-masthead">${escapeHtml(siteName)}</span>
-        </a>
+        ${renderPyvrenWordmark({ siteName, variant: 'footer' })}
         <p class="dcf-brand-blurb">${escapeHtml(tagline)}</p>
         <p class="dcf-brand-meta font-tabular">Co-crafted by ${escapeHtml(author)} &amp; Pyvren · Primary sources &amp; real code</p>
       </div>

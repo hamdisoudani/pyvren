@@ -142,6 +142,17 @@ describe('Dual-Layer UX (Humans vs Agents), Theme Persistence, Rate-Limited Sear
     expect(homeHtml).toContain('topics-popover');
     expect(homeHtml).toContain('mobile-carousel');
     expect(homeHtml).toContain('data-agent-directory');
+    // Big Pyvren wordmark: snake mark stands in for "Py", "vren" as text, eyes track the pointer
+    expect(homeHtml).toContain('pyvren-wordmark');
+    expect(homeHtml).toContain('py-snake-mark');
+    expect(homeHtml).toContain('py-snake-tongue');
+    expect(homeHtml).toContain('data-snake-pupil');
+    expect(homeHtml).toContain('<span class="pyvren-letter" style="--i:0">v</span>');
+    // Image guard lives in <head> so a fast-failing cover can never show a broken icon / alt text
+    const headHtml = homeHtml.slice(0, homeHtml.indexOf('</head>'));
+    expect(headHtml).toContain("document.addEventListener('error'");
+    expect(headHtml).toContain('media-fallback');
+    expect(headHtml).toContain('/og/fallback.svg?category=');
 
     // Strictly zero visible QS score clutter, View Markdown button, or AI-slop colored circle dots
     expect(homeHtml).not.toContain('QS ');
@@ -161,6 +172,11 @@ describe('Dual-Layer UX (Humans vs Agents), Theme Persistence, Rate-Limited Sear
     expect(postHtml).toContain('https://docs.cloudflare.com/assets/workers-workflow-diagram.png');
     expect(postHtml).toContain('https://modelcontextprotocol.io/images/mcp-topology-figure.png');
     expect(postHtml).toContain('editorial-figure');
+    // Cover frame: Py backup plate + skeleton shimmer under the (initially invisible) real image
+    expect(postHtml).toContain('story-crew-plate');
+    expect(postHtml).toContain('media-skeleton');
+    expect(postHtml).toContain('data-story-cover="1"');
+    expect(postHtml).toContain('skeleton-img');
     expect(postHtml).toContain('code-frame');
     expect(postHtml).toContain('code-frame-bar');
     expect(postHtml).toContain('tok-kw');
@@ -176,7 +192,7 @@ describe('Dual-Layer UX (Humans vs Agents), Theme Persistence, Rate-Limited Sear
       `<link rel="alternate" type="text/markdown" title="Markdown briefing" href="https://pyvren.com/blog/${created.slug}.md">`,
     );
 
-    // Inspect Standalone Cartoon Py + Vren Fallback SVG (/og/fallback.svg)
+    // Inspect Standalone Py Fallback SVG (/og/fallback.svg)
     const fbRes = await app.request(
       'https://pyvren.com/og/fallback.svg?category=ai-coding-agents-mcp&label=CLI+vs+MCP',
       {},
@@ -185,7 +201,8 @@ describe('Dual-Layer UX (Humans vs Agents), Theme Persistence, Rate-Limited Sear
     expect(fbRes.status).toBe(200);
     expect(fbRes.headers.get('content-type')).toContain('image/svg+xml');
     const fbSvg = await fbRes.text();
-    expect(fbSvg).toContain('PY + VREN ILLUSTRATED EDITION');
+    expect(fbSvg).toContain('PYVREN · ILLUSTRATED EDITION');
+    expect(fbSvg).toContain('py-snake-head');
     expect(fbSvg).toContain('CLI vs MCP');
 
     // Inspect AI Agent Map (/api/v1/map) — includes quality_score & markdown_url for agents

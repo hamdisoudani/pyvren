@@ -208,6 +208,8 @@
 
 .rel-chip {
   display: inline-flex;
+  flex-shrink: 0;
+  white-space: nowrap;
   align-items: center;
   gap: 0.3rem;
   padding: 0.28rem 0.65rem;
@@ -1180,15 +1182,6 @@
   width: fit-content;
 }
 
-.dcf-mini-yeti {
-  flex-shrink: 0;
-  transition: transform 220ms var(--ease-editorial);
-}
-
-.dcf-brand-link:hover .dcf-mini-yeti {
-  transform: rotate(-6deg) scale(1.06);
-}
-
 .dcf-brand-name {
   font-size: 1.5rem;
   font-weight: 900;
@@ -1624,8 +1617,17 @@
     var(--bg-subtle);
 }
 
+/* Real cover stays invisible until it has actually loaded → never a broken icon / alt text. */
 .story-real-img {
+  opacity: 0;
   background-color: var(--bg-subtle);
+  transition:
+    opacity 480ms var(--ease-editorial),
+    transform 500ms var(--ease-editorial);
+}
+
+.story-media.media-ready .story-real-img {
+  opacity: 1;
 }
 
 .story-card:hover .story-real-img,
@@ -1816,7 +1818,7 @@
 }
 
 .prose-editorial .editorial-figure .editorial-img,
-.article-hero-figure img {
+.article-hero-figure > img {
   display: block;
   width: 100%;
   max-height: 520px;
@@ -1933,5 +1935,323 @@
   *, *::before, *::after {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
+  }
+}
+
+/* ==========================================================================
+   Pyvren Wordmark — Py (the snake mark spells "Py") + "vren"
+   ========================================================================== */
+
+.pyvren-wordmark {
+  --mark-h: 44px;
+  display: inline-flex;
+  align-items: baseline;
+  color: var(--ink-primary);
+  text-decoration: none;
+  line-height: 1;
+  border-radius: 12px;
+  outline-offset: 6px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (min-width: 640px) {
+  .pyvren-wordmark--header {
+    --mark-h: 56px;
+  }
+}
+
+.pyvren-wordmark--footer {
+  --mark-h: 52px;
+  --snake-ink: var(--dcf-ink, var(--ink-primary));
+  --snake-gap: var(--dcf-bg, var(--bg-canvas));
+  color: var(--dcf-ink, var(--ink-primary));
+}
+
+.pyvren-wordmark-mark {
+  width: calc(var(--mark-h) * 0.919);
+  height: var(--mark-h);
+  /* The mark's own baseline sits at y=54 of 74 → pull it down so it shares the text baseline. */
+  margin-bottom: calc(var(--mark-h) * -0.27);
+  margin-right: calc(var(--mark-h) * -0.13);
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+.pyvren-wordmark-text {
+  display: inline-flex;
+  font-family: var(--font-masthead);
+  font-weight: 900;
+  font-size: calc(var(--mark-h) * 0.74);
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.pyvren-letter {
+  display: inline-block;
+  transform-origin: 50% 100%;
+  animation: pyv-letter-in 620ms cubic-bezier(0.2, 0.9, 0.3, 1.3) backwards;
+  animation-delay: calc(320ms + var(--i, 0) * 70ms);
+}
+
+/* Intro: the body rises out of the baseline, then the head pops up and settles. */
+.pyvren-wordmark .py-snake-stem {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: pyv-rise 640ms cubic-bezier(0.2, 0.9, 0.3, 1.2) backwards;
+}
+
+.pyvren-wordmark .py-snake-neck {
+  animation: pyv-head-in 860ms cubic-bezier(0.2, 0.9, 0.3, 1.3) 120ms backwards;
+}
+
+/* Hover / focus: Py leans toward the letters, tastes the "v", and the letters ripple. */
+.pyvren-wordmark:hover .py-snake-neck,
+.pyvren-wordmark:focus-visible .py-snake-neck {
+  transform: rotate(8deg);
+}
+
+.pyvren-wordmark:hover .py-snake-tongue,
+.pyvren-wordmark:focus-visible .py-snake-tongue {
+  animation: py-flick-fast 620ms ease-in-out infinite;
+}
+
+.pyvren-wordmark:hover .pyvren-letter,
+.pyvren-wordmark:focus-visible .pyvren-letter {
+  animation: pyv-wave 760ms cubic-bezier(0.3, 1.5, 0.6, 1) both;
+  animation-delay: calc(90ms + var(--i, 0) * 60ms);
+}
+
+/* ==========================================================================
+   Py — shared idle life (sway, tongue flick, blink) for every snake on the page
+   ========================================================================== */
+
+.py-snake-neck {
+  transform-box: fill-box;
+  transform-origin: 10% 95%;
+  transition: transform 560ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.py-snake-head {
+  transform-box: fill-box;
+  transform-origin: 10% 95%;
+  animation: py-sway 7.5s ease-in-out var(--py-delay, 1.2s) infinite;
+}
+
+.py-snake-tongue {
+  transform-box: fill-box;
+  transform-origin: 0% 50%;
+  animation: py-flick 5.4s ease-in-out var(--py-delay, 1.4s) infinite;
+}
+
+.py-snake-eye {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  animation: py-blink 6.8s ease-in-out var(--py-delay, 2s) infinite;
+}
+
+.py-snake-pupil {
+  transition: transform 120ms linear;
+}
+
+.crew-hero-svg:hover .py-snake-neck {
+  transform: rotate(5deg);
+}
+
+.crew-hero-svg:hover .py-snake-tongue,
+.story-card:hover .py-snake-tongue,
+.topic-card:hover .py-snake-tongue {
+  animation: py-flick-fast 640ms ease-in-out infinite;
+}
+
+.typing-dot {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  animation: typing-dot 1.25s ease-in-out infinite;
+}
+
+.crew-cursor {
+  animation: crew-cursor 1.05s steps(1) infinite;
+}
+
+.crew-steam {
+  animation: crew-steam 3.2s ease-in-out infinite;
+}
+
+@keyframes pyv-rise {
+  from { opacity: 0; transform: translateY(28%) scaleY(0.82); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes pyv-head-in {
+  0% { opacity: 0; transform: translateY(26%) rotate(-16deg); }
+  55% { opacity: 1; }
+  100% { transform: none; }
+}
+
+@keyframes pyv-letter-in {
+  from { opacity: 0; transform: translateY(0.32em) scaleY(0.6); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes pyv-wave {
+  0%, 100% { transform: none; }
+  35% { transform: translateY(-0.13em) rotate(-4deg); }
+  65% { transform: translateY(0.02em) scaleY(0.94); }
+}
+
+@keyframes py-sway {
+  0%, 100% { transform: rotate(0deg); }
+  30% { transform: rotate(-3deg); }
+  64% { transform: rotate(2.2deg); }
+}
+
+@keyframes py-flick {
+  0%, 80%, 100% { transform: scaleX(1); }
+  83% { transform: scaleX(0.15); }
+  86.5% { transform: scaleX(1.22); }
+  90% { transform: scaleX(0.2); }
+  93.5% { transform: scaleX(1.1); }
+}
+
+@keyframes py-flick-fast {
+  0%, 100% { transform: scaleX(1); }
+  25% { transform: scaleX(0.2); }
+  55% { transform: scaleX(1.38); }
+  78% { transform: scaleX(0.35); }
+}
+
+@keyframes py-blink {
+  0%, 94%, 100% { transform: scaleY(1); }
+  96.5% { transform: scaleY(0.08); }
+}
+
+@keyframes typing-dot {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-3px); opacity: 1; }
+}
+
+@keyframes crew-cursor {
+  50% { opacity: 0; }
+}
+
+@keyframes crew-steam {
+  0%, 100% { transform: translateY(0); opacity: 0.35; }
+  50% { transform: translateY(-3px); opacity: 0.85; }
+}
+
+/* ==========================================================================
+   Skeleton loaders (images, cover frames, live search)
+   ========================================================================== */
+
+.skeleton-shimmer {
+  overflow: hidden;
+  background-color: var(--bg-subtle);
+}
+
+.skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(100deg, transparent 18%, var(--skeleton-sheen) 50%, transparent 82%);
+  animation: skeleton-sweep 1.45s ease-in-out infinite;
+  pointer-events: none;
+}
+
+:root {
+  --skeleton-sheen: rgba(255, 253, 248, 0.75);
+}
+
+[data-theme="dark"] {
+  --skeleton-sheen: rgba(255, 255, 255, 0.06);
+}
+
+.media-skeleton {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background-image: radial-gradient(color-mix(in srgb, var(--ink-primary) 9%, transparent) 1px, transparent 1.3px);
+  background-size: 16px 16px;
+  transition:
+    opacity 360ms ease,
+    visibility 360ms;
+}
+
+.media-skeleton-mark {
+  display: inline-flex;
+  opacity: 0.2;
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+.story-media.media-ready .media-skeleton,
+.story-media.media-fallback .media-skeleton {
+  opacity: 0;
+  visibility: hidden;
+}
+
+img.skeleton-img:not(.is-loaded),
+.prose-editorial img:not(.is-loaded) {
+  color: transparent;
+  background-color: var(--bg-subtle);
+  background-image: linear-gradient(100deg, transparent 30%, var(--skeleton-sheen) 50%, transparent 70%);
+  background-size: 220% 100%;
+  animation: skeleton-bg 1.45s ease-in-out infinite;
+}
+
+.prose-editorial img:not(.is-loaded) {
+  min-height: 10rem;
+}
+
+.search-skeleton-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.skeleton-line {
+  position: relative;
+  display: block;
+  height: 0.55rem;
+  border-radius: 6px;
+}
+
+.skeleton-line--lg {
+  height: 0.85rem;
+}
+
+@keyframes skeleton-sweep {
+  to { transform: translateX(100%); }
+}
+
+@keyframes skeleton-bg {
+  from { background-position: 160% 0; }
+  to { background-position: -60% 0; }
+}
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.14; }
+  50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pyvren-letter,
+  .py-snake-stem,
+  .py-snake-neck,
+  .py-snake-head,
+  .py-snake-tongue,
+  .py-snake-eye,
+  .py-snake-pupil,
+  .typing-dot,
+  .crew-cursor,
+  .crew-steam,
+  .media-skeleton-mark,
+  .skeleton-shimmer::after,
+  img.skeleton-img,
+  .prose-editorial img {
+    animation: none !important;
+    transition: none !important;
   }
 }

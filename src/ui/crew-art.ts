@@ -2,17 +2,18 @@ import { getCategoryMeta } from '../lib/relations';
 import { escapeHtml } from '../lib/security';
 
 /**
- * Pyvren Sketchbook Art & Custom Hand-Drawn Iconography
+ * Pyvren Brand Art & Custom Iconography
  *
- * Mascot Identity:
- *  - "Py": A charming, expressive cartoon Python snake with S-coils, belly scale ticks,
- *    diagonal ink cross-hatching, big animated eyes, and a cheeky crimson forked tongue.
- *  - "Vren": A scrappy little crested Wren songbird wearing round spectacles and holding
- *    an ink nib, perched right on Py's head or nestled in Py's coil.
- *  Together: Py + Vren = PYVREN.
+ * Mascot identity — "Py", the house python:
+ *  - One solid, geometric ink silhouette whose neck + head form a capital "P" and whose
+ *    tail curls into the descender of a "y". The mark literally spells "Py", so the
+ *    wordmark reads [snake]vren → Pyvren.
+ *  - Python saddle markings, a big friendly eye (pointer-tracked when `live`), a brow,
+ *    a smile line and a crimson forked tongue that flicks toward the "v".
+ *  - Split into `.py-snake-stem` and `.py-snake-head` groups so CSS can sway the head,
+ *    flick the tongue and blink the eye without any JS animation library.
  *
- * Zero generic colored-circle dots anywhere — every category and UI affordance uses
- * bespoke dry-brush sketchbook SVG linework that adapts seamlessly to Light & Dark modes.
+ * Every drawing is inline SVG driven by theme tokens, so it adapts to Light & Dark modes.
  */
 
 export type UiIconKind =
@@ -30,40 +31,110 @@ export type UiIconKind =
   | 'qa'
   | 'linkedin';
 
+/* -------------------------------------------------------------------------- */
+/* Py — canonical snake geometry (viewBox 0 0 68 74)                           */
+/* -------------------------------------------------------------------------- */
+
+export const PY_SNAKE_VIEWBOX = { width: 68, height: 74 } as const;
+
+const PY_STEM_PATH =
+  'M10.5 26 L21.5 26 L21.5 52 C21.5 62.5 15.5 70.5 7 70.5 C4 70.5 1.6 69 0.6 66.2 C3.6 67 7.2 66 8.8 62.6 C10 60 10.5 57 10.5 53 Z';
+const PY_HEAD_PATH =
+  'M10.5 40 L10.5 22 C10.5 11 19 3.5 31 3.5 C43.5 3.5 52.5 9.5 55.2 17.5 C57 23 54.2 28.6 47.6 30.2 C40.6 31.9 31.5 30.4 26.2 33.4 C23 35.2 21.5 38 21.5 42 Z';
+const PY_TONGUE_PATH = 'M55.4 22.2 H61.5 M61.5 22.2 L66 18.8 M61.5 22.2 L66 25.6';
+
+export interface SnakePalette {
+  /** Body silhouette colour. */
+  ink: string;
+  /** "Negative space" colour used for markings, mouth & eye ring (usually the page background). */
+  gap: string;
+  /** Forked tongue colour. */
+  tongue: string;
+  sclera?: string;
+  pupil?: string;
+}
+
+const THEME_SNAKE_PALETTE: SnakePalette = {
+  ink: 'var(--snake-ink, var(--ink-primary))',
+  gap: 'var(--snake-gap, var(--bg-canvas))',
+  tongue: 'var(--snake-tongue, var(--accent))',
+};
+
 /**
- * Masthead & Avatar Emblem: Cartoon Py (Python snake) + Vren (Wren crest/perch) stamp.
+ * Raw `<g>` markup for Py in the 68×74 coordinate space. Embed it inside any SVG with a
+ * `transform` to place/scale it. `live` adds `data-snake-pupil` so the layout script can
+ * make the eye follow the pointer.
+ */
+export function renderPySnakeFigure(palette: SnakePalette = THEME_SNAKE_PALETTE, live = false): string {
+  const sclera = palette.sclera || '#FFFDF8';
+  const pupil = palette.pupil || '#15171D';
+  return `<g class="py-snake-stem">
+      <path d="${PY_STEM_PATH}" fill="${palette.ink}"/>
+      <g fill="${palette.gap}" opacity="0.9">
+        <path d="M16 44 l2.6 3.2 -2.6 3.2 -2.6 -3.2z"/>
+        <path d="M15.4 53.6 l2.4 3 -2.4 3 -2.4 -3z"/>
+      </g>
+    </g>
+    <g class="py-snake-neck"><g class="py-snake-head">
+      <path d="${PY_HEAD_PATH}" fill="${palette.ink}"/>
+      <g fill="${palette.gap}">
+        <path d="M16 34.5 l2.6 3.2 -2.6 3.2 -2.6 -3.2z" opacity="0.9"/>
+        <path d="M15.6 16 l2.4 2.8 -2.4 2.8 -2.4 -2.8z" opacity="0.75"/>
+        <path d="M21 8.6 l2.2 2.4 -2.2 2.4 -2.2 -2.4z" opacity="0.55"/>
+        <circle cx="49.5" cy="14.6" r="1.1"/>
+      </g>
+      <path d="M53.6 23.4 C48 26.4 40.5 26.6 35.5 24.6" stroke="${palette.gap}" stroke-width="1.7" stroke-linecap="round"/>
+      <path class="py-snake-brow" d="M28.6 8.4 C31.6 6.6 36.6 6.4 40.6 8.6" stroke="${palette.gap}" stroke-width="1.5" stroke-linecap="round"/>
+      <g class="py-snake-eye">
+        <circle cx="35" cy="14.8" r="5.6" fill="${sclera}" stroke="${palette.gap}" stroke-width="1.6"/>
+        <g class="py-snake-pupil"${live ? ' data-snake-pupil' : ''}>
+          <circle cx="36" cy="14.8" r="2.6" fill="${pupil}"/>
+          <circle cx="37" cy="13.6" r="0.9" fill="${sclera}"/>
+        </g>
+      </g>
+      <path class="py-snake-tongue" d="${PY_TONGUE_PATH}" stroke="${palette.tongue}" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+    </g></g>`;
+}
+
+/**
+ * Standalone Py mark (the "Py" in Pyvren). Height-driven; width follows the 68:74 ratio.
+ */
+export function renderPySnakeMark(opts: { height?: number; className?: string; live?: boolean; label?: string } = {}): string {
+  const height = opts.height ?? 48;
+  const width = Math.round((height * PY_SNAKE_VIEWBOX.width) / PY_SNAKE_VIEWBOX.height * 100) / 100;
+  const a11y = opts.label
+    ? `role="img" aria-label="${escapeHtml(opts.label)}"`
+    : 'aria-hidden="true" focusable="false"';
+  return `<svg class="py-snake-mark ${escapeHtml(opts.className || '')}" width="${width}" height="${height}" viewBox="0 0 68 74" fill="none" overflow="visible" ${a11y}>
+    ${renderPySnakeFigure(THEME_SNAKE_PALETTE, Boolean(opts.live))}
+  </svg>`;
+}
+
+/**
+ * The masthead logo: [Py snake]vren. The snake replaces "Py"; "vren" is set in the display
+ * serif with per-letter spans so CSS can stagger an entrance and a hover wave while the
+ * snake tilts toward the letters and flicks its tongue at the "v".
+ */
+export function renderPyvrenWordmark(opts: { siteName: string; variant?: 'header' | 'footer'; href?: string }): string {
+  const variant = opts.variant || 'header';
+  const letters = ['v', 'r', 'e', 'n']
+    .map((ch, i) => `<span class="pyvren-letter" style="--i:${i}">${ch}</span>`)
+    .join('');
+  return `<a href="${escapeHtml(opts.href || '/')}" class="pyvren-wordmark pyvren-wordmark--${variant}" data-pyvren-wordmark aria-label="Pyvren — ${escapeHtml(opts.siteName)} home">
+    ${renderPySnakeMark({ className: 'pyvren-wordmark-mark', live: true })}
+    <span class="pyvren-wordmark-text" aria-hidden="true">${letters}</span>
+  </a>`;
+}
+
+/**
+ * Compact square emblem (avatar / author cards): Py on a stamped paper tile.
  */
 export function renderMastheadNibSvg(size = 34): string {
   return `<svg width="${size}" height="${size}" viewBox="0 0 44 44" fill="none" aria-hidden="true" class="pyvren-emblem-svg shrink-0 select-none">
-    <!-- Hand-inked sketchbook stamp frame -->
-    <rect x="2" y="2" width="40" height="40" rx="11" fill="var(--bg-surface)" stroke="var(--ink-primary)" stroke-width="2.2"/>
-    <path d="M5 37.5 C14 39 30 39 39 37.5" stroke="var(--ink-primary)" stroke-opacity="0.14" stroke-width="2" stroke-linecap="round"/>
-
-    <!-- Tiny Vren (Wren bird) perched on top of Py's head -->
-    <g transform="translate(23, 10)" stroke="var(--ink-primary)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-      <!-- Cocked wren tail -->
-      <path d="M-6 2 L-10 -3 L-7 -4 L-4 0" fill="var(--bg-elevated)"/>
-      <!-- Round wren body -->
-      <ellipse cx="0" cy="2" rx="6.2" ry="5" fill="var(--bg-elevated)"/>
-      <circle cx="2.2" cy="1" r="1.2" fill="var(--ink-primary)" stroke="none"/>
-      <!-- Little orange-red beak -->
-      <path d="M6 1 L9.5 2.2 L6 3.5 Z" fill="var(--accent)" stroke-width="1.3"/>
-    </g>
-
-    <!-- Py (Cartoon Python Snake) S-neck + smiling head -->
-    <g stroke="var(--ink-primary)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-      <!-- Lower coil resting at bottom of stamp -->
-      <path d="M9.5 34 C9.5 28.5 16 27.5 23 28.5 C30.5 29.5 34.5 27 34.5 23 C34.5 18.2 28.5 15.5 21.5 15.5 C14.5 15.5 10.5 19 11.2 23.5 C11.8 27 16.5 28 22.5 27.2" fill="var(--bg-surface)"/>
-      <!-- Belly scale ticks -->
-      <path d="M15 32.5 L16.5 30 M20.5 33 L21.5 30.2 M26 32.8 L26.5 30" stroke-width="1.4" stroke-opacity="0.55"/>
-      <!-- Big cartoon eyes on Py's head -->
-      <circle cx="17.5" cy="20.5" r="3.1" fill="var(--bg-canvas)" stroke-width="1.8"/>
-      <circle cx="25.2" cy="20.5" r="3.1" fill="var(--bg-canvas)" stroke-width="1.8"/>
-      <circle cx="18.2" cy="20.5" r="1.4" fill="var(--ink-primary)" stroke="none"/>
-      <circle cx="25.9" cy="20.5" r="1.4" fill="var(--ink-primary)" stroke="none"/>
-      <!-- Cheeky smile + crimson forked tongue -->
-      <path d="M17.8 25 C20 26.8 23.2 26.8 25.4 25" fill="none" stroke-width="1.7"/>
-      <path d="M28.5 24.2 L33.2 24.8 M33.2 24.8 L35.4 23.3 M33.2 24.8 L35.2 26.5" stroke="var(--accent)" stroke-width="1.8"/>
+    <rect x="1.5" y="1.5" width="41" height="41" rx="11" fill="var(--bg-surface)" stroke="var(--ink-primary)" stroke-width="1.8"/>
+    <path d="M6 38.4 C15 39.6 29 39.6 38 38.4" stroke="var(--ink-primary)" stroke-opacity="0.12" stroke-width="2" stroke-linecap="round"/>
+    <g transform="translate(8.6 5.2) scale(0.44)">
+      ${renderPySnakeFigure({ ink: 'var(--ink-primary)', gap: 'var(--bg-surface)', tongue: 'var(--accent)' })}
     </g>
   </svg>`;
 }
@@ -171,135 +242,100 @@ export function renderUiSketchIcon(kind: UiIconKind, size = 15): string {
   }
 }
 
+
+/** Deterministic small hash → seconds offset so many snakes on one page never flick in sync. */
+function animationDelayFor(key: string): string {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return `${((h % 4000) / 1000 + 0.6).toFixed(2)}s`;
+}
+
 /**
- * Hero Studio Scene: Cartoon Py (the Python snake) & Vren (the spectacled Wren bird)
- * co-crafting dispatches at a sketchbook desk alongside a syntax-colored terminal.
+ * Hero studio scene: Py rises over the desk, tongue pointed at a syntax-coloured terminal,
+ * with a "typing" bubble (research in progress), a steaming mug and a stack of notebooks.
  */
 export function renderHeroCrewSceneSvg(): string {
-  return `<svg viewBox="0 0 400 282" width="100%" height="100%" fill="none" role="img" aria-label="Py the cartoon Python snake and Vren the spectacled Wren bird co-crafting engineering stories at a sketchbook desk" class="crew-hero-svg pyvren-mascot-svg select-none">
+  return `<svg viewBox="0 0 400 282" width="100%" height="100%" fill="none" role="img" aria-label="Py, the Pyvren house python, researching a story at a terminal" class="crew-hero-svg pyvren-mascot-svg select-none">
     <defs>
-      <pattern id="pyvren-hero-hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(34)">
-        <line x1="0" y1="0" x2="0" y2="7" stroke="var(--ink-primary)" stroke-width="1.15" stroke-opacity="0.22"/>
-      </pattern>
-      <pattern id="pyvren-hero-dots" width="15" height="15" patternUnits="userSpaceOnUse">
-        <circle cx="2" cy="2" r="0.9" fill="var(--ink-primary)" fill-opacity="0.12"/>
+      <pattern id="pyv-hero-dots" width="16" height="16" patternUnits="userSpaceOnUse">
+        <circle cx="2" cy="2" r="0.95" fill="var(--ink-primary)" fill-opacity="0.13"/>
       </pattern>
     </defs>
 
-    <!-- Sketchbook grid paper backdrop -->
-    <rect x="8" y="8" width="384" height="266" rx="18" fill="url(#pyvren-hero-dots)"/>
+    <rect x="6" y="6" width="388" height="270" rx="16" fill="url(#pyv-hero-dots)"/>
 
-    <!-- Floating ink stars -->
-    <g class="crew-float-slow" stroke="var(--ink-primary)" stroke-width="1.8" stroke-linejoin="round">
-      <path d="M46 42 L49 50 L57 53 L49 56 L46 64 L43 56 L35 53 L43 50 Z" fill="var(--accent)"/>
-      <path d="M348 34 L350 40 L356 42 L350 44 L348 50 L346 44 L340 42 L346 40 Z" fill="var(--bg-surface)"/>
+    <!-- drifting ink stars & code glyphs -->
+    <g class="crew-float-slow" stroke="var(--ink-primary)" stroke-width="1.7" stroke-linejoin="round">
+      <path d="M30 38 L33 46 L41 49 L33 52 L30 60 L27 52 L19 49 L27 46 Z" fill="var(--accent)"/>
+      <path d="M366 30 L368 36 L374 38 L368 40 L366 46 L364 40 L358 38 L364 36 Z" fill="var(--bg-surface)"/>
     </g>
+    <text class="crew-bob-delayed" x="292" y="58" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="15" font-weight="600" fill="var(--ink-muted)">{ }</text>
 
-    <!-- Right side: Sketchbook Code Terminal Window with colored syntax bars -->
-    <g transform="translate(232, 68)" stroke="var(--ink-primary)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-      <rect x="0" y="0" width="138" height="104" rx="11" fill="#15171D"/>
-      <path d="M0 11 C0 5 5 0 11 0 H127 C133 0 138 5 138 11 V23 H0 Z" fill="#20242E"/>
-      <line x1="0" y1="23" x2="138" y2="23"/>
-      <circle cx="13" cy="11.5" r="2.8" fill="#EF5350" stroke="none"/>
-      <circle cx="23" cy="11.5" r="2.8" fill="#F59E0B" stroke="none"/>
-      <circle cx="33" cy="11.5" r="2.8" fill="#34D399" stroke="none"/>
-      <text x="124" y="15" text-anchor="end" font-family="'JetBrains Mono', monospace" font-size="8.5" font-weight="600" fill="#9CA3AF" stroke="none">pyvren.py</text>
-
-      <!-- Colored code syntax lines inside terminal -->
+    <!-- Terminal -->
+    <g transform="translate(222 84)" stroke="var(--ink-primary)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M58 108 L53 138 L97 138 L92 108 Z" fill="var(--bg-elevated)"/>
+      <rect x="0" y="0" width="150" height="108" rx="11" fill="#15171D"/>
+      <path d="M0 11 C0 5 5 0 11 0 H139 C145 0 150 5 150 11 V22 H0 Z" fill="#20242E"/>
+      <line x1="0" y1="22" x2="150" y2="22"/>
+      <circle cx="13" cy="11" r="2.7" fill="#EF5350" stroke="none"/>
+      <circle cx="23" cy="11" r="2.7" fill="#F59E0B" stroke="none"/>
+      <circle cx="33" cy="11" r="2.7" fill="#34D399" stroke="none"/>
+      <text x="137" y="14.5" text-anchor="end" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="8" font-weight="600" fill="#9CA3AF" stroke="none">sources.py</text>
       <g stroke-width="3" stroke-linecap="round">
-        <line x1="14" y1="39" x2="36" y2="39" stroke="#FF7B72"/>
-        <line x1="44" y1="39" x2="86" y2="39" stroke="#79C0FF"/>
-        <line x1="22" y1="52" x2="54" y2="52" stroke="#D2A8FF"/>
-        <line x1="62" y1="52" x2="118" y2="52" stroke="#A5D6FF"/>
-        <line x1="22" y1="65" x2="46" y2="65" stroke="#FF7B72"/>
-        <line x1="54" y1="65" x2="104" y2="65" stroke="#7EE787"/>
-        <line x1="14" y1="78" x2="72" y2="78" stroke="#FFA657"/>
-        <line x1="80" y1="78" x2="122" y2="78" stroke="#79C0FF"/>
-        <line x1="14" y1="91" x2="58" y2="91" stroke="#6E7681"/>
+        <line x1="14" y1="38" x2="34" y2="38" stroke="#FF7B72"/>
+        <line x1="42" y1="38" x2="90" y2="38" stroke="#79C0FF"/>
+        <line x1="24" y1="51" x2="54" y2="51" stroke="#D2A8FF"/>
+        <line x1="62" y1="51" x2="124" y2="51" stroke="#A5D6FF"/>
+        <line x1="24" y1="64" x2="48" y2="64" stroke="#FF7B72"/>
+        <line x1="56" y1="64" x2="108" y2="64" stroke="#7EE787"/>
+        <line x1="14" y1="77" x2="74" y2="77" stroke="#FFA657"/>
+        <line x1="82" y1="77" x2="128" y2="77" stroke="#79C0FF"/>
       </g>
-      <!-- Stand -->
-      <path d="M56 104 L51 132 L87 132 L82 104 Z" fill="var(--bg-elevated)"/>
+      <rect class="crew-cursor" x="14" y="86" width="7" height="11" rx="1" fill="#7EE787" stroke="none"/>
     </g>
 
-    <!-- Center-Left: PY THE CARTOON PYTHON SNAKE + VREN THE WREN BIRD -->
-    <g transform="translate(132, 148)" stroke="var(--ink-primary)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-      <!-- Py's expressive tail curling up on left holding a drafted page -->
-      <g transform="translate(-76, -12) rotate(-8)">
-        <rect x="-18" y="-34" width="56" height="68" rx="6" fill="var(--bg-elevated)"/>
-        <line x1="-8" y1="-20" x2="22" y2="-20" stroke="var(--accent)" stroke-width="2.5"/>
-        <line x1="-8" y1="-9" x2="28" y2="-9" stroke-width="1.8" stroke-opacity="0.65"/>
-        <line x1="-8" y1="1" x2="24" y2="1" stroke-width="1.8" stroke-opacity="0.5"/>
-        <line x1="-8" y1="11" x2="18" y2="11" stroke-width="1.8" stroke-opacity="0.4"/>
-      </g>
-      <!-- Tail tip wrapping around the sheet -->
-      <path d="M-46 38 C-74 36 -86 18 -76 -2 C-71 -12 -60 -10 -56 -2" fill="none" stroke-width="7" stroke="var(--ink-primary)"/>
-      <path d="M-46 38 C-74 36 -86 18 -76 -2 C-71 -12 -60 -10 -56 -2" fill="none" stroke-width="3.6" stroke="var(--bg-surface)"/>
-
-      <!-- Py's stacked figure-8 S-coils on the desk -->
-      <path d="M-48 52 C-54 26 -30 16 4 18 C38 20 58 30 52 52 Z" fill="var(--bg-surface)"/>
-      <path d="M12 20 C42 22 56 32 51 51 L26 51 C30 36 22 25 4 21 Z" fill="url(#pyvren-hero-hatch)" stroke="none"/>
-      <!-- Belly scale ribs on lower coil -->
-      <path d="M-28 48 C-26 39 -22 35 -18 34 M-8 49 C-7 39 -4 35 0 34 M12 49 C13 40 16 36 20 35 M30 49 C31 41 34 38 37 37" stroke-width="1.6" stroke-opacity="0.5"/>
-
-      <!-- Py's middle coil & graceful S-neck rising to cartoon head -->
-      <path d="M-32 24 C-36 2 -14 -8 10 -4 C30 -1 40 10 34 24 Z" fill="var(--bg-elevated)"/>
-      <!-- Neck rising -->
-      <path d="M-14 4 C-22 -22 -18 -54 2 -60 C24 -66 42 -50 40 -30 C38 -14 22 -8 6 -10 C-4 -11 -8 -2 -6 10" fill="var(--bg-surface)"/>
-      <!-- Dorsal diamond markings on Py -->
-      <path d="M-11 -20 L-6 -25 L-1 -20 L-6 -15 Z" fill="var(--accent)" fill-opacity="0.22" stroke-width="1.5"/>
-
-      <!-- Py's Cartoon Eyes + Expressive Brows -->
-      <g class="crew-blink">
-        <circle cx="-1" cy="-42" r="7.2" fill="var(--bg-canvas)" stroke-width="2.2"/>
-        <circle cx="19" cy="-42" r="7.2" fill="var(--bg-canvas)" stroke-width="2.2"/>
-        <circle cx="1" cy="-42" r="3.1" fill="var(--ink-primary)" stroke="none"/>
-        <circle cx="21" cy="-42" r="3.1" fill="var(--ink-primary)" stroke="none"/>
-        <circle cx="2.2" cy="-43.5" r="1" fill="var(--bg-canvas)" stroke="none"/>
-        <circle cx="22.2" cy="-43.5" r="1" fill="var(--bg-canvas)" stroke="none"/>
-      </g>
-      <path d="M-7 -52 Q-1 -56 5 -52 M13 -52 Q19 -56 25 -52" fill="none" stroke-width="2"/>
-
-      <!-- Py's Big Friendly Cartoon Grin + Forked Crimson Tongue -->
-      <path d="M0 -26 C8 -19 20 -19 28 -25" fill="none" stroke-width="2.2"/>
-      <path d="M35 -29 L48 -28 M48 -28 L54 -33 M48 -28 L54 -23" stroke="var(--accent)" stroke-width="2.3"/>
-
-      <!-- VREN THE WREN BIRD perched right on Py's head wearing editor spectacles! -->
-      <g transform="translate(6, -77)" class="crew-bob">
-        <!-- Upright cocked wren tail -->
-        <path d="M-14 2 L-24 -10 L-17 -12 L-10 -2 Z" fill="var(--bg-elevated)"/>
-        <!-- Plump wren body -->
-        <ellipse cx="0" cy="2" rx="15" ry="13" fill="var(--bg-surface)"/>
-        <path d="M2 -9 C12 -5 14 5 8 12 L0 13 C6 6 6 -3 0 -9 Z" fill="url(#pyvren-hero-hatch)" stroke="none"/>
-        <!-- Wing holding a tiny crimson fountain nib -->
-        <path d="M-8 2 C-2 0 2 5 -3 10 C-8 11 -11 7 -8 2 Z" fill="var(--bg-elevated)"/>
-        <!-- Editor spectacles on Vren -->
-        <circle cx="6" cy="-1" r="4.2" fill="var(--bg-canvas)" stroke-width="1.8"/>
-        <circle cx="6.6" cy="-1" r="1.7" fill="var(--ink-primary)" stroke="none"/>
-        <line x1="1.5" y1="-1" x2="-4" y2="-2" stroke-width="1.6"/>
-        <!-- Crisp wren beak -->
-        <path d="M13 -2 L22 1 L13 4 Z" fill="var(--accent)" stroke-width="1.8"/>
-        <!-- Tiny legs gripping Py's crown -->
-        <line x1="-4" y1="15" x2="-5" y2="19" stroke-width="1.9"/>
-        <line x1="4" y1="15" x2="5" y2="19" stroke-width="1.9"/>
-      </g>
+    <!-- Typing bubble: Py is reading the sources -->
+    <g transform="translate(150 22)">
+      <path d="M10 0 H52 C57.5 0 62 4.5 62 10 V22 C62 27.5 57.5 32 52 32 H22 L10 42 L13 32 H10 C4.5 32 0 27.5 0 22 V10 C0 4.5 4.5 0 10 0 Z" fill="var(--bg-surface)" stroke="var(--ink-primary)" stroke-width="2" stroke-linejoin="round"/>
+      <circle class="typing-dot" cx="19" cy="16" r="3.4" fill="var(--ink-primary)"/>
+      <circle class="typing-dot" cx="31" cy="16" r="3.4" fill="var(--ink-primary)" style="animation-delay:.18s"/>
+      <circle class="typing-dot" cx="43" cy="16" r="3.4" fill="var(--accent)" style="animation-delay:.36s"/>
     </g>
 
-    <!-- Drafting desk ground line -->
-    <line x1="20" y1="200" x2="380" y2="200" stroke="var(--ink-primary)" stroke-width="2.7" stroke-linecap="round"/>
-    <line x1="46" y1="207" x2="354" y2="207" stroke="var(--ink-primary)" stroke-opacity="0.22" stroke-width="1.6" stroke-linecap="round"/>
+    <!-- Desk -->
+    <ellipse cx="62" cy="223.5" rx="36" ry="3.6" fill="var(--ink-primary)" fill-opacity="0.12"/>
+    <line x1="16" y1="222" x2="384" y2="222" stroke="var(--ink-primary)" stroke-width="2.6" stroke-linecap="round"/>
+    <line x1="42" y1="229" x2="358" y2="229" stroke="var(--ink-primary)" stroke-opacity="0.2" stroke-width="1.5" stroke-linecap="round"/>
 
-    <!-- Hand-lettered sketchbook nameplate -->
-    <g transform="translate(200, 240)">
-      <rect x="-138" y="-16" width="276" height="30" rx="9" fill="var(--bg-surface)" stroke="var(--ink-primary)" stroke-width="1.9"/>
-      <text x="0" y="3.5" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="10.5" font-weight="600" letter-spacing="0.5" fill="var(--ink-primary)">PY (SNAKE) + VREN (WREN) &times; HAMDI</text>
+    <!-- Mug with steam -->
+    <g transform="translate(176 196)" stroke="var(--ink-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path class="crew-steam" d="M7 -6 C4 -10 10 -13 7 -18 M15 -6 C12 -10 18 -13 15 -18" stroke-opacity="0.45"/>
+      <path d="M0 0 H22 V20 C22 23 20 26 17 26 H5 C2 26 0 23 0 20 Z" fill="var(--bg-surface)"/>
+      <path d="M22 6 C29 6 29 17 22 17" fill="none"/>
+      <line x1="5" y1="9" x2="17" y2="9" stroke="var(--accent)" stroke-width="2.2"/>
     </g>
+
+    <!-- Notebooks -->
+    <g transform="translate(322 204)" stroke="var(--ink-primary)" stroke-width="1.9" stroke-linejoin="round">
+      <rect x="0" y="9" width="52" height="9" rx="2" fill="var(--bg-elevated)"/>
+      <rect x="4" y="0" width="44" height="9" rx="2" fill="var(--bg-surface)"/>
+      <line x1="10" y1="4.5" x2="30" y2="4.5" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round"/>
+    </g>
+
+    <!-- Py, the house python -->
+    <g transform="translate(40 54) scale(2.35)" class="hero-py" style="--py-delay:1.1s">
+      ${renderPySnakeFigure(THEME_SNAKE_PALETTE, true)}
+    </g>
+
+    <!-- Hand-lettered caption with arrow -->
+    <path d="M92 252 C78 251 68 244 64 234 M64 234 L61.5 241 M64 234 L70 238" stroke="var(--ink-muted)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="98" y="256" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="10" font-weight="500" letter-spacing="0.3" fill="var(--ink-muted)">py — our house python · reads every source</text>
   </svg>`;
 }
 
 /**
- * Renders the Cartoon Pyvren ("Py" the Python Snake + "Vren" the Wren) scene
- * customized with a category prop — used both on Topic Cards AND as the automatic
- * backup illustration whenever a post image doesn't exist or fails to load!
+ * Category scene: Py beside a beat-specific prop. Used on topic cards and as the automatic
+ * backup illustration whenever a post image doesn't exist or fails to load.
  */
 export function renderTopicCrewSvg(categorySlug: string, instanceKey = 't'): string {
   const slug = String(categorySlug || '').trim().toLowerCase();
@@ -310,50 +346,51 @@ export function renderTopicCrewSvg(categorySlug: string, instanceKey = 't'): str
   switch (slug) {
     case 'ai-coding-agents-mcp':
       propSvg = `
-        <g transform="translate(116, 42)" stroke="var(--ink-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="0" y="0" width="50" height="42" rx="7" fill="#16181F"/>
+        <g transform="translate(116, 48)" stroke="var(--ink-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="0" y="0" width="54" height="44" rx="7" fill="#16181F"/>
           <path d="M9 15 L15 20 L9 25" stroke="#FF7B72" stroke-width="2.2"/>
-          <line x1="19" y1="25" x2="38" y2="25" stroke="#79C0FF" stroke-width="2.2"/>
-          <line x1="9" y1="33" x2="40" y2="33" stroke="#7EE787" stroke-width="1.9"/>
+          <line x1="19" y1="25" x2="40" y2="25" stroke="#79C0FF" stroke-width="2.2"/>
+          <line x1="9" y1="34" x2="44" y2="34" stroke="#7EE787" stroke-width="1.9"/>
+          <path d="M22 44 L19 58 H35 L32 44" fill="var(--bg-elevated)"/>
         </g>`;
       break;
     case 'ai-security-jailbreaks':
       propSvg = `
-        <g transform="translate(136, 64)" stroke="var(--ink-primary)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M0 -26 L21 -17 V2 C21 15 11 25 0 30 C-11 25 -21 15 -21 2 V-17 Z" fill="var(--bg-elevated)"/>
-          <circle cx="0" cy="-4" r="4" fill="var(--topic-accent, var(--accent))" stroke-width="1.7"/>
-          <path d="M0 0 V10" stroke-width="2.2"/>
+        <g transform="translate(142, 74)" stroke="var(--ink-primary)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M0 -28 L22 -18 V2 C22 16 12 26 0 32 C-12 26 -22 16 -22 2 V-18 Z" fill="var(--bg-elevated)"/>
+          <circle cx="0" cy="-4" r="4.2" fill="var(--topic-accent, var(--accent))" stroke-width="1.7"/>
+          <path d="M0 0 V11" stroke-width="2.3"/>
         </g>`;
       break;
     case 'ai-llms':
       propSvg = `
-        <g transform="translate(136, 72)" stroke="var(--ink-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="-22" y="8" width="44" height="11" rx="3" fill="var(--bg-elevated)"/>
-          <rect x="-18" y="-5" width="36" height="11" rx="3" fill="var(--bg-surface)"/>
-          <rect x="-13" y="-18" width="26" height="11" rx="3" fill="url(#${hatchId})"/>
-          <path d="M0 -34 L3 -27 L10 -24 L3 -21 L0 -14 L-3 -21 L-10 -24 L-3 -27 Z" fill="var(--topic-accent, var(--accent))" stroke-width="1.6"/>
+        <g transform="translate(142, 80)" stroke="var(--ink-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="-24" y="8" width="48" height="12" rx="3" fill="var(--bg-elevated)"/>
+          <rect x="-19" y="-6" width="38" height="12" rx="3" fill="var(--bg-surface)"/>
+          <rect x="-14" y="-20" width="28" height="12" rx="3" fill="url(#${hatchId})"/>
+          <path d="M0 -38 L3 -30 L11 -27 L3 -24 L0 -16 L-3 -24 L-11 -27 L-3 -30 Z" fill="var(--topic-accent, var(--accent))" stroke-width="1.6"/>
         </g>`;
       break;
     case 'cloud-gpu-infra':
       propSvg = `
-        <g transform="translate(134, 62)" stroke="var(--ink-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M-18 16 C-25 16 -27 7 -20 3 C-18 -6 -6 -8 0 -2 C7 -8 19 -5 20 4 C26 7 24 16 17 16 Z" fill="var(--bg-elevated)"/>
-          <path d="M4 -20 L-6 -1 H3 L-3 16 L12 -4 H3 Z" fill="var(--topic-accent, var(--accent))" stroke-width="1.8"/>
+        <g transform="translate(142, 70)" stroke="var(--ink-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M-19 17 C-27 17 -29 7 -21 3 C-19 -7 -6 -9 0 -2 C7 -9 20 -6 21 4 C28 7 26 17 18 17 Z" fill="var(--bg-elevated)"/>
+          <path d="M4 -22 L-6 -1 H3 L-3 17 L13 -4 H4 Z" fill="var(--topic-accent, var(--accent))" stroke-width="1.8"/>
         </g>`;
       break;
     case 'agentic-browser-web-data':
       propSvg = `
-        <g transform="translate(134, 60)" stroke="var(--ink-primary)" stroke-width="2.1" stroke-linecap="round">
-          <circle cx="0" cy="0" r="18" fill="var(--bg-elevated)"/>
-          <ellipse cx="0" cy="0" rx="8" ry="18" fill="none" stroke-opacity="0.5"/>
-          <line x1="-18" y1="0" x2="18" y2="0" stroke-opacity="0.5"/>
-          <line x1="13" y1="13" x2="23" y2="23" stroke="var(--topic-accent, var(--accent))" stroke-width="3"/>
+        <g transform="translate(142, 68)" stroke="var(--ink-primary)" stroke-width="2.1" stroke-linecap="round">
+          <circle cx="0" cy="0" r="19" fill="var(--bg-elevated)"/>
+          <ellipse cx="0" cy="0" rx="8.5" ry="19" fill="none" stroke-opacity="0.5"/>
+          <line x1="-19" y1="0" x2="19" y2="0" stroke-opacity="0.5"/>
+          <line x1="14" y1="14" x2="25" y2="25" stroke="var(--topic-accent, var(--accent))" stroke-width="3.2"/>
         </g>`;
       break;
     default:
       propSvg = `
-        <g transform="translate(136, 62)" stroke="var(--ink-primary)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="-18" y="-18" width="36" height="36" rx="9" fill="var(--bg-elevated)"/>
+        <g transform="translate(142, 72)" stroke="var(--ink-primary)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="-19" y="-19" width="38" height="38" rx="9" fill="var(--bg-elevated)"/>
           <path d="M-7 0 L-1 6 L9 -6" stroke="var(--topic-accent, var(--accent))" stroke-width="2.7"/>
         </g>`;
       break;
@@ -365,47 +402,25 @@ export function renderTopicCrewSvg(categorySlug: string, instanceKey = 't'): str
         <line x1="0" y1="0" x2="0" y2="6" stroke="var(--ink-primary)" stroke-width="1.1" stroke-opacity="0.22"/>
       </pattern>
     </defs>
-
-    <line x1="14" y1="112" x2="170" y2="112" stroke="var(--ink-primary)" stroke-width="2.1" stroke-linecap="round" stroke-opacity="0.7"/>
-
-    <!-- Cartoon Py (Python Snake) + Vren (Wren perched on head) -->
-    <g transform="translate(62, 82)" stroke="var(--ink-primary)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-      <!-- Coiled snake base -->
-      <path d="M-34 30 C-38 12 -20 5 2 6 C24 7 38 15 34 30 Z" fill="var(--bg-surface)"/>
-      <path d="M8 7 C26 9 36 17 33 29 L16 29 C19 19 14 11 2 8 Z" fill="url(#${hatchId})" stroke="none"/>
-      <path d="M-18 28 L-15 19 M-3 28 L-1 19 M12 28 L14 20" stroke-width="1.4" stroke-opacity="0.5"/>
-
-      <!-- S-neck + cartoon snake head -->
-      <path d="M-12 8 C-18 -10 -14 -34 2 -38 C18 -42 30 -30 28 -16 C26 -5 15 -1 4 -2 C-3 -3 -6 3 -4 10" fill="var(--bg-surface)"/>
-      <circle cx="-1" cy="-24" r="5" fill="var(--bg-canvas)" stroke-width="1.9"/>
-      <circle cx="13" cy="-24" r="5" fill="var(--bg-canvas)" stroke-width="1.9"/>
-      <circle cx="0.5" cy="-24" r="2.2" fill="var(--ink-primary)" stroke="none"/>
-      <circle cx="14.5" cy="-24" r="2.2" fill="var(--ink-primary)" stroke="none"/>
-      <path d="M0 -13 C5 -8 13 -8 18 -12" fill="none" stroke-width="1.8"/>
-      <!-- Forked crimson tongue -->
-      <path d="M24 -15 L34 -14 M34 -14 L38 -18 M34 -14 L38 -10" stroke="var(--topic-accent, var(--accent))" stroke-width="2"/>
-
-      <!-- Tiny Vren bird perched on Py's head -->
-      <g transform="translate(4, -49)">
-        <path d="M-9 2 L-15 -6 L-10 -7 L-6 -1 Z" fill="var(--bg-elevated)" stroke-width="1.7"/>
-        <ellipse cx="0" cy="2" rx="9.5" ry="8" fill="var(--bg-elevated)" stroke-width="1.8"/>
-        <circle cx="3.5" cy="0.5" r="1.6" fill="var(--ink-primary)" stroke="none"/>
-        <path d="M8.5 0 L15 2 L8.5 4 Z" fill="var(--topic-accent, var(--accent))" stroke-width="1.5"/>
-      </g>
-    </g>
-
+    <ellipse cx="38" cy="112.5" rx="22" ry="2.6" fill="var(--ink-primary)" fill-opacity="0.12"/>
+    <line x1="12" y1="112" x2="172" y2="112" stroke="var(--ink-primary)" stroke-width="2" stroke-linecap="round" stroke-opacity="0.7"/>
     ${propSvg}
+    <g transform="translate(18 26) scale(1.2)" style="--py-delay:${animationDelayFor(safeId)}">
+      ${renderPySnakeFigure(THEME_SNAKE_PALETTE, true)}
+    </g>
   </svg>`;
 }
 
 /**
- * Standalone SVG document for `/og/fallback.svg` so ANY broken `<img>` tag (even inside
- * compiled Markdown prose!) can swap its `src` directly to the cartoon Pyvren face.
+ * Standalone SVG document for `/og/fallback.svg` so ANY broken `<img>` (even inside compiled
+ * Markdown prose) can swap its `src` to Py. Carries its own light/dark palette because it
+ * renders outside the page's CSS.
  */
-export function renderStandalonePyvrenFallbackSvg(categorySlug = '', label = 'Pyvren Dispatch'): string {
+export function renderStandalonePyvrenFallbackSvg(categorySlug = '', label = 'Pyvren'): string {
   const meta = getCategoryMeta(categorySlug || 'ai-coding-agents-mcp');
-  const safeLabel = escapeHtml((label || meta.navLabel || 'Pyvren Dispatch').slice(0, 48));
+  const safeLabel = escapeHtml((label || meta.navLabel || 'Pyvren').slice(0, 48));
   const safeBeat = escapeHtml(meta.shortLabel);
+  const palette: SnakePalette = { ink: 'var(--ink)', gap: 'var(--paper)', tongue: 'var(--accent)' };
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="600" viewBox="0 0 960 600" fill="none">
   <style>
@@ -417,6 +432,8 @@ export function renderStandalonePyvrenFallbackSvg(categorySlug = '', label = 'Py
       --muted: #625A4E;
       --border: #DDD2BE;
       --accent: ${meta.color};
+      --bg-surface: var(--surface);
+      --topic-accent: var(--accent);
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -434,71 +451,40 @@ export function renderStandalonePyvrenFallbackSvg(categorySlug = '', label = 'Py
     <pattern id="fb-dots" width="22" height="22" patternUnits="userSpaceOnUse">
       <circle cx="3" cy="3" r="1.2" fill="var(--ink)" fill-opacity="0.1"/>
     </pattern>
-    <pattern id="fb-hatch" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(35)">
-      <line x1="0" y1="0" x2="0" y2="9" stroke="var(--ink)" stroke-width="1.5" stroke-opacity="0.18"/>
-    </pattern>
   </defs>
 
   <rect width="960" height="600" fill="var(--paper)"/>
   <rect x="24" y="24" width="912" height="552" rx="24" fill="url(#fb-dots)" stroke="var(--border)" stroke-width="2"/>
 
-  <!-- Top beat tag -->
   <g transform="translate(56, 56)">
     <rect x="0" y="0" width="220" height="36" rx="10" fill="var(--surface)" stroke="var(--ink)" stroke-width="2"/>
     <text x="110" y="23" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700" letter-spacing="1.2" fill="var(--accent)">${safeBeat}</text>
   </g>
 
-  <!-- Center Cartoon Py (Python Snake) + Vren (Wren Bird) Portrait -->
-  <g transform="translate(480, 350)" stroke="var(--ink)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
-    <!-- Ground sketchbook line -->
-    <line x1="-260" y1="92" x2="260" y2="92" stroke-width="5"/>
-    <line x1="-190" y1="106" x2="190" y2="106" stroke-width="3" stroke-opacity="0.25"/>
+  <ellipse cx="300" cy="420" rx="92" ry="9" fill="var(--ink)" fill-opacity="0.1"/>
+  <line x1="150" y1="418" x2="810" y2="418" stroke="var(--ink)" stroke-width="4" stroke-linecap="round"/>
+  <line x1="220" y1="432" x2="740" y2="432" stroke="var(--ink)" stroke-opacity="0.22" stroke-width="2.5" stroke-linecap="round"/>
 
-    <!-- Py's large cartoon coils -->
-    <path d="M-125 90 C-140 34 -72 10 10 14 C92 18 140 44 125 90 Z" fill="var(--surface)"/>
-    <path d="M24 16 C92 22 132 48 121 88 L62 88 C70 54 52 30 10 20 Z" fill="url(#fb-hatch)" stroke="none"/>
-    <path d="M-68 85 L-60 56 M-16 86 L-12 56 M36 86 L40 58" stroke-width="3.2" stroke-opacity="0.45"/>
-
-    <!-- Py's middle coil & S-neck + smiling face -->
-    <path d="M-82 32 C-90 -14 -40 -34 22 -24 C70 -16 92 8 78 36 Z" fill="var(--elevated)"/>
-    <path d="M-36 -8 C-56 -64 -44 -132 6 -144 C58 -156 100 -120 94 -72 C88 -34 50 -20 14 -24 C-10 -26 -20 -6 -14 22" fill="var(--surface)"/>
-
-    <!-- Big cartoon eyes -->
-    <circle cx="-2" cy="-100" r="17" fill="var(--paper)" stroke-width="4.5"/>
-    <circle cx="44" cy="-100" r="17" fill="var(--paper)" stroke-width="4.5"/>
-    <circle cx="3" cy="-100" r="7.5" fill="var(--ink)" stroke="none"/>
-    <circle cx="49" cy="-100" r="7.5" fill="var(--ink)" stroke="none"/>
-    <circle cx="6" cy="-104" r="2.5" fill="var(--paper)" stroke="none"/>
-    <circle cx="52" cy="-104" r="2.5" fill="var(--paper)" stroke="none"/>
-
-    <!-- Smile + Crimson Forked Tongue -->
-    <path d="M2 -62 C20 -46 48 -46 66 -60" fill="none" stroke-width="4.5"/>
-    <path d="M82 -68 L114 -65 M114 -65 L128 -77 M114 -65 L128 -53" stroke="var(--accent)" stroke-width="5"/>
-
-    <!-- Vren the Wren perched on Py's head with spectacles -->
-    <g transform="translate(14, -182)">
-      <path d="M-30 6 L-52 -20 L-36 -25 L-20 -4 Z" fill="var(--elevated)" stroke-width="4"/>
-      <ellipse cx="0" cy="5" rx="34" ry="29" fill="var(--surface)" stroke-width="4.5"/>
-      <circle cx="13" cy="-2" r="9.5" fill="var(--paper)" stroke-width="3.8"/>
-      <circle cx="14.5" cy="-2" r="4" fill="var(--ink)" stroke="none"/>
-      <line x1="3" y1="-2" x2="-9" y2="-4" stroke-width="3.4"/>
-      <path d="M30 -4 L52 3 L30 10 Z" fill="var(--accent)" stroke-width="4"/>
-      <line x1="-9" y1="34" x2="-11" y2="43" stroke-width="4"/>
-      <line x1="9" y1="34" x2="11" y2="43" stroke-width="4"/>
-    </g>
+  <g transform="translate(612 192)" style="color: var(--ink)">
+    ${renderTopicSketchIcon(categorySlug || 'all', 170)}
   </g>
 
-  <!-- Bottom label -->
-  <text x="480" y="534" text-anchor="middle" font-family="Georgia, Cambria, serif" font-size="22" font-weight="700" fill="var(--ink)">${safeLabel}</text>
-  <text x="480" y="558" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" letter-spacing="1.4" fill="var(--muted)">PY + VREN ILLUSTRATED EDITION</text>
+  <g transform="translate(252 122) scale(4.1)">
+    ${renderPySnakeFigure(palette)}
+  </g>
+
+  <text x="480" y="512" text-anchor="middle" font-family="Georgia, Cambria, serif" font-size="24" font-weight="700" fill="var(--ink)">${safeLabel}</text>
+  <text x="480" y="540" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" letter-spacing="1.6" fill="var(--muted)">PYVREN · ILLUSTRATED EDITION</text>
 </svg>`;
 }
 
 /**
- * Renders the visual media frame for a post card or article header:
- * - Base layer: Cartoon Pyvren ("Py" snake + "Vren" wren) sketchbook scene with custom beat icon
- * - Top layer (when coverImageUrl exists): Real crawled primary reference image with automatic
- *   fallback to the Pyvren cartoon base plate if the remote URL ever errors or fails to load.
+ * Visual media frame for post cards and article headers:
+ *  - Base layer: Py category illustration (always present — the automatic backup image).
+ *  - Skeleton layer (only when a real image exists): shimmer shown while the image loads.
+ *  - Top layer: the crawled reference image, invisible until it has actually loaded. The
+ *    early <head> script marks the frame `media-ready` on load or `media-fallback` on error
+ *    (removing the broken <img>), so a broken icon or alt text can never show.
  */
 export function renderStoryCoverMedia(opts: {
   coverImageUrl?: string | null;
@@ -516,33 +502,36 @@ export function renderStoryCoverMedia(opts: {
   const crewArt = renderTopicCrewSvg(opts.categorySlug, opts.instanceKey);
   const topicIcon = renderTopicSketchIcon(opts.categorySlug, 14);
   const hasRealImage = Boolean(opts.coverImageUrl && opts.coverImageUrl.trim().startsWith('https://'));
-  const altText = (opts.coverImageAlt || opts.title || 'Pyvren story illustration').trim();
+  const altText = (opts.coverImageAlt || opts.title || 'Story illustration').trim();
 
-  return `<div class="story-media relative ${aspectClass} w-full overflow-hidden" style="--topic-light:${catMeta.color}; --topic-dark:${catMeta.darkColor};">
-    <!-- Auto-backup Cartoon Pyvren (Py Snake + Vren Bird) base illustration -->
+  return `<div class="story-media relative ${aspectClass} w-full overflow-hidden${hasRealImage ? ' has-cover' : ''}" style="--topic-light:${catMeta.color}; --topic-dark:${catMeta.darkColor};">
     <div class="story-crew-plate absolute inset-0 flex flex-col justify-between p-3.5 sm:p-4">
       <div class="flex items-center justify-between gap-2">
         <span class="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.06em] text-[var(--topic-accent)]">
           ${topicIcon}
-          <span>Py &amp; Vren</span>
+          <span>${escapeHtml(catMeta.shortLabel)}</span>
         </span>
         <span class="font-mono text-[10px] uppercase tracking-[0.08em] text-[var(--ink-muted)]">${escapeHtml(archetypeLabel)}</span>
       </div>
-      <div class="mx-auto h-[78%] w-full max-w-[232px]">
+      <div class="story-crew-art mx-auto h-[78%] max-w-full aspect-[184/124]">
         ${crewArt}
       </div>
     </div>
     ${
       hasRealImage
-        ? `<img
+        ? `<div class="media-skeleton skeleton-shimmer absolute inset-0 z-[5]" aria-hidden="true">
+            <span class="media-skeleton-mark">${renderPySnakeMark({ height: 34 })}</span>
+          </div>
+          <img
             src="${escapeHtml(opts.coverImageUrl!.trim())}"
             alt="${escapeHtml(altText)}"
             loading="${opts.eager ? 'eager' : 'lazy'}"
+            ${opts.eager ? 'fetchpriority="high"' : ''}
             decoding="async"
             referrerpolicy="no-referrer"
             data-story-cover="1"
             data-fallback-category="${escapeHtml(opts.categorySlug)}"
-            class="story-real-img relative z-10 h-full w-full object-cover transition-transform duration-500 ease-out"
+            class="story-real-img absolute inset-0 z-10 h-full w-full object-cover"
           />`
         : ''
     }
