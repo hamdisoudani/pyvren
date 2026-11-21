@@ -733,17 +733,21 @@ export async function stageHuntTopics(
           .join('\n')
       : '(none yet)';
 
+  const todayUtc = new Date().toISOString().slice(0, 10);
+
   // Guard 3 (Skeptical Editor-in-Chief LLM Triage + Post Memory)
   const gateDirective = mustEnforceNewsGate
     ? `STRICT NEWS & NOVELTY GATE (MANDATORY):
-- Act as a skeptical Principal Editor-in-Chief. Only approve "publish_worthy" when the uncovered feed/search items contain a concrete, timely release, benchmark, security advisory, paper, or architectural change worth a dedicated staff-engineer briefing.
-- If the uncovered items are trivial, stale, rumor-only, marketing fluff without verifiable technical substance, or lack concrete news, you MUST return "decision": "skip_no_news".
-- If every promising candidate overlaps in topic, thesis, or angle with ANY entry in the EDITORIAL MEMORY LEDGER, you MUST return "decision": "skip_already_covered".`
+- CURRENT DATE (UTC): ${todayUtc}. Any release, breach, CVE, benchmark, model drop, or paper published within the last 14 days of ${todayUtc} is FRESH and TIMELY — never call dates matching ${todayUtc.slice(0, 7)} "stale".
+- Act as a sharp Principal Editor-in-Chief. Approve "publish_worthy" (novelty_score 65-95) whenever the uncovered feed/search items contain a real, concrete software/model release, cybersecurity breach, CVE/KEV advisory, benchmark, ComfyUI/tooling workflow, or technical incident worth a dedicated engineering briefing.
+- Return "decision": "skip_no_news" ONLY when ALL candidates are trivial minor patch notes, empty marketing fluff, or lack verifiable technical substance.
+- Return "decision": "skip_already_covered" ONLY when a candidate covers the EXACT SAME specific incident, CVE, model release, or thesis already present in the EDITORIAL MEMORY LEDGER (having a different security or AI post in the ledger does NOT make a new breach/CVE/model a duplicate).`
     : ctx.forceWrite
-      ? `FORCE-WRITE MODE ACTIVE: Select the strongest, most concrete primary-source engineering angle and return "decision": "publish_worthy".`
-      : `EXPLICIT TOPIC MODE: Shape the requested topic into a focused, primary-source-verifiable thesis ("decision": "publish_worthy"), unless it directly duplicates an existing post in the EDITORIAL MEMORY LEDGER ("decision": "skip_already_covered").`;
+      ? `FORCE-WRITE MODE ACTIVE (CURRENT DATE UTC: ${todayUtc}): Select the strongest, most concrete primary-source engineering angle and return "decision": "publish_worthy".`
+      : `EXPLICIT TOPIC MODE (CURRENT DATE UTC: ${todayUtc}): Shape the requested topic into a focused, primary-source-verifiable thesis ("decision": "publish_worthy"), unless it directly duplicates an existing post in the EDITORIAL MEMORY LEDGER ("decision": "skip_already_covered").`;
 
-  const systemPrompt = `You are the skeptical Principal Editor-in-Chief and Chief Research Strategist for ${ctx.settings.site_name}.
+  const systemPrompt = `You are the Principal Editor-in-Chief and Chief Research Strategist for ${ctx.settings.site_name}.
+CURRENT DATE (UTC): ${todayUtc}.
 Your job is to triage candidate signals for category "${ctx.skill.name}" (${ctx.skill.slug}) using archetype "${ctx.archetype}".
 
 ${gateDirective}
@@ -759,11 +763,12 @@ Return ONLY valid JSON matching this schema:
 }`;
 
   const userPrompt = hasExplicitTopic
-    ? `EXPLICIT REQUESTED TOPIC: ${cleanRequested}
+    ? `CURRENT DATE (UTC): ${todayUtc}
+EXPLICIT REQUESTED TOPIC: ${cleanRequested}
 CATEGORY INSTRUCTIONS: ${ctx.skill.system_instructions}
 ARCHETYPE: ${ctx.archetype}
 
-EDITORIAL MEMORY LEDGER (DO NOT REPEAT ANY OF THESE TOPICS OR ANGLES):
+EDITORIAL MEMORY LEDGER (ONLY these exact past articles are already covered):
 ${editorialMemoryLedger}
 
 UNCOVERED FEED CONTEXT:
@@ -773,13 +778,14 @@ UNCOVERED NEWS/WEB SEARCH HITS:
 ${searchDigest || '(no uncovered seed search hits)'}
 
 Keep the requested topic focused, factual, and verifiable, and produce 3 to 5 targeted search queries for primary documentation, benchmarks, papers, or advisories.`
-    : `CATEGORY: ${ctx.skill.name} — ${ctx.skill.description}
+    : `CURRENT DATE (UTC): ${todayUtc}
+CATEGORY: ${ctx.skill.name} — ${ctx.skill.description}
 CATEGORY INSTRUCTIONS: ${ctx.skill.system_instructions}
 TARGET AUDIENCE: ${ctx.skill.target_audience}
 ARCHETYPE: ${ctx.archetype}
 DEFAULT EDITORIAL FOCUS: ${ctx.settings.default_topic_feed}
 
-EDITORIAL MEMORY LEDGER (DO NOT REPEAT ANY OF THESE TOPICS OR ANGLES):
+EDITORIAL MEMORY LEDGER (ONLY these exact past articles are already covered):
 ${editorialMemoryLedger}
 
 UNCOVERED AUTHORITATIVE FEED CANDIDATES:
@@ -788,7 +794,7 @@ ${feedDigest || '(no uncovered feed items)'}
 UNCOVERED NEWS/WEB SEARCH HITS:
 ${searchDigest || '(no uncovered search hits)'}
 
-Evaluate novelty rigorously against the Editorial Memory Ledger. If nothing genuinely fresh and substantive is present, choose "skip_no_news" or "skip_already_covered"; otherwise select the single highest-value non-duplicate topic and return 3 to 5 targeted primary-source search queries.`;
+Evaluate novelty against today's date (${todayUtc}) and the Editorial Memory Ledger. Pick the single highest-value fresh, non-duplicate technical story if one exists (score 65-95); only return "skip_no_news" if genuinely nothing substantive is in the candidates.`;
 
   const minNoveltyThreshold = ctx.settings.min_novelty_score ?? 68;
 
