@@ -1046,8 +1046,31 @@ export function checkRateLimit(
   };
 }
 
+const abuseStrikes = new Map<string, RateLimitBucket>();
+
+export function recordAbuseStrike(key: string, windowMs = 15 * 60_000): number {
+  const now = Date.now();
+  const existing = abuseStrikes.get(key);
+  if (existing && existing.resetAt > now) {
+    existing.count += 1;
+    return existing.count;
+  }
+  if (abuseStrikes.size >= MAX_RATE_LIMIT_KEYS) {
+    for (const [k, b] of abuseStrikes) {
+      if (b.resetAt <= now) abuseStrikes.delete(k);
+    }
+    const oldest = abuseStrikes.keys().next().value;
+    if (abuseStrikes.size >= MAX_RATE_LIMIT_KEYS && oldest !== undefined) {
+      abuseStrikes.delete(oldest);
+    }
+  }
+  abuseStrikes.set(key, { count: 1, resetAt: now + Math.max(1_000, windowMs) });
+  return 1;
+}
+
 export function resetRateLimitsForTests(): void {
   rateLimitBuckets.clear();
+  abuseStrikes.clear();
 }
 
 export function extractClientIp(req: Request): string {

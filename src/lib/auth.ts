@@ -11,6 +11,7 @@ export interface SessionUserPayload {
   sub: string;
   email: string;
   displayName: string;
+  tv?: boolean;
 }
 
 export interface VerifiedSession extends SessionUserPayload {
@@ -21,6 +22,7 @@ export interface AdminAuthResult {
   ok: boolean;
   email?: string;
   method?: 'cookie' | 'bearer_jwt' | 'bearer_token';
+  turnstileVerified?: boolean;
 }
 
 function bytesToHex(bytes: Uint8Array): string {
@@ -167,6 +169,7 @@ export async function createSessionToken(
     sub: payload.sub,
     email: payload.email,
     displayName: payload.displayName,
+    ...(payload.tv ? { tv: true } : {}),
     iat: nowSec,
     exp: nowSec + Math.max(1, Math.floor(ttlSeconds)),
   });
@@ -206,6 +209,7 @@ export async function verifySessionToken(
       sub?: unknown;
       email?: unknown;
       displayName?: unknown;
+      tv?: unknown;
       exp?: unknown;
     }>(payloadSegment);
 
@@ -230,6 +234,7 @@ export async function verifySessionToken(
       sub: claims.sub,
       email: claims.email,
       displayName: claims.displayName,
+      tv: claims.tv === true,
       exp: claims.exp,
     };
   } catch {
@@ -270,12 +275,17 @@ export async function isAdminAuthenticated(
       const token = match[1].trim();
       const configuredAdminToken = (env.ADMIN_TOKEN ?? '').trim();
       if (configuredAdminToken.length > 0 && constantTimeEqual(token, configuredAdminToken)) {
-        return { ok: true, method: 'bearer_token' };
+        return { ok: true, method: 'bearer_token', turnstileVerified: true };
       }
 
       const verified = await verifySessionToken(token, sessionSecret);
       if (verified) {
-        return { ok: true, email: verified.email, method: 'bearer_jwt' };
+        return {
+          ok: true,
+          email: verified.email,
+          method: 'bearer_jwt',
+          turnstileVerified: verified.tv === true,
+        };
       }
     }
   }
@@ -285,7 +295,12 @@ export async function isAdminAuthenticated(
   if (sessionCookie) {
     const verified = await verifySessionToken(sessionCookie, sessionSecret);
     if (verified) {
-      return { ok: true, email: verified.email, method: 'cookie' };
+      return {
+        ok: true,
+        email: verified.email,
+        method: 'cookie',
+        turnstileVerified: verified.tv === true,
+      };
     }
   }
 

@@ -99,6 +99,8 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
     'Field notes, benchmarks, and deep dives into AI systems, security, and cloud craft.';
   const defaultAuthor = settings.default_author || 'Hamdi Soudani';
   const adsenseClientId = (settings.adsense_client_id || '').trim();
+  const rawGaId = (settings.ga_measurement_id || '').trim().toUpperCase();
+  const gaMeasurementId = /^G-[A-Z0-9]{6,16}$/.test(rawGaId) ? rawGaId : '';
   const resolvedOgImage = ogImageUrl || `${baseUrl}/og/default.svg`;
   const htmlThemeAttr =
     initialTheme === 'dark'
@@ -160,6 +162,10 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
 
   const adsenseScriptTag = adsenseClientId
     ? `<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(adsenseClientId)}" crossorigin="anonymous"></script>`
+    : '';
+
+  const gaScriptTag = gaMeasurementId
+    ? `<script async src="https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(gaMeasurementId)}"></script>\n  <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','${gaMeasurementId}');</script>`
     : '';
 
   const readingProgressBarHtml =
@@ -270,6 +276,7 @@ export function renderPublicLayout(opts: PublicLayoutOptions): string {
   <noscript><style>.story-real-img{opacity:1!important}.media-skeleton{display:none!important}</style></noscript>
   ${jsonLdScripts}
   ${adsenseScriptTag}
+  ${gaScriptTag}
   ${extraHead}
 </head>
 <body class="min-h-screen flex flex-col bg-paper text-ink antialiased">

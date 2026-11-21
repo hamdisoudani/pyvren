@@ -23,15 +23,19 @@ import {
   checkRateLimit,
   constantTimeEqual,
   extractClientIp,
+  recordAbuseStrike,
   slugify,
   verifyCsrfOrigin,
 } from '../lib/security';
+import { isTurnstileEnabled, verifyTurnstileToken } from '../lib/turnstile';
 import type {
   AgentDispatchPayload,
   Archetype,
+  DatabaseAdapter,
   FaqItem,
   KeyFact,
   PostStatus,
+  SecurityEventType,
   SiteSettings,
 } from '../types';
 import { renderBlogPostPage } from '../ui/pages';
@@ -63,9 +67,12 @@ const FAQ_ITEM_SCHEMA = z.object({
   answer: z.string().trim().min(1).max(1200),
 });
 
+const GA_MEASUREMENT_ID_RE = /^G-[A-Z0-9]{6,16}$/i;
+
 const LOGIN_SCHEMA = z.object({
   email: z.string().trim().email(),
   password: z.string().min(1),
+  turnstile_token: z.string().trim().max(2048).optional(),
 });
 
 const SETTINGS_PATCH_SCHEMA = z.object({
@@ -78,6 +85,8 @@ const SETTINGS_PATCH_SCHEMA = z.object({
   max_posts_per_day: z.number().int().min(1).max(24).optional(),
   min_novelty_score: z.number().int().min(0).max(100).optional(),
   openrouter_model: z.string().trim().min(1).max(200).optional(),
+  fallback_model_1: z.string().trim().max(200).nullable().optional(),
+  fallback_model_2: z.string().trim().max(200).nullable().optional(),
   judge_model: z.string().trim().min(1).max(200).optional(),
   default_topic_feed: z.string().trim().min(1).max(2000).optional(),
   default_author: z.string().trim().min(1).max(120).optional(),
@@ -86,8 +95,17 @@ const SETTINGS_PATCH_SCHEMA = z.object({
   site_tagline: z.string().trim().min(1).max(500).optional(),
   base_url: z.string().trim().min(1).max(300).optional(),
   adsense_client_id: z.string().trim().max(100).nullable().optional(),
+  ga_measurement_id: z
+    .string()
+    .trim()
+    .max(32)
+    .refine((v) => v === '' || GA_MEASUREMENT_ID_RE.test(v), {
+      message: 'Google Analytics ID must match G-XXXXXXXXXX',
+    })
+    .nullable()
+    .optional(),
   cta_headline: z.string().trim().min(1).max(240).optional(),
-  cta_body: z.string().trim().min(1).max(800).optional(),
+  cta_body: z.string().trim().max(800).optional(),
   cta_url: z.string().trim().min(1).max(300).optional(),
   contact_email: z.string().trim().email().optional(),
 });
@@ -246,6 +264,106 @@ async function parseJsonBody(req: Request): Promise<{ ok: true; data: unknown } 
   }
 }
 
+const IP_BLOCK_SCHEMA = z.object({
+  ip_address: z.string().trim().min(3).max(128),
+  reason: z.string().trim().min(1).max(400).default('Manually blocked by admin'),
+  duration_minutes: z.number().int().min(1).max(60 * 24 * 365).default(60),
+});
+
+function extractExpectedHosts(req: Request): string[] {
+  const hosts: string[] = [];
+  try {
+    hosts.push(new URL(req.url).host);
+  } catch {
+    // ignore
+  }
+  const h = req.headers.get('host');
+  if (h) hosts.push(h);
+  const fwd = req.headers.get('x-forwarded-host')?.split(',')[0]?.trim();
+  if (fwd) hosts.push(fwd);
+  return hosts;
+}
+
+function extractAuditMeta(req: Request) {
+  return {
+    ip: extractClientIp(req),
+    country: req.headers.get('cf-ipcountry')?.trim().toUpperCase() || null,
+    userAgent: req.headers.get('user-agent')?.trim() || null,
+    path: (() => {
+      try {
+        return new URL(req.url).pathname;
+      } catch {
+        return '';
+      }
+    })(),
+    method: (req.method || 'GET').toUpperCase(),
+  };
+}
+
+async function safeAuditLog(
+  db: DatabaseAdapter,
+  req: Request,
+  opts: {
+    event_type: SecurityEventType;
+    email?: string | null;
+    status_code?: number | null;
+    reason?: string | null;
+  },
+): Promise<void> {
+  try {
+    const meta = extractAuditMeta(req);
+    await db.recordSecurityLog({
+      event_type: opts.event_type,
+      ip_address: meta.ip,
+      country: meta.country,
+      user_agent: meta.userAgent,
+      email: opts.email ?? null,
+      path: meta.path,
+      method: meta.method,
+      status_code: opts.status_code ?? null,
+      reason: opts.reason ?? null,
+    });
+  } catch {
+    // Never fail an auth/admin response solely because audit persistence errored
+  }
+}
+
+async function maybeAutoBanIp(
+  db: DatabaseAdapter,
+  req: Request,
+  opts: {
+    strikeBucket: string;
+    threshold: number;
+    banMinutes: number;
+    reason: string;
+    email?: string | null;
+  },
+): Promise<{ banned: boolean; blockedUntil?: string; strikes: number }> {
+  const ip = extractClientIp(req);
+  const strikes = recordAbuseStrike(`${opts.strikeBucket}:${ip}`, 15 * 60_000);
+  if (strikes < opts.threshold) {
+    return { banned: false, strikes };
+  }
+  const blockedUntil = new Date(Date.now() + opts.banMinutes * 60_000).toISOString();
+  try {
+    await db.upsertIpBlock({
+      ip_address: ip,
+      reason: opts.reason,
+      blocked_until: blockedUntil,
+      hit_count: strikes,
+    });
+  } catch {
+    // ignore storage errors
+  }
+  await safeAuditLog(db, req, {
+    event_type: 'ip_banned',
+    email: opts.email ?? null,
+    status_code: 403,
+    reason: `${opts.reason} (${opts.banMinutes}m ban after ${strikes} strikes)`,
+  });
+  return { banned: true, blockedUntil, strikes };
+}
+
 export function createAdminRoutes(): Hono<AdminRouteEnv> {
   const app = new Hono<AdminRouteEnv>();
 
@@ -268,11 +386,60 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
     c.header('Cache-Control', 'no-store');
   });
 
-  // Auth guard middleware for all protected /api/admin/* endpoints
+  // Auth, IP-ban, rate-limit, CSRF & Turnstile guard middleware for all /api/admin/* endpoints
   app.use('/api/admin/*', async (c, next) => {
+    const db = createDatabase(c.env);
+    const clientIp = extractClientIp(c.req.raw);
+
+    // 1. Check persistent IP blocklist on every admin endpoint (except /auth/status so SPA still renders login)
+    if (c.req.path !== '/api/admin/auth/status') {
+      const activeBlock = await db.getActiveIpBlock(clientIp);
+      if (activeBlock) {
+        await safeAuditLog(db, c.req.raw, {
+          event_type: 'login_blocked',
+          status_code: 403,
+          reason: `Blocked IP (${activeBlock.reason}) until ${activeBlock.blocked_until}`,
+        });
+        return c.json(
+          {
+            error: 'Access temporarily blocked due to repeated security violations.',
+            blocked_until: activeBlock.blocked_until,
+          },
+          403,
+        );
+      }
+    }
+
     if (UNAUTHENTICATED_ADMIN_PATHS.has(c.req.path)) {
       await next();
       return;
+    }
+
+    // 2. General rate limit on protected admin endpoints (escalates to 60m IP ban after 3 rate-limit hits)
+    const adminRl = checkRateLimit(`admin-api:${clientIp}`, 90, 60_000);
+    if (!adminRl.allowed) {
+      await safeAuditLog(db, c.req.raw, {
+        event_type: 'rate_limited',
+        status_code: 429,
+        reason: 'Admin API rate limit exceeded',
+      });
+      const ban = await maybeAutoBanIp(db, c.req.raw, {
+        strikeBucket: 'rl-ban',
+        threshold: 3,
+        banMinutes: 60,
+        reason: 'Repeated admin API rate-limit violations',
+      });
+      if (ban.banned) {
+        return c.json(
+          {
+            error: 'IP temporarily blocked due to repeated rate-limit violations.',
+            blocked_until: ban.blockedUntil,
+          },
+          403,
+        );
+      }
+      c.header('Retry-After', String(adminRl.retryAfterSeconds));
+      return c.json({ error: 'Rate limit exceeded. Please slow down.' }, 429);
     }
 
     const auth = await isAdminAuthenticated(c.req.raw, c.env);
@@ -280,10 +447,66 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
       return c.json({ error: 'Unauthorized' }, 401);
     }
 
-    if (auth.method === 'cookie' && MUTATING_METHODS.has(c.req.method.toUpperCase())) {
+    const methodUpper = c.req.method.toUpperCase();
+    if (auth.method === 'cookie' && MUTATING_METHODS.has(methodUpper)) {
       const csrf = verifyCsrfOrigin(c.req.raw);
       if (!csrf.ok) {
         return c.json({ error: csrf.reason || 'CSRF validation failed' }, 403);
+      }
+    }
+
+    // 3. Enforce Cloudflare Turnstile on human admin sessions (NOT static bearer_token / agent workflows)
+    if (isTurnstileEnabled(c.env) && auth.method !== 'bearer_token') {
+      if (!auth.turnstileVerified) {
+        return c.json(
+          { error: 'Session verification required. Please sign in again.' },
+          401,
+        );
+      }
+
+      if (MUTATING_METHODS.has(methodUpper)) {
+        const headerToken = (c.req.raw.headers.get('x-turnstile-token') || '').trim();
+        if (!headerToken) {
+          return c.json(
+            {
+              error: 'Please complete the security verification challenge.',
+              code: 'turnstile_required',
+            },
+            400,
+          );
+        }
+
+        const check = await verifyTurnstileToken({
+          token: headerToken,
+          secretKey: (c.env.TURNSTILE_SECRET_KEY || '').trim(),
+          remoteIp: clientIp,
+          expectedHosts: extractExpectedHosts(c.req.raw),
+        });
+
+        if (!check.ok) {
+          await safeAuditLog(db, c.req.raw, {
+            event_type: 'captcha_failed',
+            email: auth.email ?? null,
+            status_code: 403,
+            reason: check.reason || 'Turnstile verification failed on admin action',
+          });
+          await maybeAutoBanIp(db, c.req.raw, {
+            strikeBucket: 'captcha-ban',
+            threshold: 5,
+            banMinutes: 60,
+            reason: 'Repeated failed security challenges',
+            email: auth.email ?? null,
+          });
+          return c.json(
+            {
+              error:
+                check.reason ||
+                'Security verification failed. Please complete the challenge again.',
+              code: 'turnstile_failed',
+            },
+            403,
+          );
+        }
       }
     }
 
@@ -297,11 +520,14 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
 
   app.get('/api/admin/auth/status', async (c) => {
     const auth = await isAdminAuthenticated(c.req.raw, c.env);
+    const turnstileRequired = isTurnstileEnabled(c.env);
+    const effectiveAuthed =
+      auth.ok && (!turnstileRequired || auth.method === 'bearer_token' || auth.turnstileVerified === true);
 
     return c.json({
       initialized: true,
-      authenticated: auth.ok,
-      ...(auth.email ? { email: auth.email } : {}),
+      authenticated: effectiveAuthed,
+      ...(effectiveAuthed && auth.email ? { email: auth.email } : {}),
       locked_mode: 'env_locked',
     });
   });
@@ -317,13 +543,35 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
   });
 
   app.post('/api/admin/auth/login', async (c) => {
+    const db = createDatabase(c.env);
     const csrf = verifyCsrfOrigin(c.req.raw);
     if (!csrf.ok) {
       return c.json({ error: csrf.reason || 'CSRF validation failed' }, 403);
     }
 
-    const rl = checkRateLimit(`auth:${extractClientIp(c.req.raw)}`, 15, 60_000);
+    const clientIp = extractClientIp(c.req.raw);
+    const rl = checkRateLimit(`auth:${clientIp}`, 15, 60_000);
     if (!rl.allowed) {
+      await safeAuditLog(db, c.req.raw, {
+        event_type: 'rate_limited',
+        status_code: 429,
+        reason: 'Login rate limit exceeded',
+      });
+      const ban = await maybeAutoBanIp(db, c.req.raw, {
+        strikeBucket: 'rl-ban',
+        threshold: 3,
+        banMinutes: 60,
+        reason: 'Repeated login rate-limit violations',
+      });
+      if (ban.banned) {
+        return c.json(
+          {
+            error: 'IP temporarily blocked due to repeated login rate-limit violations.',
+            blocked_until: ban.blockedUntil,
+          },
+          403,
+        );
+      }
       c.header('Retry-After', String(rl.retryAfterSeconds));
       return c.json(
         { error: 'Too many authentication attempts. Please try again later.' },
@@ -341,13 +589,61 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
       return c.json({ error: 'Invalid email or password.' }, 400);
     }
 
+    const turnstileEnabled = isTurnstileEnabled(c.env);
+    if (turnstileEnabled) {
+      const token = (
+        parsed.data.turnstile_token ||
+        c.req.raw.headers.get('x-turnstile-token') ||
+        ''
+      ).trim();
+      if (!token) {
+        await safeAuditLog(db, c.req.raw, {
+          event_type: 'captcha_failed',
+          email: parsed.data.email.trim().toLowerCase(),
+          status_code: 400,
+          reason: 'Missing Turnstile verification token',
+        });
+        return c.json({ error: 'Please complete the security verification challenge.' }, 400);
+      }
+
+      const verification = await verifyTurnstileToken({
+        token,
+        secretKey: (c.env.TURNSTILE_SECRET_KEY || '').trim(),
+        remoteIp: clientIp,
+        expectedHosts: extractExpectedHosts(c.req.raw),
+      });
+
+      if (!verification.ok) {
+        await safeAuditLog(db, c.req.raw, {
+          event_type: 'captcha_failed',
+          email: parsed.data.email.trim().toLowerCase(),
+          status_code: 403,
+          reason: verification.reason || 'Turnstile verification failed',
+        });
+        await maybeAutoBanIp(db, c.req.raw, {
+          strikeBucket: 'captcha-ban',
+          threshold: 5,
+          banMinutes: 60,
+          reason: 'Repeated failed login captcha challenges',
+          email: parsed.data.email.trim().toLowerCase(),
+        });
+        return c.json(
+          {
+            error:
+              verification.reason ||
+              'Security verification failed. Please complete the challenge again.',
+          },
+          403,
+        );
+      }
+    }
+
     const submittedEmail = parsed.data.email.trim().toLowerCase();
     const submittedPassword = parsed.data.password;
     const envEmail = (c.env.ADMIN_EMAIL || '').trim().toLowerCase();
     const envPassword = c.env.ADMIN_PASSWORD || '';
     const hasEnvCredentials = envEmail.length > 0 && envPassword.length > 0;
 
-    const db = createDatabase(c.env);
     const admin = await db.getAdminUser();
 
     const ownerEmail = hasEnvCredentials ? envEmail : (admin?.email || '').trim().toLowerCase();
@@ -371,6 +667,12 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
       const activeLockedUntilMs = Math.max(memLockedUntilMs || 0, dbLockedUntilMs || 0);
       if (activeLockedUntilMs > now) {
         const retrySecs = Math.max(1, Math.ceil((activeLockedUntilMs - now) / 1000));
+        await safeAuditLog(db, c.req.raw, {
+          event_type: 'login_blocked',
+          email: submittedEmail,
+          status_code: 429,
+          reason: 'Account temporarily locked due to repeated failed attempts',
+        });
         c.header('Retry-After', String(retrySecs));
         return c.json(
           {
@@ -412,6 +714,19 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
         if (emailMatchesOwner) {
           await recordOwnerFailure();
         }
+        await safeAuditLog(db, c.req.raw, {
+          event_type: 'login_failed',
+          email: submittedEmail,
+          status_code: 401,
+          reason: emailMatchesOwner ? 'Wrong password' : 'Unknown email',
+        });
+        await maybeAutoBanIp(db, c.req.raw, {
+          strikeBucket: 'bad-login-ban',
+          threshold: 16,
+          banMinutes: 60,
+          reason: 'Repeated failed login attempts',
+          email: submittedEmail,
+        });
         return c.json({ error: 'Invalid email or password.' }, 401);
       }
 
@@ -433,9 +748,17 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
           sub: '1',
           email: envEmail,
           displayName,
+          tv: true,
         },
         getSessionSecret(c.env),
       );
+
+      await safeAuditLog(db, c.req.raw, {
+        event_type: 'login_success',
+        email: envEmail,
+        status_code: 200,
+        reason: turnstileEnabled ? 'Turnstile + password verified' : 'Password verified',
+      });
 
       c.header('Set-Cookie', buildSessionCookie(token, isSecureRequest(c.req.raw)));
       return c.json({
@@ -449,6 +772,12 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
     // Fallback: verify against pre-seeded DB admin_users row via PBKDF2-SHA256
     if (!admin) {
       await hashPassword(submittedPassword);
+      await safeAuditLog(db, c.req.raw, {
+        event_type: 'login_failed',
+        email: submittedEmail,
+        status_code: 401,
+        reason: 'No admin account configured',
+      });
       return c.json({ error: 'Invalid email or password.' }, 401);
     }
 
@@ -467,6 +796,19 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
       if (emailMatchesOwner) {
         await recordOwnerFailure();
       }
+      await safeAuditLog(db, c.req.raw, {
+        event_type: 'login_failed',
+        email: submittedEmail,
+        status_code: 401,
+        reason: emailMatchesOwner ? 'Wrong password' : 'Unknown email',
+      });
+      await maybeAutoBanIp(db, c.req.raw, {
+        strikeBucket: 'bad-login-ban',
+        threshold: 16,
+        banMinutes: 60,
+        reason: 'Repeated failed login attempts',
+        email: submittedEmail,
+      });
       return c.json({ error: 'Invalid email or password.' }, 401);
     }
 
@@ -485,9 +827,17 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
         sub: String(admin.id),
         email: admin.email,
         displayName,
+        tv: true,
       },
       getSessionSecret(c.env),
     );
+
+    await safeAuditLog(db, c.req.raw, {
+      event_type: 'login_success',
+      email: admin.email,
+      status_code: 200,
+      reason: turnstileEnabled ? 'Turnstile + password verified' : 'Password verified',
+    });
 
     c.header('Set-Cookie', buildSessionCookie(token, isSecureRequest(c.req.raw)));
     return c.json({
@@ -498,11 +848,19 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
     });
   });
 
-  app.post('/api/admin/auth/logout', (c) => {
+  app.post('/api/admin/auth/logout', async (c) => {
     const csrf = verifyCsrfOrigin(c.req.raw);
     if (!csrf.ok) {
       return c.json({ error: csrf.reason || 'CSRF validation failed' }, 403);
     }
+    const db = createDatabase(c.env);
+    const auth = await isAdminAuthenticated(c.req.raw, c.env);
+    await safeAuditLog(db, c.req.raw, {
+      event_type: 'logout',
+      email: auth.email ?? null,
+      status_code: 200,
+      reason: 'Admin signed out',
+    });
     c.header('Set-Cookie', buildClearSessionCookie(isSecureRequest(c.req.raw)));
     return c.json({ ok: true });
   });
@@ -544,6 +902,17 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
     if (patch.adsense_client_id === '') {
       patch.adsense_client_id = null;
     }
+    if (patch.ga_measurement_id === '') {
+      patch.ga_measurement_id = null;
+    } else if (typeof patch.ga_measurement_id === 'string') {
+      patch.ga_measurement_id = patch.ga_measurement_id.trim().toUpperCase();
+    }
+    if (patch.fallback_model_1 === '') {
+      patch.fallback_model_1 = null;
+    }
+    if (patch.fallback_model_2 === '') {
+      patch.fallback_model_2 = null;
+    }
 
     const db = createDatabase(c.env);
     const existingSettings = await db.getSettings();
@@ -553,14 +922,17 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
         : existingSettings.free_models_only;
 
     if (effectiveFreeModelsOnly) {
-      if (
-        (patch.openrouter_model !== undefined && !isFreeOpenRouterModel(patch.openrouter_model)) ||
-        (patch.judge_model !== undefined && !isFreeOpenRouterModel(patch.judge_model))
-      ) {
+      const modelsToCheck = [
+        patch.openrouter_model,
+        patch.fallback_model_1,
+        patch.fallback_model_2,
+        patch.judge_model,
+      ].filter((m): m is string => typeof m === 'string' && m.trim().length > 0);
+      if (modelsToCheck.some((m) => !isFreeOpenRouterModel(m))) {
         return c.json(
           {
             error:
-              'Free-models-only mode is enabled. Choose an OpenRouter :free model (or disable free_models_only first).',
+              'Free-models-only mode is enabled. Choose $0 OpenRouter :free models (or disable free_models_only first).',
           },
           400,
         );
@@ -1209,6 +1581,75 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
     }
 
     return c.json(run);
+  });
+
+  // =========================================================================
+  // Security Audit Logs & Persistent IP Blocklist Endpoints
+  // =========================================================================
+
+  app.get('/api/admin/security/logs', async (c) => {
+    const db = createDatabase(c.env);
+    const rawLimit = Number.parseInt(c.req.query('limit') || '100', 10);
+    const limit = Number.isFinite(rawLimit) ? Math.min(250, Math.max(1, rawLimit)) : 100;
+    const eventType = (c.req.query('event_type') || 'all').trim();
+    const logs = await db.listSecurityLogs({ limit, event_type: eventType });
+    return c.json({ logs, total: logs.length });
+  });
+
+  app.get('/api/admin/security/blocks', async (c) => {
+    const db = createDatabase(c.env);
+    const blocks = await db.listIpBlocks();
+    const now = Date.now();
+    return c.json({
+      blocks: blocks.map((b) => ({
+        ...b,
+        active: new Date(b.blocked_until).getTime() > now,
+      })),
+    });
+  });
+
+  app.post('/api/admin/security/blocks', async (c) => {
+    const rawBody = await parseJsonBody(c.req.raw);
+    if (!rawBody.ok) {
+      return c.json({ error: 'Invalid JSON payload.' }, 400);
+    }
+    const parsed = IP_BLOCK_SCHEMA.safeParse(rawBody.data);
+    if (!parsed.success) {
+      return c.json({ error: 'Invalid IP block payload.', details: parsed.error.flatten() }, 400);
+    }
+    const db = createDatabase(c.env);
+    const blockedUntil = new Date(Date.now() + parsed.data.duration_minutes * 60_000).toISOString();
+    const record = await db.upsertIpBlock({
+      ip_address: parsed.data.ip_address,
+      reason: parsed.data.reason,
+      blocked_until: blockedUntil,
+    });
+    await safeAuditLog(db, c.req.raw, {
+      event_type: 'ip_banned',
+      email: c.get('adminEmail') || null,
+      status_code: 201,
+      reason: `Manual block of ${record.ip_address} for ${parsed.data.duration_minutes}m: ${record.reason}`,
+    });
+    return c.json(record, 201);
+  });
+
+  app.delete('/api/admin/security/blocks/:ip', async (c) => {
+    const ip = decodeURIComponent(c.req.param('ip') || '').trim();
+    if (!ip) {
+      return c.json({ error: 'Invalid IP address.' }, 400);
+    }
+    const db = createDatabase(c.env);
+    const removed = await db.deleteIpBlock(ip);
+    if (!removed) {
+      return c.json({ error: 'IP block entry not found.' }, 404);
+    }
+    await safeAuditLog(db, c.req.raw, {
+      event_type: 'admin_action',
+      email: c.get('adminEmail') || null,
+      status_code: 200,
+      reason: `Unblocked IP ${ip}`,
+    });
+    return c.json({ ok: true, ip_address: ip });
   });
 
   return app;

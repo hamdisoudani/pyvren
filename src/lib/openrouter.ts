@@ -7,6 +7,7 @@ export interface OpenRouterMessage {
 
 export interface OpenRouterCallOptions {
   model?: string;
+  fallbackModels?: string[];
   messages: OpenRouterMessage[];
   temperature?: number;
   maxTokens?: number;
@@ -147,9 +148,21 @@ function sortFreeModels(models: OpenRouterFreeModelInfo[]): OpenRouterFreeModelI
   });
 }
 
+const NON_LLM_MODEL_RE =
+  /(lyria|whisper|tts|audio|speech|embed|embedding|rerank|moderation|shieldgemma|llama-guard|safeguard|flux|dall-e|imagen|stable-diffusion|midjourney|ocr-only|molmo-?act)/i;
+const MIN_FREE_LLM_CONTEXT = 8_192;
+
+function isZeroCostPricing(pricing?: { prompt?: string | number; completion?: string | number }): boolean {
+  if (!pricing) return true;
+  const promptCost = Number(pricing.prompt);
+  const completionCost = Number(pricing.completion);
+  if (!Number.isFinite(promptCost) || !Number.isFinite(completionCost)) return false;
+  return promptCost === 0 && completionCost === 0;
+}
+
 /**
- * Fetches live free text/chat models from OpenRouter's catalog (cached 15 minutes in module memory).
- * Gracefully falls back to CURATED_FREE_MODELS metadata if the catalog fetch fails.
+ * Fetches live strictly-$0 ($0 prompt, $0 completion) text/chat LLMs from OpenRouter's catalog
+ * (cached 15 minutes in module memory). Excludes non-LLM, image/audio/embedding/guard, and tiny models.
  */
 export async function listOpenRouterFreeModels(
   env: WorkerEnv,
@@ -187,9 +200,14 @@ export async function listOpenRouterFreeModels(
         id?: string;
         name?: string;
         context_length?: number;
+        pricing?: {
+          prompt?: string | number;
+          completion?: string | number;
+        };
         supported_parameters?: string[];
         architecture?: {
           modality?: string;
+          input_modalities?: string[];
           output_modalities?: string[];
         };
       }>;
@@ -201,14 +219,30 @@ export async function listOpenRouterFreeModels(
 
     for (const item of rawList) {
       const id = typeof item.id === 'string' ? item.id.trim() : '';
+      const name = typeof item.name === 'string' && item.name.trim() ? item.name.trim() : id;
       if (!id || seen.has(id)) continue;
-      if (!isFreeOpenRouterModel(id)) continue;
-      if (id.toLowerCase().includes('lyria')) continue;
 
-      // Filter strictly to text/chat output models
+      const isRouter = id === 'openrouter/free';
+      const hasZeroPricing = isZeroCostPricing(item.pricing);
+      if (!isRouter) {
+        if (!isFreeOpenRouterModel(id) && !hasZeroPricing) continue;
+        if (!hasZeroPricing) continue;
+        if (NON_LLM_MODEL_RE.test(id) || NON_LLM_MODEL_RE.test(name)) continue;
+      }
+
+      // Filter strictly to text-in / text-out LLMs
+      const inputModalities = item.architecture?.input_modalities;
+      if (
+        !isRouter &&
+        Array.isArray(inputModalities) &&
+        inputModalities.length > 0 &&
+        !inputModalities.some((m) => typeof m === 'string' && m.toLowerCase() === 'text')
+      ) {
+        continue;
+      }
       const outputModalities = item.architecture?.output_modalities;
       if (
-        id !== 'openrouter/free' &&
+        !isRouter &&
         Array.isArray(outputModalities) &&
         outputModalities.length > 0 &&
         !outputModalities.some((m) => typeof m === 'string' && m.toLowerCase() === 'text')
@@ -217,7 +251,7 @@ export async function listOpenRouterFreeModels(
       }
       const modality = item.architecture?.modality;
       if (
-        id !== 'openrouter/free' &&
+        !isRouter &&
         typeof modality === 'string' &&
         modality.includes('->') &&
         !modality.toLowerCase().includes('->text')
@@ -225,22 +259,25 @@ export async function listOpenRouterFreeModels(
         continue;
       }
 
+      const parsedCtx = Number(item.context_length);
+      const contextLength = Number.isFinite(parsedCtx) && parsedCtx > 0 ? parsedCtx : 32_768;
+      if (!isRouter && contextLength < MIN_FREE_LLM_CONTEXT) {
+        continue;
+      }
+
       const supportedParams = Array.isArray(item.supported_parameters)
         ? item.supported_parameters
         : [];
       const supportsJson =
-        id === 'openrouter/free' ||
+        isRouter ||
         supportedParams.includes('response_format') ||
         supportedParams.includes('structured_outputs');
-      const supportsTools = id === 'openrouter/free' || supportedParams.includes('tools');
-
-      const parsedCtx = Number(item.context_length);
-      const contextLength = Number.isFinite(parsedCtx) && parsedCtx > 0 ? parsedCtx : 32_768;
+      const supportsTools = isRouter || supportedParams.includes('tools');
 
       seen.add(id);
       filtered.push({
         id,
-        name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : id,
+        name,
         context_length: contextLength,
         supports_json: supportsJson,
         supports_tools: supportsTools,
@@ -265,22 +302,28 @@ export async function listOpenRouterFreeModels(
 }
 
 /**
- * Resolves the ordered candidate model chain, strictly enforcing free-only models when requested.
+ * Resolves the ordered candidate model chain:
+ *   Main Model -> Fallback Model 1 -> Fallback Model 2 -> Live/Curated Free Pool
  */
 export function resolveFreeModelChain(
   requestedModel: string | undefined,
   freeModelsOnly: boolean,
   liveFreeIds?: string[],
+  explicitFallbacks?: string[],
 ): string[] {
   const requested = typeof requestedModel === 'string' ? requestedModel.trim() : '';
+  const cleanedFallbacks = Array.isArray(explicitFallbacks)
+    ? explicitFallbacks
+        .map((m) => (typeof m === 'string' ? m.trim() : ''))
+        .filter((m) => m.length > 0 && !NON_LLM_MODEL_RE.test(m))
+    : [];
 
   const validLiveFree = Array.isArray(liveFreeIds)
     ? liveFreeIds
         .map((id) => (typeof id === 'string' ? id.trim() : ''))
-        .filter((id) => isFreeOpenRouterModel(id) && !id.toLowerCase().includes('lyria'))
+        .filter((id) => isFreeOpenRouterModel(id) && !NON_LLM_MODEL_RE.test(id))
     : [];
 
-  // Build prioritized free fallback pool: live curated models first, then remaining curated, then remaining live
   const liveSet = new Set(validLiveFree);
   const curatedLive = CURATED_FREE_MODELS.filter((id) => liveSet.has(id));
   const curatedOffline = CURATED_FREE_MODELS.filter((id) => !liveSet.has(id));
@@ -296,8 +339,13 @@ export function resolveFreeModelChain(
   };
 
   if (freeModelsOnly) {
-    if (requested && isFreeOpenRouterModel(requested) && !requested.toLowerCase().includes('lyria')) {
+    if (requested && isFreeOpenRouterModel(requested) && !NON_LLM_MODEL_RE.test(requested)) {
       pushUnique(requested);
+    }
+    for (const fb of cleanedFallbacks) {
+      if (isFreeOpenRouterModel(fb)) {
+        pushUnique(fb);
+      }
     }
     for (const id of freePool) {
       pushUnique(id);
@@ -307,6 +355,9 @@ export function resolveFreeModelChain(
 
   if (requested) {
     pushUnique(requested);
+  }
+  for (const fb of cleanedFallbacks) {
+    pushUnique(fb);
   }
   for (const id of CURATED_FREE_MODELS) {
     pushUnique(id);
@@ -385,7 +436,12 @@ export async function callOpenRouter(
       ? cachedFreeModels.models.map((m) => m.id)
       : undefined;
 
-  const rawCandidates = resolveFreeModelChain(opts.model, freeModelsOnly, cachedLiveIds);
+  const rawCandidates = resolveFreeModelChain(
+    opts.model,
+    freeModelsOnly,
+    cachedLiveIds,
+    opts.fallbackModels,
+  );
   const nowMs = Date.now();
   const healthyCandidates = rawCandidates.filter((id) => (rateLimitedUntil.get(id) ?? 0) <= nowMs);
   const cooledCandidates = rawCandidates.filter((id) => (rateLimitedUntil.get(id) ?? 0) > nowMs);

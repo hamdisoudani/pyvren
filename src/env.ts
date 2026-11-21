@@ -25,11 +25,14 @@ export interface WorkerEnv {
   ADMIN_PASSWORD?: string;
   ADMIN_DISPLAY_NAME?: string;
   ADMIN_TOKEN?: string;
+  TURNSTILE_SITE_KEY?: string;
+  TURNSTILE_SECRET_KEY?: string;
 
-  // Site metadata
+  // Site metadata & optional analytics fallback
   SITE_NAME?: string;
   BASE_URL?: string;
   ENVIRONMENT?: string;
+  GA_MEASUREMENT_ID?: string;
 
   // Optional test-only injected database adapter
   __TEST_DB__?: DatabaseAdapter;

@@ -6,12 +6,15 @@ import type {
   Archetype,
   CategorySkill,
   DatabaseAdapter,
+  IpBlock,
   PostCreateRecord,
   PostImage,
   PostMutationContext,
   PostRecord,
   PostStatus,
   QualityBreakdown,
+  SecurityAuditLog,
+  SecurityEventType,
   SiteSettings,
   TriggerSource,
 } from '../types';
@@ -30,6 +33,8 @@ export const DEFAULT_SEEDED_SETTINGS: SiteSettings = {
   max_posts_per_day: 2,
   min_novelty_score: 68,
   openrouter_model: 'openrouter/free',
+  fallback_model_1: 'google/gemma-4-31b-it:free',
+  fallback_model_2: 'nvidia/nemotron-3.5-super-vl:free',
   judge_model: 'openrouter/free',
   default_topic_feed:
     'CLI coding agents & MCP, LLM security & prompt injection defense, open-weights & local SLMs, Cloudflare Workers & GPU economics, CISA KEV advisories, and live web-data browser agents',
@@ -41,6 +46,7 @@ export const DEFAULT_SEEDED_SETTINGS: SiteSettings = {
     'Field notes, benchmarks, and deep dives into AI systems, security, and cloud craft — co-crafted by Hamdi Soudani & Pyvren.',
   base_url: 'https://pyvren.com',
   adsense_client_id: null,
+  ga_measurement_id: null,
   cta_headline: 'Honest engineering stories — co-crafted with primary benchmarks & real code',
   cta_body:
     'Every dispatch blends hands-on engineering judgment with verified primary sources, reproducible configs, and clear tradeoffs.',
@@ -465,7 +471,10 @@ function normalizeSettingsRow(row: Partial<SiteSettings>): SiteSettings {
       100,
     ),
     schedule_enabled: Boolean(row.schedule_enabled ?? DEFAULT_SEEDED_SETTINGS.schedule_enabled),
+    fallback_model_1: row.fallback_model_1 ?? null,
+    fallback_model_2: row.fallback_model_2 ?? null,
     adsense_client_id: row.adsense_client_id ?? null,
+    ga_measurement_id: row.ga_measurement_id ?? null,
     last_scheduled_run_at: row.last_scheduled_run_at ?? null,
   };
 }
@@ -1193,6 +1202,119 @@ export class SupabaseRestDatabase implements DatabaseAdapter {
     );
     return data && data.length > 0 ? normalizeAgentRunRow(data[0]) : null;
   }
+
+  async recordSecurityLog(entry: {
+    event_type: SecurityEventType;
+    ip_address: string;
+    country?: string | null;
+    user_agent?: string | null;
+    email?: string | null;
+    path?: string | null;
+    method?: string | null;
+    status_code?: number | null;
+    reason?: string | null;
+  }): Promise<SecurityAuditLog> {
+    const payload = {
+      event_type: entry.event_type,
+      ip_address: (entry.ip_address || 'unknown').slice(0, 128),
+      country: entry.country ? entry.country.slice(0, 16) : null,
+      user_agent: entry.user_agent ? entry.user_agent.slice(0, 300) : null,
+      email: entry.email ? entry.email.slice(0, 200) : null,
+      path: entry.path ? entry.path.slice(0, 300) : null,
+      method: entry.method ? entry.method.slice(0, 16) : null,
+      status_code: entry.status_code ?? null,
+      reason: entry.reason ? entry.reason.slice(0, 400) : null,
+    };
+    const { data } = await this.requestJson<SecurityAuditLog[]>('/security_audit_logs', {
+      method: 'POST',
+      prefer: 'return=representation',
+      body: payload,
+    });
+    if (data && data.length > 0) {
+      return { ...data[0], id: Number(data[0].id) };
+    }
+    return {
+      id: 0,
+      ...payload,
+      created_at: new Date().toISOString(),
+    };
+  }
+
+  async listSecurityLogs(opts?: {
+    limit?: number;
+    event_type?: string;
+  }): Promise<SecurityAuditLog[]> {
+    const limit = Math.min(250, Math.max(1, opts?.limit ?? 100));
+    const params = new URLSearchParams();
+    params.set('select', '*');
+    params.set('order', 'created_at.desc');
+    params.set('limit', String(limit));
+    if (opts?.event_type && opts.event_type !== 'all') {
+      params.set('event_type', `eq.${opts.event_type}`);
+    }
+    const { data } = await this.requestJson<SecurityAuditLog[]>(
+      `/security_audit_logs?${params.toString()}`,
+    );
+    return (data || []).map((row) => ({ ...row, id: Number(row.id) }));
+  }
+
+  async getActiveIpBlock(ip: string): Promise<IpBlock | null> {
+    const cleanIp = (ip || '').trim();
+    if (!cleanIp) return null;
+    const nowIso = new Date().toISOString();
+    const params = new URLSearchParams();
+    params.set('select', '*');
+    params.set('ip_address', `eq.${cleanIp}`);
+    params.set('blocked_until', `gt.${nowIso}`);
+    params.set('limit', '1');
+    const { data } = await this.requestJson<IpBlock[]>(`/ip_blocks?${params.toString()}`);
+    return data && data.length > 0 ? data[0] : null;
+  }
+
+  async listIpBlocks(): Promise<IpBlock[]> {
+    const { data } = await this.requestJson<IpBlock[]>(
+      '/ip_blocks?select=*&order=blocked_until.desc&limit=200',
+    );
+    return data || [];
+  }
+
+  async upsertIpBlock(input: {
+    ip_address: string;
+    reason: string;
+    blocked_until: string;
+    hit_count?: number;
+  }): Promise<IpBlock> {
+    const nowIso = new Date().toISOString();
+    const payload = {
+      ip_address: input.ip_address.trim().slice(0, 128),
+      reason: input.reason.slice(0, 400),
+      hit_count: Math.max(1, Math.round(input.hit_count ?? 1)),
+      blocked_until: input.blocked_until,
+      updated_at: nowIso,
+    };
+    const { data } = await this.requestJson<IpBlock[]>('/ip_blocks?on_conflict=ip_address', {
+      method: 'POST',
+      prefer: 'resolution=merge-duplicates,return=representation',
+      body: payload,
+    });
+    if (data && data.length > 0) {
+      return data[0];
+    }
+    return { ...payload, created_at: nowIso };
+  }
+
+  async deleteIpBlock(ip: string): Promise<boolean> {
+    const cleanIp = (ip || '').trim();
+    if (!cleanIp) return false;
+    const { data } = await this.requestJson<IpBlock[]>(
+      `/ip_blocks?ip_address=eq.${encodeURIComponent(cleanIp)}`,
+      {
+        method: 'DELETE',
+        prefer: 'return=representation',
+      },
+    );
+    return Boolean(data && data.length > 0);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1602,6 +1724,93 @@ export class InMemoryDatabase implements DatabaseAdapter {
     });
     this.agentRuns.set(id, updated);
     return structuredClone(updated);
+  }
+
+  private securityLogs: SecurityAuditLog[] = [];
+  private nextSecurityLogId = 1;
+  private ipBlocks = new Map<string, IpBlock>();
+
+  async recordSecurityLog(entry: {
+    event_type: SecurityEventType;
+    ip_address: string;
+    country?: string | null;
+    user_agent?: string | null;
+    email?: string | null;
+    path?: string | null;
+    method?: string | null;
+    status_code?: number | null;
+    reason?: string | null;
+  }): Promise<SecurityAuditLog> {
+    const row: SecurityAuditLog = {
+      id: this.nextSecurityLogId++,
+      event_type: entry.event_type,
+      ip_address: entry.ip_address || 'unknown',
+      country: entry.country ?? null,
+      user_agent: entry.user_agent ?? null,
+      email: entry.email ?? null,
+      path: entry.path ?? null,
+      method: entry.method ?? null,
+      status_code: entry.status_code ?? null,
+      reason: entry.reason ?? null,
+      created_at: new Date().toISOString(),
+    };
+    this.securityLogs.unshift(row);
+    if (this.securityLogs.length > 500) {
+      this.securityLogs.length = 500;
+    }
+    return structuredClone(row);
+  }
+
+  async listSecurityLogs(opts?: {
+    limit?: number;
+    event_type?: string;
+  }): Promise<SecurityAuditLog[]> {
+    const limit = Math.min(250, Math.max(1, opts?.limit ?? 100));
+    const filtered =
+      opts?.event_type && opts.event_type !== 'all'
+        ? this.securityLogs.filter((l) => l.event_type === opts.event_type)
+        : this.securityLogs;
+    return filtered.slice(0, limit).map((l) => structuredClone(l));
+  }
+
+  async getActiveIpBlock(ip: string): Promise<IpBlock | null> {
+    const existing = this.ipBlocks.get((ip || '').trim());
+    if (!existing) return null;
+    if (new Date(existing.blocked_until).getTime() <= Date.now()) {
+      return null;
+    }
+    return structuredClone(existing);
+  }
+
+  async listIpBlocks(): Promise<IpBlock[]> {
+    return Array.from(this.ipBlocks.values())
+      .sort((a, b) => b.blocked_until.localeCompare(a.blocked_until))
+      .map((b) => structuredClone(b));
+  }
+
+  async upsertIpBlock(input: {
+    ip_address: string;
+    reason: string;
+    blocked_until: string;
+    hit_count?: number;
+  }): Promise<IpBlock> {
+    const nowIso = new Date().toISOString();
+    const key = input.ip_address.trim();
+    const existing = this.ipBlocks.get(key);
+    const record: IpBlock = {
+      ip_address: key,
+      reason: input.reason,
+      hit_count: input.hit_count ?? (existing ? existing.hit_count + 1 : 1),
+      blocked_until: input.blocked_until,
+      created_at: existing?.created_at || nowIso,
+      updated_at: nowIso,
+    };
+    this.ipBlocks.set(key, record);
+    return structuredClone(record);
+  }
+
+  async deleteIpBlock(ip: string): Promise<boolean> {
+    return this.ipBlocks.delete((ip || '').trim());
   }
 }
 

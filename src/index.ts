@@ -8,6 +8,7 @@ import {
   recoverStaleAndFindActiveRun,
 } from './lib/db';
 import { buildSecurityHeaders } from './lib/security';
+import { getTurnstileSiteKey } from './lib/turnstile';
 import { createAdminRoutes } from './routes/admin';
 import { createHeadlessRoutes } from './routes/headless';
 import { createPublicRoutes } from './routes/public';
@@ -110,7 +111,8 @@ export function createApp(): Hono<{ Bindings: WorkerEnv }> {
     const initialTheme = themeMatch
       ? (themeMatch[1].toLowerCase() as 'dark' | 'light')
       : undefined;
-    const html = renderAdminSpaHtml(settings, initialTheme);
+    const turnstileSiteKey = getTurnstileSiteKey(c.env);
+    const html = renderAdminSpaHtml(settings, initialTheme, turnstileSiteKey);
     return new Response(html, {
       status: 200,
       headers: {

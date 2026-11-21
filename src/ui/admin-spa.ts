@@ -21,9 +21,14 @@ function safeInlineJson(value: unknown): string {
 export function renderAdminSpaHtml(
   settings: SiteSettings,
   initialTheme?: 'light' | 'dark',
+  turnstileSiteKey?: string | null,
 ): string {
   const siteName = settings.site_name || 'Pyvren';
   const defaultAuthor = settings.default_author || '';
+  const activeTurnstileSiteKey = (turnstileSiteKey || '').trim();
+  const turnstileScriptTag = activeTurnstileSiteKey
+    ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>'
+    : '';
   const htmlThemeAttr =
     initialTheme === 'dark'
       ? ' data-theme="dark"'
@@ -74,6 +79,7 @@ export function renderAdminSpaHtml(
   <noscript><link rel="stylesheet" href="${GOOGLE_FONTS_HREF}"></noscript>
   <link rel="stylesheet" href="/assets/app.css">
   <script>(function(){try{var c=(document.cookie.match(/(?:^|;\\s*)pyvren_theme=(dark|light)(?:;|$)/)||[])[1];var s=localStorage.getItem('pyvren-theme');var pref=(s==='dark'||s==='light')?s:((c==='dark'||c==='light')?c:(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));document.documentElement.setAttribute('data-theme',pref);if(c!==pref){document.cookie='pyvren_theme='+pref+'; path=/; max-age=31536000; SameSite=Lax';}}catch(e){}})();</script>
+  ${turnstileScriptTag}
 </head>
 <body class="min-h-screen bg-paper text-ink antialiased">
   <div id="toast-root" class="fixed bottom-4 inset-x-4 sm:inset-x-auto sm:bottom-5 sm:right-5 z-[60] flex flex-col gap-2 sm:max-w-sm pointer-events-none"></div>
@@ -100,6 +106,16 @@ export function renderAdminSpaHtml(
     </main>
   </div>
   <div id="modal-root"></div>
+  <div id="turnstile-gate" class="hidden fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" aria-modal="true" role="dialog" aria-label="Security verification">
+    <div class="w-full max-w-[360px] editorial-card p-6 space-y-4 text-center">
+      <div class="space-y-1">
+        <h2 class="font-masthead text-xl font-bold text-ink">Verify to continue</h2>
+        <p class="text-xs text-ink-muted">Complete the security check to save this change.</p>
+      </div>
+      <div id="turnstile-action-slot" class="min-h-[65px] flex items-center justify-center"></div>
+      <button type="button" id="turnstile-gate-cancel" class="btn-ghost text-xs w-full justify-center rounded-xl">Cancel</button>
+    </div>
+  </div>
 
   <script>
   (function () {
@@ -112,6 +128,172 @@ export function renderAdminSpaHtml(
     var UI_ICONS = ${safeInlineJson(uiIcons)};
     var TOPIC_ICONS = ${safeInlineJson(topicIcons)};
     var TOKEN_STORAGE_KEY = 'pyvren_admin_jwt';
+    var TURNSTILE_SITE_KEY = ${safeInlineJson(activeTurnstileSiteKey)};
+    var turnstileToken = '';
+    var turnstileWidgetId = null;
+    var turnstilePollTimer = null;
+
+    function syncLoginSubmitState() {
+      var btn = document.querySelector('#login-form button[type="submit"]');
+      if (!btn) return;
+      if (state.loggingIn) {
+        btn.disabled = true;
+        return;
+      }
+      btn.disabled = Boolean(TURNSTILE_SITE_KEY && !turnstileToken);
+    }
+
+    function unmountTurnstile() {
+      if (turnstilePollTimer) {
+        clearTimeout(turnstilePollTimer);
+        turnstilePollTimer = null;
+      }
+      if (turnstileWidgetId !== null && window.turnstile && window.turnstile.remove) {
+        try { window.turnstile.remove(turnstileWidgetId); } catch (e) {}
+      }
+      turnstileWidgetId = null;
+      turnstileToken = '';
+    }
+
+    function resetTurnstile() {
+      turnstileToken = '';
+      if (turnstileWidgetId !== null && window.turnstile && window.turnstile.reset) {
+        try { window.turnstile.reset(turnstileWidgetId); } catch (e) {}
+      }
+      syncLoginSubmitState();
+    }
+
+    function mountTurnstile(attempt) {
+      if (!TURNSTILE_SITE_KEY) return;
+      var slot = document.getElementById('turnstile-slot');
+      if (!slot) return;
+      if (!window.turnstile || typeof window.turnstile.render !== 'function') {
+        if ((attempt || 0) < 40) {
+          turnstilePollTimer = setTimeout(function () { mountTurnstile((attempt || 0) + 1); }, 150);
+        }
+        return;
+      }
+      slot.innerHTML = '';
+      turnstileToken = '';
+      try {
+        turnstileWidgetId = window.turnstile.render(slot, {
+          sitekey: TURNSTILE_SITE_KEY,
+          theme: getTheme(),
+          action: 'admin_login',
+          callback: function (tok) {
+            turnstileToken = String(tok || '');
+            var errEl = document.getElementById('auth-error');
+            if (errEl && errEl.getAttribute('data-ts-err') === '1') {
+              errEl.classList.add('hidden');
+              errEl.removeAttribute('data-ts-err');
+            }
+            syncLoginSubmitState();
+          },
+          'expired-callback': function () {
+            turnstileToken = '';
+            syncLoginSubmitState();
+          },
+          'error-callback': function () {
+            turnstileToken = '';
+            syncLoginSubmitState();
+          }
+        });
+      } catch (e) {}
+      syncLoginSubmitState();
+    }
+
+    var actionTurnstileToken = '';
+    var actionTurnstileWidgetId = null;
+    var actionTurnstilePollTimer = null;
+    var pendingActionResolvers = [];
+
+    function closeTurnstileGate() {
+      var gate = document.getElementById('turnstile-gate');
+      if (gate) gate.classList.add('hidden');
+    }
+
+    function unmountActionTurnstile() {
+      if (actionTurnstilePollTimer) {
+        clearTimeout(actionTurnstilePollTimer);
+        actionTurnstilePollTimer = null;
+      }
+      if (actionTurnstileWidgetId !== null && window.turnstile && window.turnstile.remove) {
+        try { window.turnstile.remove(actionTurnstileWidgetId); } catch (e) {}
+      }
+      actionTurnstileWidgetId = null;
+      actionTurnstileToken = '';
+      closeTurnstileGate();
+    }
+
+    function resetActionTurnstile() {
+      actionTurnstileToken = '';
+      if (actionTurnstileWidgetId !== null && window.turnstile && window.turnstile.reset) {
+        try { window.turnstile.reset(actionTurnstileWidgetId); } catch (e) {}
+      }
+    }
+
+    function warmActionTurnstile(attempt) {
+      if (!TURNSTILE_SITE_KEY || actionTurnstileWidgetId !== null) return;
+      var slot = document.getElementById('turnstile-action-slot');
+      if (!slot) return;
+      if (!window.turnstile || typeof window.turnstile.render !== 'function') {
+        if ((attempt || 0) < 40) {
+          actionTurnstilePollTimer = setTimeout(function () { warmActionTurnstile((attempt || 0) + 1); }, 150);
+        }
+        return;
+      }
+      slot.innerHTML = '';
+      try {
+        actionTurnstileWidgetId = window.turnstile.render(slot, {
+          sitekey: TURNSTILE_SITE_KEY,
+          theme: getTheme(),
+          action: 'admin_action',
+          callback: function (tok) {
+            actionTurnstileToken = String(tok || '');
+            if (pendingActionResolvers.length > 0 && actionTurnstileToken) {
+              var next = pendingActionResolvers.shift();
+              var consumed = actionTurnstileToken;
+              actionTurnstileToken = '';
+              closeTurnstileGate();
+              resetActionTurnstile();
+              if (next) next.resolve(consumed);
+            }
+          },
+          'expired-callback': function () {
+            actionTurnstileToken = '';
+          },
+          'error-callback': function () {
+            actionTurnstileToken = '';
+          }
+        });
+      } catch (e) {}
+    }
+
+    function acquireActionTurnstileToken() {
+      if (!TURNSTILE_SITE_KEY) return Promise.resolve('');
+      if (actionTurnstileToken) {
+        var ready = actionTurnstileToken;
+        actionTurnstileToken = '';
+        resetActionTurnstile();
+        return Promise.resolve(ready);
+      }
+      warmActionTurnstile(0);
+      return new Promise(function (resolve, reject) {
+        var gate = document.getElementById('turnstile-gate');
+        if (gate) gate.classList.remove('hidden');
+        var cancelBtn = document.getElementById('turnstile-gate-cancel');
+        var entry = { resolve: resolve, reject: reject };
+        pendingActionResolvers.push(entry);
+        if (cancelBtn) {
+          cancelBtn.onclick = function () {
+            closeTurnstileGate();
+            var idx = pendingActionResolvers.indexOf(entry);
+            if (idx !== -1) pendingActionResolvers.splice(idx, 1);
+            reject(new Error('Verification cancelled.'));
+          };
+        }
+      });
+    }
 
     var ARCHETYPES = [
       { value: 'advisory-teardown', label: 'Advisory Teardown' },
@@ -175,6 +357,9 @@ export function renderAdminSpaHtml(
       skills: [],
       runs: [],
       freeModels: [],
+      securityLogs: [],
+      ipBlocks: [],
+      securityFilter: 'all',
       postFilter: 'all',
       postSearch: '',
       expandedPostIds: {},
@@ -254,6 +439,7 @@ export function renderAdminSpaHtml(
       document.documentElement.setAttribute('data-theme', next);
       try { localStorage.setItem('pyvren-theme', next); } catch (e) {}
       try { document.cookie = 'pyvren_theme=' + next + '; path=/; max-age=31536000; SameSite=Lax'; } catch (e) {}
+      unmountActionTurnstile();
       render();
     }
 
@@ -348,6 +534,7 @@ export function renderAdminSpaHtml(
 
     async function apiFetch(url, opts) {
       var init = Object.assign({ credentials: 'same-origin' }, opts || {});
+      var method = String(init.method || 'GET').toUpperCase();
       var headers = Object.assign(
         { 'X-Requested-With': 'PyvrenAdmin' },
         (opts && opts.headers) || {}
@@ -355,6 +542,21 @@ export function renderAdminSpaHtml(
       if (sessionToken && !headers.Authorization && !headers.authorization) {
         headers.Authorization = 'Bearer ' + sessionToken;
       }
+
+      var needsActionCaptcha =
+        Boolean(TURNSTILE_SITE_KEY) &&
+        (method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE') &&
+        url !== '/api/admin/auth/login' &&
+        url !== '/api/admin/auth/logout' &&
+        !headers['X-Turnstile-Token'];
+
+      if (needsActionCaptcha) {
+        var actionTok = await acquireActionTurnstileToken();
+        if (actionTok) {
+          headers['X-Turnstile-Token'] = actionTok;
+        }
+      }
+
       if (init.body && typeof init.body === 'object' && !(init.body instanceof FormData)) {
         headers['Content-Type'] = headers['Content-Type'] || 'application/json';
         init.body = JSON.stringify(init.body);
@@ -379,6 +581,9 @@ export function renderAdminSpaHtml(
         data = { raw: text };
       }
       if (!res.ok) {
+        if (data && (data.code === 'turnstile_required' || data.code === 'turnstile_failed')) {
+          resetActionTurnstile();
+        }
         var errMsg = (data && (data.error || data.message)) || ('Request failed (' + res.status + ')');
         var err = new Error(errMsg);
         err.status = res.status;
@@ -426,13 +631,17 @@ export function renderAdminSpaHtml(
           apiFetch('/api/admin/posts'),
           apiFetch('/api/admin/skills'),
           apiFetch('/api/admin/agent/runs'),
-          apiFetch('/api/admin/openrouter/free-models').catch(function () { return { models: [] }; })
+          apiFetch('/api/admin/openrouter/free-models').catch(function () { return { models: [] }; }),
+          apiFetch('/api/admin/security/logs?limit=100').catch(function () { return { logs: [] }; }),
+          apiFetch('/api/admin/security/blocks').catch(function () { return { blocks: [] }; })
         ]);
         state.settings = (results[0] && (results[0].settings || results[0])) || null;
         state.posts = Array.isArray(results[1]) ? results[1] : ((results[1] && results[1].posts) || []);
         state.skills = Array.isArray(results[2]) ? results[2] : ((results[2] && results[2].skills) || []);
         state.runs = Array.isArray(results[3]) ? results[3] : ((results[3] && results[3].runs) || []);
         state.freeModels = normalizeFreeModels(results[4]);
+        state.securityLogs = (results[5] && Array.isArray(results[5].logs)) ? results[5].logs : [];
+        state.ipBlocks = (results[6] && Array.isArray(results[6].blocks)) ? results[6].blocks : [];
         state.hasLoadedOnce = true;
         syncPolling();
       } catch (err) {
@@ -446,6 +655,20 @@ export function renderAdminSpaHtml(
       } finally {
         state.loadingData = false;
         render();
+      }
+    }
+
+    async function refreshSecurityOnly() {
+      try {
+        var res = await Promise.all([
+          apiFetch('/api/admin/security/logs?limit=100'),
+          apiFetch('/api/admin/security/blocks')
+        ]);
+        state.securityLogs = (res[0] && Array.isArray(res[0].logs)) ? res[0].logs : [];
+        state.ipBlocks = (res[1] && Array.isArray(res[1].blocks)) ? res[1].blocks : [];
+        render();
+      } catch (err) {
+        toast((err && err.message) || 'Failed refreshing security logs', 'error');
       }
     }
 
@@ -572,8 +795,11 @@ export function renderAdminSpaHtml(
                   '</div>' +
                   '<input id="lg-pass" name="password" type="' + (state.showPassword ? 'text' : 'password') + '" required autocomplete="current-password" placeholder="Password" class="admin-input">' +
                 '</div>' +
+                (TURNSTILE_SITE_KEY
+                  ? '<div id="turnstile-slot" class="min-h-[65px] flex items-center justify-center rounded-xl"></div>'
+                  : '') +
                 '<div id="auth-error" role="alert" class="hidden rounded-xl border border-[var(--danger)]/40 bg-[var(--danger-soft)] text-[var(--danger)] px-3.5 py-2.5 text-xs font-medium"></div>' +
-                '<button type="submit" ' + (state.loggingIn ? 'disabled' : '') + ' class="btn-accent w-full py-2.5 text-sm font-semibold rounded-xl">' +
+                '<button type="submit" ' + ((state.loggingIn || (TURNSTILE_SITE_KEY && !turnstileToken)) ? 'disabled' : '') + ' class="btn-accent w-full py-2.5 text-sm font-semibold rounded-xl">' +
                   (state.loggingIn ? 'Signing in...' : 'Sign in') +
                 '</button>' +
               '</form>' +
@@ -617,6 +843,7 @@ export function renderAdminSpaHtml(
               renderTabButton('posts', UI_ICONS.note, 'Posts', state.posts.length) +
               renderTabButton('agent', UI_ICONS.spark, 'Automation', activeRunsCount > 0 ? activeRunsCount : null) +
               renderTabButton('skills', UI_ICONS.layers, 'Categories', state.skills.length) +
+              renderTabButton('security', TOPIC_ICONS['ai-security-jailbreaks'] || UI_ICONS.ledger, 'Security', (state.ipBlocks || []).filter(function (b) { return b.active; }).length || null) +
               renderTabButton('settings', UI_ICONS.ledger, 'Settings', null) +
             '</nav>' +
           '</div>' +
@@ -1073,26 +1300,43 @@ export function renderAdminSpaHtml(
           '</div>' +
 
           '<div class="editorial-card p-5 sm:p-6 space-y-4">' +
-            '<div class="flex items-center justify-between gap-2">' +
-              '<h2 class="text-sm font-semibold text-ink">Models</h2>' +
+            '<div class="flex flex-wrap items-center justify-between gap-2">' +
+              '<div class="flex items-center gap-2">' +
+                '<h2 class="text-sm font-semibold text-ink">Models</h2>' +
+                '<span class="badge-editorial badge-success">' + state.freeModels.length + ' verified $0 LLMs</span>' +
+              '</div>' +
               '<button type="button" data-action="refresh-free-models" class="btn-ghost text-xs px-2.5 py-1.5 rounded-lg">Refresh list</button>' +
             '</div>' +
             '<div class="flex items-center gap-2.5">' +
               '<input id="st-free-only" name="free_models_only" type="checkbox"' + (s.free_models_only !== false ? ' checked' : '') + ' class="h-4 w-4 accent-[var(--accent)]">' +
-              '<label for="st-free-only" class="text-sm text-ink cursor-pointer">Restrict to free models only</label>' +
+              '<label for="st-free-only" class="text-sm text-ink cursor-pointer">Restrict to $0 input / $0 output free LLMs only</label>' +
             '</div>' +
             '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">' +
               '<div class="space-y-2">' +
-                '<label class="block text-xs font-semibold text-ink-secondary" for="st-model">Primary model</label>' +
-                '<select id="st-model-picker" data-sync-target="st-model" aria-label="Pick primary model" class="admin-select font-tabular">' +
-                  renderFreeModelOptions(s.openrouter_model || '', 'Choose model...') +
+                '<label class="block text-xs font-semibold text-ink-secondary" for="st-model">Main model</label>' +
+                '<select id="st-model-picker" data-sync-target="st-model" aria-label="Pick main model" class="admin-select font-tabular">' +
+                  renderFreeModelOptions(s.openrouter_model || '', 'Choose $0 LLM...') +
                 '</select>' +
                 '<input id="st-model" name="openrouter_model" data-sync-picker="st-model-picker" type="text" value="' + esc(s.openrouter_model || '') + '" placeholder="openrouter/free" class="admin-input font-tabular">' +
               '</div>' +
               '<div class="space-y-2">' +
+                '<label class="block text-xs font-semibold text-ink-secondary" for="st-fb1">Fallback model 1</label>' +
+                '<select id="st-fb1-picker" data-sync-target="st-fb1" aria-label="Pick fallback model 1" class="admin-select font-tabular">' +
+                  renderFreeModelOptions(s.fallback_model_1 || '', 'Choose fallback 1...') +
+                '</select>' +
+                '<input id="st-fb1" name="fallback_model_1" data-sync-picker="st-fb1-picker" type="text" value="' + esc(s.fallback_model_1 || '') + '" placeholder="Optional fallback model 1" class="admin-input font-tabular">' +
+              '</div>' +
+              '<div class="space-y-2">' +
+                '<label class="block text-xs font-semibold text-ink-secondary" for="st-fb2">Fallback model 2</label>' +
+                '<select id="st-fb2-picker" data-sync-target="st-fb2" aria-label="Pick fallback model 2" class="admin-select font-tabular">' +
+                  renderFreeModelOptions(s.fallback_model_2 || '', 'Choose fallback 2...') +
+                '</select>' +
+                '<input id="st-fb2" name="fallback_model_2" data-sync-picker="st-fb2-picker" type="text" value="' + esc(s.fallback_model_2 || '') + '" placeholder="Optional fallback model 2" class="admin-input font-tabular">' +
+              '</div>' +
+              '<div class="space-y-2">' +
                 '<label class="block text-xs font-semibold text-ink-secondary" for="st-judge">Audit model</label>' +
                 '<select id="st-judge-picker" data-sync-target="st-judge" aria-label="Pick audit model" class="admin-select font-tabular">' +
-                  renderFreeModelOptions(s.judge_model || '', 'Choose model...') +
+                  renderFreeModelOptions(s.judge_model || '', 'Choose $0 LLM...') +
                 '</select>' +
                 '<input id="st-judge" name="judge_model" data-sync-picker="st-judge-picker" type="text" value="' + esc(s.judge_model || '') + '" placeholder="openrouter/free" class="admin-input font-tabular">' +
               '</div>' +
@@ -1130,13 +1374,17 @@ export function renderAdminSpaHtml(
           '</div>' +
 
           '<div class="editorial-card p-5 sm:p-6 space-y-4">' +
-            '<h2 class="text-sm font-semibold text-ink">Monetization &amp; CTA</h2>' +
+            '<h2 class="text-sm font-semibold text-ink">Analytics &amp; Monetization</h2>' +
             '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">' +
+              '<div class="space-y-1.5">' +
+                '<label class="block text-xs font-semibold text-ink-secondary" for="st-ga">Google Analytics ID (GA4)</label>' +
+                '<input id="st-ga" name="ga_measurement_id" type="text" value="' + esc(s.ga_measurement_id || '') + '" placeholder="G-XXXXXXXXXX" class="admin-input font-tabular">' +
+              '</div>' +
               '<div class="space-y-1.5">' +
                 '<label class="block text-xs font-semibold text-ink-secondary" for="st-ads">Google AdSense Client ID</label>' +
                 '<input id="st-ads" name="adsense_client_id" type="text" value="' + esc(s.adsense_client_id || '') + '" placeholder="ca-pub-xxxxxxxxxxxxxxxx" class="admin-input font-tabular">' +
               '</div>' +
-              '<div class="space-y-1.5">' +
+              '<div class="space-y-1.5 sm:col-span-2">' +
                 '<label class="block text-xs font-semibold text-ink-secondary" for="st-ctaurl">CTA URL</label>' +
                 '<input id="st-ctaurl" name="cta_url" type="text" value="' + esc(s.cta_url || '') + '" placeholder="/rss.xml" class="admin-input">' +
               '</div>' +
@@ -1512,6 +1760,132 @@ export function renderAdminSpaHtml(
     }
 
     /* ------------------------------------------------------------------
+       Tab 4: Security (Login Audit Logs & Persistent IP Blocks)
+       ------------------------------------------------------------------ */
+
+    function renderSecurityTab() {
+      var allLogs = state.securityLogs || [];
+      var filteredLogs = allLogs.filter(function (l) {
+        if (state.securityFilter === 'all') return true;
+        if (state.securityFilter === 'logins') return l.event_type === 'login_success' || l.event_type === 'logout';
+        if (state.securityFilter === 'failed') return l.event_type === 'login_failed' || l.event_type === 'captcha_failed';
+        if (state.securityFilter === 'blocked') return l.event_type === 'login_blocked' || l.event_type === 'ip_banned' || l.event_type === 'rate_limited';
+        return true;
+      });
+      var blocks = state.ipBlocks || [];
+      var activeBlocks = blocks.filter(function (b) { return b.active; });
+      var failedCount = allLogs.filter(function (l) { return l.event_type === 'login_failed' || l.event_type === 'captcha_failed'; }).length;
+      var successCount = allLogs.filter(function (l) { return l.event_type === 'login_success'; }).length;
+
+      function secFilterBtn(val, label) {
+        var active = state.securityFilter === val;
+        return '<button type="button" data-action="filter-security" data-filter="' + val + '" class="px-3 py-1.5 rounded-lg text-xs font-semibold border-[1.5px] cursor-pointer whitespace-nowrap transition-colors ' +
+          (active ? 'bg-[var(--ink-primary)] text-[var(--bg-paper)] border-[var(--ink-primary)]' : 'bg-surface text-ink-secondary border-hairline hover:border-strong hover:text-ink') +
+        '">' + esc(label) + '</button>';
+      }
+
+      function eventBadgeClass(ev) {
+        if (ev === 'login_success') return 'badge-success';
+        if (ev === 'login_failed' || ev === 'captcha_failed' || ev === 'ip_banned' || ev === 'login_blocked') return 'badge-danger';
+        if (ev === 'rate_limited') return 'badge-warning';
+        return '';
+      }
+
+      return '<section class="space-y-6">' +
+        '<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">' +
+          '<h1 class="font-masthead text-2xl sm:text-3xl font-black text-ink">Security</h1>' +
+          '<button type="button" data-action="refresh-security" class="btn-ghost text-xs font-semibold rounded-xl self-start sm:self-auto">Refresh logs</button>' +
+        '</div>' +
+
+        '<div class="grid grid-cols-2 md:grid-cols-4 gap-3">' +
+          '<div class="admin-stat-tile"><p class="text-xs text-ink-muted">Recent events</p><p class="font-masthead text-2xl font-black text-ink mt-0.5">' + allLogs.length + '</p></div>' +
+          '<div class="admin-stat-tile"><p class="text-xs text-ink-muted">Successful logins</p><p class="font-masthead text-2xl font-black text-[var(--success)] mt-0.5">' + successCount + '</p></div>' +
+          '<div class="admin-stat-tile"><p class="text-xs text-ink-muted">Failed / challenge</p><p class="font-masthead text-2xl font-black text-[var(--danger)] mt-0.5">' + failedCount + '</p></div>' +
+          '<div class="admin-stat-tile"><p class="text-xs text-ink-muted">Active IP bans</p><p class="font-masthead text-2xl font-black text-[var(--warning)] mt-0.5">' + activeBlocks.length + '</p></div>' +
+        '</div>' +
+
+        '<div class="editorial-card p-5 sm:p-6 space-y-4">' +
+          '<div class="flex flex-wrap items-center justify-between gap-2">' +
+            '<h2 class="text-sm font-semibold text-ink">Blocked IPs</h2>' +
+            '<span class="font-tabular text-xs text-ink-faint">Auto-bans IPs after repeated rate-limit, captcha, or login abuse</span>' +
+          '</div>' +
+
+          '<form id="block-ip-form" class="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">' +
+            '<div class="sm:col-span-4 space-y-1">' +
+              '<label class="block text-xs font-semibold text-ink-secondary" for="blk-ip">IP address</label>' +
+              '<input id="blk-ip" name="ip_address" type="text" required placeholder="203.0.113.10" class="admin-input font-tabular">' +
+            '</div>' +
+            '<div class="sm:col-span-2 space-y-1">' +
+              '<label class="block text-xs font-semibold text-ink-secondary" for="blk-min">Minutes</label>' +
+              '<input id="blk-min" name="duration_minutes" type="number" min="1" max="525600" value="60" class="admin-input font-tabular">' +
+            '</div>' +
+            '<div class="sm:col-span-4 space-y-1">' +
+              '<label class="block text-xs font-semibold text-ink-secondary" for="blk-reason">Reason</label>' +
+              '<input id="blk-reason" name="reason" type="text" value="Suspicious login activity" class="admin-input">' +
+            '</div>' +
+            '<div class="sm:col-span-2">' +
+              '<button type="submit" class="btn-danger w-full py-2.5 rounded-xl text-xs font-semibold justify-center">Block IP</button>' +
+            '</div>' +
+          '</form>' +
+
+          (blocks.length === 0
+            ? '<p class="text-xs text-ink-muted pt-1">No IP addresses are currently blocked.</p>'
+            : '<div class="divide-y divide-[var(--border-hairline)] border-t border-hairline pt-2">' +
+                blocks.map(function (b) {
+                  return '<div class="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">' +
+                    '<div class="space-y-1 min-w-0">' +
+                      '<div class="flex flex-wrap items-center gap-2">' +
+                        '<span class="font-tabular text-xs font-semibold text-ink">' + esc(b.ip_address) + '</span>' +
+                        '<span class="badge-editorial ' + (b.active ? 'badge-danger' : '') + '">' + (b.active ? 'Blocked' : 'Expired') + '</span>' +
+                        '<span class="font-tabular text-[11px] text-ink-faint">' + esc(b.hit_count || 1) + ' hits</span>' +
+                      '</div>' +
+                      '<p class="text-xs text-ink-secondary">' + esc(b.reason) + ' &middot; until ' + esc(fmtDate(b.blocked_until)) + '</p>' +
+                    '</div>' +
+                    '<button type="button" data-action="unblock-ip" data-ip="' + esc(b.ip_address) + '" class="btn-ghost text-xs px-3 py-1.5 rounded-lg self-start sm:self-auto shrink-0">Unblock</button>' +
+                  '</div>';
+                }).join('') +
+              '</div>') +
+        '</div>' +
+
+        '<div class="space-y-3">' +
+          '<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">' +
+            '<h2 class="font-masthead text-xl font-bold text-ink">Login &amp; Access Log</h2>' +
+            '<div class="flex items-center gap-1.5 overflow-x-auto ribbon-scroll">' +
+              secFilterBtn('all', 'All (' + allLogs.length + ')') +
+              secFilterBtn('logins', 'Logins') +
+              secFilterBtn('failed', 'Failed') +
+              secFilterBtn('blocked', 'Blocked / Rate-limited') +
+            '</div>' +
+          '</div>' +
+
+          (filteredLogs.length === 0
+            ? '<div class="editorial-card p-8 text-center text-sm text-ink-muted">No security events match this filter.</div>'
+            : '<div class="space-y-2">' +
+                filteredLogs.map(function (l) {
+                  return '<div class="editorial-card p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">' +
+                    '<div class="space-y-1 min-w-0 flex-1">' +
+                      '<div class="flex flex-wrap items-center gap-1.5">' +
+                        '<span class="badge-editorial ' + eventBadgeClass(l.event_type) + '">' + esc(String(l.event_type || '').replace(/_/g, ' ')) + '</span>' +
+                        '<span class="font-tabular text-xs font-semibold text-ink">' + esc(l.ip_address) + '</span>' +
+                        (l.country ? '<span class="badge-editorial">' + esc(l.country) + '</span>' : '') +
+                        (l.status_code ? '<span class="font-tabular text-[11px] text-ink-faint">HTTP ' + esc(l.status_code) + '</span>' : '') +
+                        (l.email ? '<span class="font-tabular text-[11px] text-ink-secondary">' + esc(l.email) + '</span>' : '') +
+                      '</div>' +
+                      (l.reason ? '<p class="text-xs text-ink-secondary">' + esc(l.reason) + '</p>' : '') +
+                      '<div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-tabular text-[11px] text-ink-faint">' +
+                        (l.method && l.path ? '<span>' + esc(l.method) + ' ' + esc(l.path) + '</span>' : '') +
+                        (l.user_agent ? '<span class="truncate max-w-[280px] sm:max-w-md">' + esc(l.user_agent) + '</span>' : '') +
+                      '</div>' +
+                    '</div>' +
+                    '<span class="font-tabular text-[11px] text-ink-faint shrink-0">' + esc(fmtDate(l.created_at)) + '</span>' +
+                  '</div>';
+                }).join('') +
+              '</div>') +
+        '</div>' +
+      '</section>';
+    }
+
+    /* ------------------------------------------------------------------
        Master Render
        ------------------------------------------------------------------ */
 
@@ -1524,9 +1898,15 @@ export function renderAdminSpaHtml(
       }
 
       if (!state.auth.authenticated) {
+        unmountActionTurnstile();
+        unmountTurnstile();
         app.innerHTML = renderAuthGate();
+        mountTurnstile(0);
         return;
       }
+
+      unmountTurnstile();
+      warmActionTurnstile(0);
 
       var tabHtml = '';
       if (state.loadingData && !state.hasLoadedOnce) {
@@ -1537,6 +1917,8 @@ export function renderAdminSpaHtml(
         tabHtml = renderAgentTab();
       } else if (state.activeTab === 'skills') {
         tabHtml = renderSkillsTab();
+      } else if (state.activeTab === 'security') {
+        tabHtml = renderSecurityTab();
       } else {
         tabHtml = renderSettingsTab();
       }
@@ -1687,6 +2069,18 @@ export function renderAdminSpaHtml(
           await apiFetch('/api/admin/skills/' + encodeURIComponent(delSlug), { method: 'DELETE' });
           toast('Category deleted', 'success');
           await loadAllWorkspaceData();
+        } else if (action === 'filter-security') {
+          state.securityFilter = target.getAttribute('data-filter') || 'all';
+          render();
+        } else if (action === 'refresh-security') {
+          await refreshSecurityOnly();
+          toast('Security logs refreshed', 'success');
+        } else if (action === 'unblock-ip') {
+          var unbIp = target.getAttribute('data-ip') || '';
+          if (!unbIp) return;
+          await apiFetch('/api/admin/security/blocks/' + encodeURIComponent(unbIp), { method: 'DELETE' });
+          toast('Unblocked ' + unbIp, 'success');
+          await refreshSecurityOnly();
         }
       } catch (err) {
         toast((err && err.message) || 'Action failed', 'error');
@@ -1746,18 +2140,30 @@ export function renderAdminSpaHtml(
           var lErr = document.getElementById('auth-error');
           var submitBtn = form.querySelector('button[type="submit"]');
           if (lErr) lErr.classList.add('hidden');
+          if (TURNSTILE_SITE_KEY && !turnstileToken) {
+            if (lErr) {
+              lErr.textContent = 'Please complete the security verification challenge.';
+              lErr.setAttribute('data-ts-err', '1');
+              lErr.classList.remove('hidden');
+            }
+            return;
+          }
           if (submitBtn) {
             submitBtn.disabled = true;
             submitBtn.textContent = 'Signing in...';
           }
           state.loggingIn = true;
           try {
+            var loginPayload = {
+              email: String(lfd.get('email') || '').trim(),
+              password: String(lfd.get('password') || '')
+            };
+            if (TURNSTILE_SITE_KEY) {
+              loginPayload.turnstile_token = turnstileToken;
+            }
             var loginRes = await apiFetch('/api/admin/auth/login', {
               method: 'POST',
-              body: {
-                email: String(lfd.get('email') || '').trim(),
-                password: String(lfd.get('password') || '')
-              }
+              body: loginPayload
             });
             if (loginRes && loginRes.token) {
               writeStoredToken(loginRes.token);
@@ -1771,6 +2177,7 @@ export function renderAdminSpaHtml(
             };
             await loadAllWorkspaceData();
           } catch (err) {
+            resetTurnstile();
             if (lErr) {
               lErr.textContent = (err && err.message) || 'Invalid email or password.';
               lErr.classList.remove('hidden');
@@ -1779,10 +2186,21 @@ export function renderAdminSpaHtml(
             state.loggingIn = false;
             var btnAfter = document.querySelector('#login-form button[type="submit"]');
             if (btnAfter) {
-              btnAfter.disabled = false;
               btnAfter.textContent = 'Sign in';
             }
+            syncLoginSubmitState();
           }
+        } else if (form.id === 'block-ip-form') {
+          var bfd = new FormData(form);
+          var ipAddr = String(bfd.get('ip_address') || '').trim();
+          var durMin = Math.max(1, Math.round(Number(bfd.get('duration_minutes') || 60)));
+          var blkReason = String(bfd.get('reason') || 'Manually blocked by admin').trim();
+          await apiFetch('/api/admin/security/blocks', {
+            method: 'POST',
+            body: { ip_address: ipAddr, duration_minutes: durMin, reason: blkReason }
+          });
+          toast('Blocked ' + ipAddr + ' for ' + durMin + 'm', 'success');
+          await refreshSecurityOnly();
         } else if (form.id === 'post-editor-form') {
           var postId = form.getAttribute('data-post-id');
           var payload = extractPostPayload(form);
@@ -1894,7 +2312,10 @@ export function renderAdminSpaHtml(
             preferred_hours_utc_json: parsedHours,
             max_posts_per_day: Math.max(1, Math.min(24, Math.round(Number(stfd.get('max_posts_per_day') || 2)))),
             min_novelty_score: parsedNovelty,
-            adsense_client_id: String(stfd.get('adsense_client_id') || '').trim() || null
+            fallback_model_1: String(stfd.get('fallback_model_1') || '').trim() || null,
+            fallback_model_2: String(stfd.get('fallback_model_2') || '').trim() || null,
+            adsense_client_id: String(stfd.get('adsense_client_id') || '').trim() || null,
+            ga_measurement_id: String(stfd.get('ga_measurement_id') || '').trim().toUpperCase() || null
           };
           var optStrings = [
             'default_topic_feed', 'openrouter_model', 'judge_model',

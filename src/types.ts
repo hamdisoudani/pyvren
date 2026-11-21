@@ -33,6 +33,8 @@ export interface SiteSettings {
   max_posts_per_day: number;
   min_novelty_score: number;
   openrouter_model: string;
+  fallback_model_1: string | null;
+  fallback_model_2: string | null;
   judge_model: string;
   default_topic_feed: string;
   default_author: string;
@@ -41,6 +43,7 @@ export interface SiteSettings {
   site_tagline: string;
   base_url: string;
   adsense_client_id: string | null;
+  ga_measurement_id: string | null;
   cta_headline: string;
   cta_body: string;
   cta_url: string;
@@ -286,4 +289,63 @@ export interface DatabaseAdapter {
     decision_reason?: string | null;
   }): Promise<AgentRunRecord>;
   updateAgentRun(id: number, patch: Partial<AgentRunRecord>): Promise<AgentRunRecord | null>;
+
+  // Security Audit Logs & Persistent IP Blocks
+  recordSecurityLog(entry: {
+    event_type: SecurityEventType;
+    ip_address: string;
+    country?: string | null;
+    user_agent?: string | null;
+    email?: string | null;
+    path?: string | null;
+    method?: string | null;
+    status_code?: number | null;
+    reason?: string | null;
+  }): Promise<SecurityAuditLog>;
+  listSecurityLogs(opts?: {
+    limit?: number;
+    event_type?: string;
+  }): Promise<SecurityAuditLog[]>;
+  getActiveIpBlock(ip: string): Promise<IpBlock | null>;
+  listIpBlocks(): Promise<IpBlock[]>;
+  upsertIpBlock(input: {
+    ip_address: string;
+    reason: string;
+    blocked_until: string;
+    hit_count?: number;
+  }): Promise<IpBlock>;
+  deleteIpBlock(ip: string): Promise<boolean>;
+}
+
+export type SecurityEventType =
+  | 'login_success'
+  | 'login_failed'
+  | 'login_blocked'
+  | 'captcha_failed'
+  | 'rate_limited'
+  | 'ip_banned'
+  | 'logout'
+  | 'admin_action';
+
+export interface SecurityAuditLog {
+  id: number;
+  event_type: SecurityEventType;
+  ip_address: string;
+  country: string | null;
+  user_agent: string | null;
+  email: string | null;
+  path: string | null;
+  method: string | null;
+  status_code: number | null;
+  reason: string | null;
+  created_at: string;
+}
+
+export interface IpBlock {
+  ip_address: string;
+  reason: string;
+  hit_count: number;
+  blocked_until: string;
+  created_at: string;
+  updated_at: string;
 }

@@ -562,6 +562,12 @@ export async function stageLoadContext(
  * Stage 2: Enforce daily post cap, query real-time category feeds + recency-filtered news search,
  * filter uncovered candidates, and run skeptical Editor-in-Chief LLM triage + deterministic duplicate gates.
  */
+function getConfiguredFallbackModels(settings: SiteSettings): string[] {
+  return [settings.fallback_model_1, settings.fallback_model_2]
+    .map((m) => (typeof m === 'string' ? m.trim() : ''))
+    .filter(Boolean);
+}
+
 export async function stageHuntTopics(
   env: WorkerEnv,
   ctx: AgentContext,
@@ -769,6 +775,7 @@ Evaluate novelty rigorously against the Editorial Memory Ledger. If nothing genu
   try {
     const completion = await callOpenRouter(env, {
       model: ctx.model,
+      fallbackModels: getConfiguredFallbackModels(ctx.settings),
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
@@ -1153,6 +1160,7 @@ Write the complete publication-ready article now as a single valid JSON object a
 
   const draftRes = await callOpenRouter(env, {
     model: ctx.model,
+    fallbackModels: getConfiguredFallbackModels(ctx.settings),
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
@@ -1188,6 +1196,7 @@ Write the complete publication-ready article now as a single valid JSON object a
     });
     const retryJsonRes = await callOpenRouter(env, {
       model: resolvedModel,
+      fallbackModels: getConfiguredFallbackModels(ctx.settings),
       messages: [
         { role: 'system', content: systemPrompt },
         {
@@ -1261,6 +1270,7 @@ Return the FULL corrected JSON object with ALL lint errors resolved while preser
 
     const retryRes = await callOpenRouter(env, {
       model: resolvedModel,
+      fallbackModels: getConfiguredFallbackModels(ctx.settings),
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: correctionPrompt },
@@ -1374,6 +1384,7 @@ ${sourceExcerpts}`;
   try {
     const judgeRes = await callOpenRouter(env, {
       model: ctx.judgeModel,
+      fallbackModels: getConfiguredFallbackModels(ctx.settings),
       messages: [
         { role: 'system', content: judgeSystem },
         { role: 'user', content: judgeUser },
