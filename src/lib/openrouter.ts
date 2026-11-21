@@ -603,9 +603,8 @@ export async function callOpenRouter(
     const candidateModel = candidates[candidateIdx];
     const isLastCandidate = candidateIdx === candidates.length - 1;
     let useJsonMode = Boolean(opts.jsonMode);
-    let useReasoningControl = true;
+    let reasoningMode: 'disabled' | 'low' | 'none' = 'disabled';
     let retriedWithoutJsonFormat = false;
-    let retriedWithoutReasoning = false;
     let transientRetries = 0;
     const maxTransientRetries = isLastCandidate ? 1 : 0;
 
@@ -619,7 +618,9 @@ export async function callOpenRouter(
       if (useJsonMode) {
         bodyPayload.response_format = { type: 'json_object' };
       }
-      if (useReasoningControl) {
+      if (reasoningMode === 'disabled') {
+        bodyPayload.reasoning = { enabled: false };
+      } else if (reasoningMode === 'low') {
         bodyPayload.reasoning = { effort: 'low' };
       }
 
@@ -643,12 +644,10 @@ export async function callOpenRouter(
 
         if (
           response.status === 400 &&
-          useReasoningControl &&
-          !retriedWithoutReasoning &&
+          reasoningMode !== 'none' &&
           rawText.toLowerCase().includes('reasoning')
         ) {
-          useReasoningControl = false;
-          retriedWithoutReasoning = true;
+          reasoningMode = reasoningMode === 'disabled' ? 'low' : 'none';
           clearTimeout(timeout);
           continue;
         }
