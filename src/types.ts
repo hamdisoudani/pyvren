@@ -8,6 +8,24 @@ export type Archetype =
 
 export type AgentRunStatus = 'queued' | 'running' | 'completed' | 'skipped' | 'failed';
 export type TriggerSource = 'manual' | 'scheduled' | 'api';
+export type SyndicationChannel = 'indexnow' | 'devto' | 'bluesky' | 'mastodon' | 'hashnode';
+export type SyndicationMode = 'teaser' | 'full_canonical';
+export type SyndicationStatus = 'pending' | 'published' | 'failed' | 'skipped';
+
+export interface PostSyndicationRecord {
+  id: number;
+  post_id: number;
+  channel: SyndicationChannel;
+  status: SyndicationStatus;
+  mode: SyndicationMode;
+  remote_id: string | null;
+  remote_url: string | null;
+  error_message: string | null;
+  attempts: number;
+  syndicated_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface AdminUser {
   id: number;
@@ -49,6 +67,11 @@ export interface SiteSettings {
   cta_url: string;
   contact_email: string;
   last_scheduled_run_at: string | null;
+  syndication_enabled: boolean;
+  syndication_delay_hours: number;
+  syndication_mode: SyndicationMode;
+  syndication_channels_json: SyndicationChannel[];
+  devto_publish_as_draft: boolean;
   updated_at: string;
 }
 
@@ -340,6 +363,24 @@ export interface DatabaseAdapter {
     hit_count?: number;
   }): Promise<IpBlock>;
   deleteIpBlock(ip: string): Promise<boolean>;
+
+  // Distribution & Syndication Ledger
+  listPostSyndications(opts?: {
+    post_id?: number;
+    channel?: SyndicationChannel;
+    limit?: number;
+  }): Promise<PostSyndicationRecord[]>;
+  upsertPostSyndication(input: {
+    post_id: number;
+    channel: SyndicationChannel;
+    status: SyndicationStatus;
+    mode: SyndicationMode;
+    remote_id?: string | null;
+    remote_url?: string | null;
+    error_message?: string | null;
+    attempts?: number;
+    syndicated_at?: string | null;
+  }): Promise<PostSyndicationRecord>;
 }
 
 export type SecurityEventType =

@@ -35,6 +35,16 @@ export interface WorkerEnv {
   ENVIRONMENT?: string;
   GA_MEASUREMENT_ID?: string;
 
+  // Official Distribution & Syndication API credentials (configured via Wrangler secrets)
+  INDEXNOW_KEY?: string;
+  DEVTO_API_KEY?: string;
+  BLUESKY_HANDLE?: string;
+  BLUESKY_APP_PASSWORD?: string;
+  MASTODON_INSTANCE_URL?: string;
+  MASTODON_ACCESS_TOKEN?: string;
+  HASHNODE_TOKEN?: string;
+  HASHNODE_PUBLICATION_ID?: string;
+
   // Optional test-only injected database adapter
   __TEST_DB__?: DatabaseAdapter;
 }

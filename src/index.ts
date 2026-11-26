@@ -17,6 +17,7 @@ import {
   isPublicEdgeCacheableRequest,
 } from './lib/edge-cache';
 import { buildSecurityHeaders } from './lib/security';
+import { runScheduledSyndicationSweep } from './lib/syndicate';
 import { getTurnstileSiteKey } from './lib/turnstile';
 import { createAdminRoutes } from './routes/admin';
 import { createHeadlessRoutes } from './routes/headless';
@@ -268,6 +269,15 @@ const worker: ExportedHandler<WorkerEnv> = {
         ? controller.scheduledTime
         : Date.now();
     const now = new Date(scheduledMs);
+
+    // Run delayed distribution / syndication sweep independently of autonomous drafting schedule
+    if (settings.syndication_enabled) {
+      try {
+        await runScheduledSyndicationSweep(db, env, now);
+      } catch {
+        // Best-effort syndication sweep; never block scheduled editorial discovery
+      }
+    }
 
     if (!settings.schedule_enabled) {
       return;

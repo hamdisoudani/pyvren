@@ -364,6 +364,7 @@ export function renderAdminSpaHtml(
       providers: { openrouter: false, nvidia_nim: false },
       securityLogs: [],
       ipBlocks: [],
+      syndicationStatus: null,
       securityFilter: 'all',
       postFilter: 'all',
       postSearch: '',
@@ -647,7 +648,8 @@ export function renderAdminSpaHtml(
           apiFetch('/api/admin/agent/runs'),
           apiFetch('/api/admin/openrouter/free-models').catch(function () { return { models: [] }; }),
           apiFetch('/api/admin/security/logs?limit=100').catch(function () { return { logs: [] }; }),
-          apiFetch('/api/admin/security/blocks').catch(function () { return { blocks: [] }; })
+          apiFetch('/api/admin/security/blocks').catch(function () { return { blocks: [] }; }),
+          apiFetch('/api/admin/syndication/status').catch(function () { return null; })
         ]);
         state.settings = (results[0] && (results[0].settings || results[0])) || null;
         state.posts = Array.isArray(results[1]) ? results[1] : ((results[1] && results[1].posts) || []);
@@ -660,6 +662,7 @@ export function renderAdminSpaHtml(
         }
         state.securityLogs = (results[5] && Array.isArray(results[5].logs)) ? results[5].logs : [];
         state.ipBlocks = (results[6] && Array.isArray(results[6].blocks)) ? results[6].blocks : [];
+        state.syndicationStatus = results[7] || null;
         state.hasLoadedOnce = true;
         syncPolling();
       } catch (err) {
@@ -1023,6 +1026,9 @@ export function renderAdminSpaHtml(
             '</button>' +
             (!isPub || score < 80
               ? '<button type="button" data-action="improve-post" data-id="' + post.id + '" class="btn-ghost text-xs px-2.5 py-2 sm:py-1.5 rounded-lg justify-center font-semibold">Auto-improve</button>'
+              : '') +
+            (isPub
+              ? '<button type="button" data-action="distribute-post" data-id="' + post.id + '" class="btn-ghost text-xs px-2.5 py-2 sm:py-1.5 rounded-lg justify-center font-semibold">Distribute</button>'
               : '') +
             '<button type="button" data-action="preview-post" data-id="' + post.id + '" class="btn-ghost text-xs px-2.5 py-2 sm:py-1.5 rounded-lg justify-center">Preview</button>' +
             '<button type="button" data-action="edit-post" data-id="' + post.id + '" class="btn-ghost text-xs px-2.5 py-2 sm:py-1.5 rounded-lg justify-center">Edit</button>' +
@@ -1497,6 +1503,63 @@ export function renderAdminSpaHtml(
             '</div>' +
           '</div>' +
 
+          '<div class="editorial-card p-5 sm:p-6 space-y-4">' +
+            '<div class="flex flex-wrap items-center justify-between gap-2">' +
+              '<h2 class="text-sm font-semibold text-ink">Distribution &amp; Syndication (SEO-Safe Official APIs)</h2>' +
+              '<span class="badge-editorial ' + (s.syndication_enabled ? 'badge-success' : 'badge-warning') + '">' + (s.syndication_enabled ? 'Auto-sweep ON' : 'Manual only') + '</span>' +
+            '</div>' +
+            '<p class="text-xs text-ink-muted leading-relaxed">IndexNow pings Bing, Copilot &amp; AI search immediately on publish. Blog/social channels wait for the delay window below so Google indexes <code>pyvren.com</code> first. Credentials are stored securely as server environment secrets.</p>' +
+            '<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">' +
+              '<div class="flex items-center gap-2.5 sm:col-span-2">' +
+                '<input id="st-syn-en" name="syndication_enabled" type="checkbox"' + (s.syndication_enabled ? ' checked' : '') + ' class="h-4 w-4 accent-[var(--accent)]">' +
+                '<label for="st-syn-en" class="text-sm text-ink cursor-pointer">Enable automatic hourly syndication sweep for published posts</label>' +
+              '</div>' +
+              '<div class="space-y-1.5">' +
+                '<label class="block text-xs font-semibold text-ink-secondary" for="st-syn-mode">Article syndication format</label>' +
+                '<select id="st-syn-mode" name="syndication_mode" class="admin-select">' +
+                  '<option value="teaser"' + (s.syndication_mode !== 'full_canonical' ? ' selected' : '') + '>Adapted teaser + link back to Pyvren (Recommended)</option>' +
+                  '<option value="full_canonical"' + (s.syndication_mode === 'full_canonical' ? ' selected' : '') + '>Full article + canonical_url</option>' +
+                '</select>' +
+              '</div>' +
+              '<div class="space-y-1.5">' +
+                '<label class="block text-xs font-semibold text-ink-secondary" for="st-syn-delay">Delay before external syndication (hours, 0–168)</label>' +
+                '<input id="st-syn-delay" name="syndication_delay_hours" type="number" min="0" max="168" value="' + esc(s.syndication_delay_hours != null ? s.syndication_delay_hours : 24) + '" class="admin-input font-tabular">' +
+              '</div>' +
+              '<div class="flex items-center gap-2.5 sm:col-span-2">' +
+                '<input id="st-devto-draft" name="devto_publish_as_draft" type="checkbox"' + (s.devto_publish_as_draft ? ' checked' : '') + ' class="h-4 w-4 accent-[var(--accent)]">' +
+                '<label for="st-devto-draft" class="text-sm text-ink cursor-pointer">Save DEV.to posts as drafts for manual review before publishing</label>' +
+              '</div>' +
+            '</div>' +
+            '<div class="space-y-2">' +
+              '<p class="text-xs font-semibold text-ink-secondary">Channels (enable which channels participate in auto-syndication)</p>' +
+              '<div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">' +
+                ((state.syndicationStatus && Array.isArray(state.syndicationStatus.channels) && state.syndicationStatus.channels.length > 0)
+                  ? state.syndicationStatus.channels
+                  : [
+                      { channel: 'indexnow', label: 'IndexNow (Bing · Copilot · AI Search)', configured: false, secret_names: ['INDEXNOW_KEY'], note: '' },
+                      { channel: 'devto', label: 'DEV.to (Official Forem API)', configured: false, secret_names: ['DEVTO_API_KEY'], note: '' },
+                      { channel: 'bluesky', label: 'Bluesky (ATProto API)', configured: false, secret_names: ['BLUESKY_HANDLE', 'BLUESKY_APP_PASSWORD'], note: '' },
+                      { channel: 'mastodon', label: 'Mastodon (REST API)', configured: false, secret_names: ['MASTODON_INSTANCE_URL', 'MASTODON_ACCESS_TOKEN'], note: '' },
+                      { channel: 'hashnode', label: 'Hashnode (GraphQL API — Pro)', configured: false, secret_names: ['HASHNODE_TOKEN', 'HASHNODE_PUBLICATION_ID'], note: '' }
+                    ]
+                ).map(function (ch) {
+                  var enabledList = Array.isArray(s.syndication_channels_json) ? s.syndication_channels_json : ['indexnow'];
+                  var checked = enabledList.indexOf(ch.channel) !== -1;
+                  return '<label class="rounded-xl border border-hairline bg-subtle/50 p-3 flex items-start gap-2.5 cursor-pointer">' +
+                    '<input type="checkbox" name="syndication_channel" value="' + esc(ch.channel) + '"' + (checked ? ' checked' : '') + ' class="mt-0.5 h-4 w-4 accent-[var(--accent)]">' +
+                    '<span class="min-w-0 flex-1 space-y-1">' +
+                      '<span class="flex flex-wrap items-center justify-between gap-1.5">' +
+                        '<span class="text-xs font-semibold text-ink">' + esc(ch.label) + '</span>' +
+                        '<span class="badge-editorial ' + (ch.configured ? 'badge-success' : 'badge-warning') + '">' + (ch.configured ? 'Secret ready' : 'Needs secret') + '</span>' +
+                      '</span>' +
+                      '<span class="block font-tabular text-[10px] text-ink-faint">' + esc((ch.secret_names || []).join(' + ')) + '</span>' +
+                    '</span>' +
+                  '</label>';
+                }).join('') +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+
           '<div class="flex items-center justify-end">' +
             '<button type="submit" class="btn-accent w-full sm:w-auto px-6 py-2.5 rounded-xl text-sm font-semibold justify-center">Save changes</button>' +
           '</div>' +
@@ -1511,6 +1574,106 @@ export function renderAdminSpaHtml(
     function closeModal() {
       var root = document.getElementById('modal-root');
       if (root) root.innerHTML = '';
+    }
+
+    var activeManualExport = null;
+
+    async function openSyndicateModal(postId) {
+      var post = state.posts.find(function (p) { return p.id === postId; });
+      var title = post ? post.title : ('Post #' + postId);
+      var root = document.getElementById('modal-root');
+      root.innerHTML = '<div class="admin-modal-backdrop" data-modal-backdrop>' +
+        '<div class="admin-modal-panel max-w-3xl flex flex-col max-h-[90dvh]">' +
+          '<div class="px-4 sm:px-5 py-3.5 border-b border-hairline flex items-center justify-between gap-3 bg-surface shrink-0">' +
+            '<div class="min-w-0">' +
+              '<p class="font-tabular text-[10px] uppercase tracking-wider text-accent font-semibold">Distribution &amp; Syndication</p>' +
+              '<h2 class="font-masthead text-base sm:text-lg font-bold text-ink truncate">' + esc(title) + '</h2>' +
+            '</div>' +
+            '<button type="button" data-action="close-modal" class="btn-ghost text-xs rounded-lg shrink-0">Close</button>' +
+          '</div>' +
+          '<div id="syndicate-modal-body" class="p-4 sm:p-6 overflow-y-auto space-y-5 text-xs">' +
+            '<p class="text-ink-muted">Loading channel status and export pack...</p>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+      try {
+        var data = await apiFetch('/api/admin/posts/' + postId + '/syndications');
+        activeManualExport = data && data.manual_export ? data.manual_export : null;
+        renderSyndicateModalBody(postId, data);
+      } catch (err) {
+        var host = document.getElementById('syndicate-modal-body');
+        if (host) host.innerHTML = '<p class="text-[var(--danger)]">' + esc((err && err.message) || 'Failed to load distribution status') + '</p>';
+      }
+    }
+
+    function renderSyndicateModalBody(postId, data) {
+      var host = document.getElementById('syndicate-modal-body');
+      if (!host) return;
+      var channels = (data && Array.isArray(data.channels)) ? data.channels : [];
+      var records = (data && Array.isArray(data.syndications)) ? data.syndications : [];
+      var byCh = {};
+      records.forEach(function (r) { byCh[r.channel] = r; });
+      var exp = (data && data.manual_export) || {};
+      var defaultMode = (state.settings && state.settings.syndication_mode) || 'teaser';
+
+      host.innerHTML =
+        '<form id="syndicate-post-form" data-post-id="' + postId + '" class="space-y-4">' +
+          '<div class="flex flex-wrap items-center justify-between gap-2">' +
+            '<p class="text-xs font-semibold text-ink">Official API Channels</p>' +
+            '<div class="flex items-center gap-2">' +
+              '<select name="mode" class="admin-select text-xs py-1.5 px-2.5">' +
+                '<option value="teaser"' + (defaultMode !== 'full_canonical' ? ' selected' : '') + '>Teaser + link back (SEO safe)</option>' +
+                '<option value="full_canonical"' + (defaultMode === 'full_canonical' ? ' selected' : '') + '>Full article + canonical_url</option>' +
+              '</select>' +
+            '</div>' +
+          '</div>' +
+          '<div class="space-y-2">' +
+            channels.map(function (ch) {
+              var rec = byCh[ch.channel];
+              var statusBadge = rec
+                ? '<span class="badge-editorial ' + (rec.status === 'published' ? 'badge-success' : rec.status === 'failed' ? 'badge-danger' : 'badge-warning') + '">' + esc(rec.status) + '</span>'
+                : '<span class="badge-editorial">' + (ch.configured ? 'Ready' : 'No secret') + '</span>';
+              var checked = ch.configured && (!rec || rec.status !== 'published');
+              return '<label class="rounded-xl border border-hairline bg-subtle/50 p-3 flex items-start gap-2.5">' +
+                '<input type="checkbox" name="channel" value="' + esc(ch.channel) + '"' + (checked ? ' checked' : '') + (!ch.configured ? ' disabled' : '') + ' class="mt-0.5 h-4 w-4 accent-[var(--accent)]">' +
+                '<div class="min-w-0 flex-1 space-y-1">' +
+                  '<div class="flex flex-wrap items-center justify-between gap-2">' +
+                    '<span class="font-semibold text-ink">' + esc(ch.label) + '</span>' +
+                    '<div class="flex items-center gap-1.5">' + statusBadge + '</div>' +
+                  '</div>' +
+                  (rec && rec.remote_url ? '<a href="' + esc(rec.remote_url) + '" target="_blank" rel="noopener noreferrer" class="block font-tabular text-[11px] text-accent hover:underline truncate">' + esc(rec.remote_url) + ' &nearr;</a>' : '') +
+                  (rec && rec.error_message ? '<p class="text-[11px] text-[var(--danger)]">' + esc(rec.error_message) + '</p>' : '') +
+                  (!ch.configured ? '<p class="font-tabular text-[10px] text-ink-faint">Set secret: ' + esc((ch.secret_names || []).join(', ')) + '</p>' : '') +
+                '</div>' +
+              '</label>';
+            }).join('') +
+          '</div>' +
+          '<div class="flex flex-wrap items-center justify-between gap-3 pt-1">' +
+            '<label class="inline-flex items-center gap-2 text-xs text-ink-secondary cursor-pointer">' +
+              '<input type="checkbox" name="force" class="h-3.5 w-3.5 accent-[var(--accent)]">' +
+              '<span>Force re-send already published channels</span>' +
+            '</label>' +
+            '<button type="submit" class="btn-accent text-xs px-4 py-2 rounded-lg font-semibold">Syndicate selected now</button>' +
+          '</div>' +
+        '</form>' +
+
+        '<div class="border-t border-hairline pt-4 space-y-3">' +
+          '<div class="flex flex-wrap items-center justify-between gap-2">' +
+            '<p class="text-xs font-semibold text-ink">Manual Cross-Post Pack (Medium · Substack · HackerNoon)</p>' +
+            '<div class="flex flex-wrap items-center gap-2">' +
+              '<a href="' + esc(exp.medium_import_url || 'https://medium.com/p/import') + '" target="_blank" rel="noopener noreferrer" class="btn-ghost text-[11px] px-2.5 py-1 rounded-lg">Open Medium Import &nearr;</a>' +
+              '<a href="' + esc(exp.hackernoon_import_url || 'https://app.hackernoon.com/new') + '" target="_blank" rel="noopener noreferrer" class="btn-ghost text-[11px] px-2.5 py-1 rounded-lg">Open HackerNoon &nearr;</a>' +
+            '</div>' +
+          '</div>' +
+          '<p class="text-[11px] text-ink-muted">Medium closed new API tokens (Jan 2025) and Substack has no official publish API. Use their built-in Import URL tool (sets <code>rel="canonical"</code> automatically) or copy a formatted pack below:</p>' +
+          '<div class="flex flex-wrap items-center gap-2">' +
+            '<button type="button" data-action="copy-export-text" data-export-field="canonical_url" class="btn-ghost text-xs px-3 py-1.5 rounded-lg">Copy Canonical URL</button>' +
+            '<button type="button" data-action="copy-export-text" data-export-field="teaser_markdown" class="btn-ghost text-xs px-3 py-1.5 rounded-lg">Copy Teaser Markdown</button>' +
+            '<button type="button" data-action="copy-export-text" data-export-field="full_canonical_markdown" class="btn-ghost text-xs px-3 py-1.5 rounded-lg">Copy Full Markdown</button>' +
+            '<button type="button" data-action="copy-export-text" data-export-field="social_blurb" class="btn-ghost text-xs px-3 py-1.5 rounded-lg">Copy Social Blurb</button>' +
+          '</div>' +
+        '</div>';
     }
 
     async function openPreviewModal(postId) {
@@ -2099,6 +2262,26 @@ export function renderAdminSpaHtml(
           render();
         } else if (action === 'preview-post') {
           openPreviewModal(Number(target.getAttribute('data-id')));
+        } else if (action === 'distribute-post') {
+          openSyndicateModal(Number(target.getAttribute('data-id')));
+        } else if (action === 'copy-export-text') {
+          var expField = target.getAttribute('data-export-field') || '';
+          var expText = activeManualExport && activeManualExport[expField] ? String(activeManualExport[expField]) : '';
+          if (!expText) {
+            toast('Nothing to copy for this field', 'error');
+            return;
+          }
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(expText);
+          } else {
+            var ta = document.createElement('textarea');
+            ta.value = expText;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+          }
+          toast('Copied to clipboard', 'success');
         } else if (action === 'new-post') {
           openPostEditorModal(null);
         } else if (action === 'edit-post') {
@@ -2408,6 +2591,38 @@ export function renderAdminSpaHtml(
           }
           closeModal();
           await loadAllWorkspaceData();
+        } else if (form.id === 'syndicate-post-form') {
+          var synPostId = Number(form.getAttribute('data-post-id'));
+          var selectedChs = [];
+          form.querySelectorAll('input[name="channel"]:checked').forEach(function (el) {
+            if (el.value) selectedChs.push(el.value);
+          });
+          if (selectedChs.length === 0) {
+            throw new Error('Select at least one configured channel to syndicate.');
+          }
+          var synMode = String((form.querySelector('[name="mode"]') && form.querySelector('[name="mode"]').value) || 'teaser');
+          var synForce = Boolean(form.querySelector('[name="force"]') && form.querySelector('[name="force"]').checked);
+          var submitBtn = form.querySelector('button[type="submit"]');
+          if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Syndicating...';
+          }
+          try {
+            var synRes = await apiFetch('/api/admin/posts/' + synPostId + '/syndicate', {
+              method: 'POST',
+              body: { channels: selectedChs, mode: synMode, force: synForce }
+            });
+            var okCnt = (synRes && Array.isArray(synRes.results)) ? synRes.results.filter(function (r) { return r && r.ok; }).length : 0;
+            toast('Syndication finished (' + okCnt + '/' + selectedChs.length + ' ok)', okCnt > 0 ? 'success' : 'error');
+            var fresh = await apiFetch('/api/admin/posts/' + synPostId + '/syndications');
+            activeManualExport = fresh && fresh.manual_export ? fresh.manual_export : activeManualExport;
+            renderSyndicateModalBody(synPostId, fresh);
+          } finally {
+            if (submitBtn) {
+              submitBtn.disabled = false;
+              submitBtn.textContent = 'Syndicate selected now';
+            }
+          }
         } else if (form.id === 'settings-form') {
           var stfd = new FormData(form);
           var rawHoursStr = String(stfd.get('preferred_hours_utc') || '').trim();
@@ -2434,6 +2649,15 @@ export function renderAdminSpaHtml(
             ? 68
             : Math.max(0, Math.min(100, Math.round(Number(rawNovelty))));
 
+          var synChannels = [];
+          form.querySelectorAll('input[name="syndication_channel"]:checked').forEach(function (el) {
+            if (el.value) synChannels.push(el.value);
+          });
+          var rawDelay = stfd.get('syndication_delay_hours');
+          var parsedDelay = (rawDelay == null || String(rawDelay).trim() === '')
+            ? 24
+            : Math.max(0, Math.min(168, Math.round(Number(rawDelay))));
+
           var patch = {
             publishing_mode: String(stfd.get('publishing_mode') || 'draft_review'),
             min_publish_score: Math.max(50, Math.min(100, Math.round(Number(stfd.get('min_publish_score') || 80)))),
@@ -2446,7 +2670,12 @@ export function renderAdminSpaHtml(
             fallback_model_1: String(stfd.get('fallback_model_1') || '').trim() || null,
             fallback_model_2: String(stfd.get('fallback_model_2') || '').trim() || null,
             adsense_client_id: String(stfd.get('adsense_client_id') || '').trim() || null,
-            ga_measurement_id: String(stfd.get('ga_measurement_id') || '').trim().toUpperCase() || null
+            ga_measurement_id: String(stfd.get('ga_measurement_id') || '').trim().toUpperCase() || null,
+            syndication_enabled: Boolean(form.querySelector('[name="syndication_enabled"]') && form.querySelector('[name="syndication_enabled"]').checked),
+            syndication_delay_hours: parsedDelay,
+            syndication_mode: String(stfd.get('syndication_mode') || 'teaser'),
+            syndication_channels_json: synChannels,
+            devto_publish_as_draft: Boolean(form.querySelector('[name="devto_publish_as_draft"]') && form.querySelector('[name="devto_publish_as_draft"]').checked)
           };
           var optStrings = [
             'default_topic_feed', 'openrouter_model', 'judge_model',

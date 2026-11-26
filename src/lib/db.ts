@@ -12,10 +12,14 @@ import type {
   PostMutationContext,
   PostRecord,
   PostStatus,
+  PostSyndicationRecord,
   QualityBreakdown,
   SecurityAuditLog,
   SecurityEventType,
   SiteSettings,
+  SyndicationChannel,
+  SyndicationMode,
+  SyndicationStatus,
   TriggerSource,
 } from '../types';
 import { slugify } from './security';
@@ -53,6 +57,11 @@ export const DEFAULT_SEEDED_SETTINGS: SiteSettings = {
   cta_url: '/about',
   contact_email: 'editorial@pyvren.com',
   last_scheduled_run_at: null,
+  syndication_enabled: false,
+  syndication_delay_hours: 24,
+  syndication_mode: 'teaser',
+  syndication_channels_json: ['indexnow'],
+  devto_publish_as_draft: false,
   updated_at: SEED_TIMESTAMP,
 };
 
@@ -499,6 +508,45 @@ function clampInteger(raw: unknown, fallback: number, min: number, max: number):
   return Math.max(min, Math.min(max, Math.round(num)));
 }
 
+const VALID_SYNDICATION_CHANNELS: ReadonlySet<SyndicationChannel> = new Set([
+  'indexnow',
+  'devto',
+  'bluesky',
+  'mastodon',
+  'hashnode',
+]);
+
+function normalizeSyndicationChannels(raw: unknown): SyndicationChannel[] {
+  let candidate: unknown = raw;
+  if (typeof candidate === 'string') {
+    const trimmed = candidate.trim();
+    if (!trimmed) return [...DEFAULT_SEEDED_SETTINGS.syndication_channels_json];
+    try {
+      candidate = JSON.parse(trimmed);
+    } catch {
+      return [...DEFAULT_SEEDED_SETTINGS.syndication_channels_json];
+    }
+  }
+  if (!Array.isArray(candidate)) {
+    return [...DEFAULT_SEEDED_SETTINGS.syndication_channels_json];
+  }
+  const out: SyndicationChannel[] = [];
+  const seen = new Set<SyndicationChannel>();
+  for (const item of candidate) {
+    if (typeof item !== 'string') continue;
+    const key = item.trim().toLowerCase() as SyndicationChannel;
+    if (VALID_SYNDICATION_CHANNELS.has(key) && !seen.has(key)) {
+      seen.add(key);
+      out.push(key);
+    }
+  }
+  return out;
+}
+
+function normalizeSyndicationMode(raw: unknown): SyndicationMode {
+  return raw === 'full_canonical' ? 'full_canonical' : 'teaser';
+}
+
 function normalizeSettingsRow(row: Partial<SiteSettings>): SiteSettings {
   return {
     ...DEFAULT_SEEDED_SETTINGS,
@@ -529,6 +577,23 @@ function normalizeSettingsRow(row: Partial<SiteSettings>): SiteSettings {
     adsense_client_id: row.adsense_client_id ?? null,
     ga_measurement_id: row.ga_measurement_id ?? null,
     last_scheduled_run_at: row.last_scheduled_run_at ?? null,
+    syndication_enabled: Boolean(
+      row.syndication_enabled ?? DEFAULT_SEEDED_SETTINGS.syndication_enabled,
+    ),
+    syndication_delay_hours: clampInteger(
+      row.syndication_delay_hours,
+      DEFAULT_SEEDED_SETTINGS.syndication_delay_hours,
+      0,
+      168,
+    ),
+    syndication_mode: normalizeSyndicationMode(row.syndication_mode),
+    syndication_channels_json:
+      row.syndication_channels_json === undefined
+        ? [...DEFAULT_SEEDED_SETTINGS.syndication_channels_json]
+        : normalizeSyndicationChannels(row.syndication_channels_json),
+    devto_publish_as_draft: Boolean(
+      row.devto_publish_as_draft ?? DEFAULT_SEEDED_SETTINGS.devto_publish_as_draft,
+    ),
   };
 }
 
@@ -670,10 +735,35 @@ interface CacheEntry<T> {
 const settingsReadCache = new Map<string, CacheEntry<SiteSettings>>();
 const skillsReadCache = new Map<string, CacheEntry<CategorySkill[]>>();
 
+function normalizeSyndicationRow(row: PostSyndicationRecord): PostSyndicationRecord {
+  const ch = VALID_SYNDICATION_CHANNELS.has(row.channel) ? row.channel : 'indexnow';
+  const status: SyndicationStatus =
+    row.status === 'published' ||
+    row.status === 'failed' ||
+    row.status === 'skipped' ||
+    row.status === 'pending'
+      ? row.status
+      : 'pending';
+  return {
+    ...row,
+    id: Number(row.id ?? 0),
+    post_id: Number(row.post_id),
+    channel: ch,
+    status,
+    mode: normalizeSyndicationMode(row.mode),
+    remote_id: row.remote_id ?? null,
+    remote_url: row.remote_url ?? null,
+    error_message: row.error_message ?? null,
+    attempts: Math.max(1, Number(row.attempts ?? 1)),
+    syndicated_at: row.syndicated_at ?? null,
+  };
+}
+
 function cloneSettings(s: SiteSettings): SiteSettings {
   return {
     ...s,
     preferred_hours_utc_json: [...s.preferred_hours_utc_json],
+    syndication_channels_json: [...(s.syndication_channels_json || [])],
   };
 }
 
@@ -1368,6 +1458,87 @@ export class SupabaseRestDatabase implements DatabaseAdapter {
     );
     return Boolean(data && data.length > 0);
   }
+
+  async listPostSyndications(opts?: {
+    post_id?: number;
+    channel?: SyndicationChannel;
+    limit?: number;
+  }): Promise<PostSyndicationRecord[]> {
+    const limit = Math.min(250, Math.max(1, opts?.limit ?? 100));
+    const params = new URLSearchParams();
+    params.set('select', '*');
+    params.set('order', 'updated_at.desc,id.desc');
+    params.set('limit', String(limit));
+    if (typeof opts?.post_id === 'number' && opts.post_id > 0) {
+      params.set('post_id', `eq.${opts.post_id}`);
+    }
+    if (opts?.channel && VALID_SYNDICATION_CHANNELS.has(opts.channel)) {
+      params.set('channel', `eq.${opts.channel}`);
+    }
+    try {
+      const { data } = await this.requestJson<PostSyndicationRecord[]>(
+        `/post_syndications?${params.toString()}`,
+      );
+      return (data || []).map(normalizeSyndicationRow);
+    } catch (err) {
+      const reqErr = err as Partial<SupabaseRequestError>;
+      const body = String(reqErr.bodyText || '');
+      if (reqErr.status === 404 || body.includes('PGRST205') || body.includes('42P01')) {
+        return [];
+      }
+      throw err;
+    }
+  }
+
+  async upsertPostSyndication(input: {
+    post_id: number;
+    channel: SyndicationChannel;
+    status: SyndicationStatus;
+    mode: SyndicationMode;
+    remote_id?: string | null;
+    remote_url?: string | null;
+    error_message?: string | null;
+    attempts?: number;
+    syndicated_at?: string | null;
+  }): Promise<PostSyndicationRecord> {
+    const nowIso = new Date().toISOString();
+    const payload = {
+      post_id: input.post_id,
+      channel: input.channel,
+      status: input.status,
+      mode: normalizeSyndicationMode(input.mode),
+      remote_id: input.remote_id ? input.remote_id.slice(0, 300) : null,
+      remote_url: input.remote_url ? input.remote_url.slice(0, 1200) : null,
+      error_message: input.error_message ? input.error_message.slice(0, 800) : null,
+      attempts: Math.max(1, Math.round(input.attempts ?? 1)),
+      syndicated_at: input.syndicated_at ?? null,
+      updated_at: nowIso,
+    };
+    try {
+      const { data } = await this.requestJson<PostSyndicationRecord[]>(
+        '/post_syndications?on_conflict=post_id,channel',
+        {
+          method: 'POST',
+          prefer: 'resolution=merge-duplicates,return=representation',
+          body: payload,
+        },
+      );
+      if (data && data.length > 0) {
+        return normalizeSyndicationRow(data[0]);
+      }
+    } catch (err) {
+      const reqErr = err as Partial<SupabaseRequestError>;
+      const body = String(reqErr.bodyText || '');
+      if (!(reqErr.status === 404 || body.includes('PGRST205') || body.includes('42P01'))) {
+        throw err;
+      }
+    }
+    return normalizeSyndicationRow({
+      id: 0,
+      ...payload,
+      created_at: nowIso,
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1864,6 +2035,61 @@ export class InMemoryDatabase implements DatabaseAdapter {
 
   async deleteIpBlock(ip: string): Promise<boolean> {
     return this.ipBlocks.delete((ip || '').trim());
+  }
+
+  private postSyndications = new Map<string, PostSyndicationRecord>();
+  private nextSyndicationId = 1;
+
+  async listPostSyndications(opts?: {
+    post_id?: number;
+    channel?: SyndicationChannel;
+    limit?: number;
+  }): Promise<PostSyndicationRecord[]> {
+    const limit = Math.min(250, Math.max(1, opts?.limit ?? 100));
+    let items = Array.from(this.postSyndications.values());
+    if (typeof opts?.post_id === 'number' && opts.post_id > 0) {
+      items = items.filter((r) => r.post_id === opts.post_id);
+    }
+    if (opts?.channel) {
+      items = items.filter((r) => r.channel === opts.channel);
+    }
+    items.sort((a, b) => {
+      if (a.updated_at !== b.updated_at) return b.updated_at.localeCompare(a.updated_at);
+      return b.id - a.id;
+    });
+    return items.slice(0, limit).map((r) => structuredClone(r));
+  }
+
+  async upsertPostSyndication(input: {
+    post_id: number;
+    channel: SyndicationChannel;
+    status: SyndicationStatus;
+    mode: SyndicationMode;
+    remote_id?: string | null;
+    remote_url?: string | null;
+    error_message?: string | null;
+    attempts?: number;
+    syndicated_at?: string | null;
+  }): Promise<PostSyndicationRecord> {
+    const nowIso = new Date().toISOString();
+    const key = `${input.post_id}::${input.channel}`;
+    const existing = this.postSyndications.get(key);
+    const record: PostSyndicationRecord = normalizeSyndicationRow({
+      id: existing ? existing.id : this.nextSyndicationId++,
+      post_id: input.post_id,
+      channel: input.channel,
+      status: input.status,
+      mode: normalizeSyndicationMode(input.mode),
+      remote_id: input.remote_id ?? null,
+      remote_url: input.remote_url ?? null,
+      error_message: input.error_message ?? null,
+      attempts: input.attempts ?? (existing ? existing.attempts + 1 : 1),
+      syndicated_at: input.syndicated_at ?? null,
+      created_at: existing?.created_at || nowIso,
+      updated_at: nowIso,
+    });
+    this.postSyndications.set(key, record);
+    return structuredClone(record);
   }
 }
 

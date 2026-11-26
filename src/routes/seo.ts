@@ -2,7 +2,8 @@ import { Hono } from 'hono';
 import { normalizeBaseUrl, type WorkerEnv } from '../env';
 import { createDatabase } from '../lib/db';
 import { getCategoryMeta } from '../lib/relations';
-import { escapeXml } from '../lib/security';
+import { escapeHtml, escapeXml } from '../lib/security';
+import { isValidIndexNowKey } from '../lib/syndicate';
 import type { CategorySkill, PostRecord, SiteSettings } from '../types';
 import { renderPySnakeFigure, renderStandalonePyvrenFallbackSvg } from '../ui/crew-art';
 
@@ -755,9 +756,33 @@ export function createSeoRoutes(): Hono<{ Bindings: WorkerEnv }> {
 
     const itemsXml = publishedPosts
       .map((post) => {
-        const link = `${baseUrl}/blog/${post.slug}`;
+        const link = `${baseUrl}/blog/${encodeURIComponent(post.slug)}`;
         const pubDate = formatRfc2822(post.published_at || post.created_at);
         const description = post.tldr_summary || post.description;
+        const coverUrl =
+          typeof post.cover_image_url === 'string' && post.cover_image_url.startsWith('https://')
+            ? post.cover_image_url
+            : `${baseUrl}/og/${encodeURIComponent(post.slug)}.svg`;
+        const categories = Array.from(
+          new Set([post.category_slug, ...(Array.isArray(post.tags_json) ? post.tags_json.slice(0, 4) : [])]),
+        ).filter(Boolean);
+
+        const factsHtml =
+          Array.isArray(post.key_facts_json) && post.key_facts_json.length > 0
+            ? `<ul>${post.key_facts_json
+                .slice(0, 5)
+                .map((kf) => `<li><strong>${escapeHtml(kf.label)}:</strong> ${escapeHtml(kf.value)}</li>`)
+                .join('')}</ul>`
+            : '';
+        const teaserHtml = [
+          `<p>${escapeHtml(description)}</p>`,
+          factsHtml,
+          `<p><a href="${escapeHtml(link)}">Read the full benchmark, configs, and primary sources on ${escapeHtml(settings.site_name)} &rarr;</a></p>`,
+        ]
+          .filter(Boolean)
+          .join('')
+          .replace(/\]\]>/g, ']]]]><![CDATA[>');
+
         return [
           '    <item>',
           `      <title>${escapeXml(post.title)}</title>`,
@@ -765,7 +790,9 @@ export function createSeoRoutes(): Hono<{ Bindings: WorkerEnv }> {
           `      <guid isPermaLink="true">${escapeXml(link)}</guid>`,
           `      <pubDate>${escapeXml(pubDate)}</pubDate>`,
           `      <description>${escapeXml(description)}</description>`,
-          `      <category>${escapeXml(post.category_slug)}</category>`,
+          `      <content:encoded><![CDATA[${teaserHtml}]]></content:encoded>`,
+          `      <media:content url="${escapeXml(coverUrl)}" medium="image" />`,
+          ...categories.map((cat) => `      <category>${escapeXml(cat)}</category>`),
           '    </item>',
         ].join('\n');
       })
@@ -773,7 +800,7 @@ export function createSeoRoutes(): Hono<{ Bindings: WorkerEnv }> {
 
     const xml = [
       '<?xml version="1.0" encoding="UTF-8"?>',
-      '<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">',
+      '<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:media="http://search.yahoo.com/mrss/">',
       '  <channel>',
       `    <title>${escapeXml(settings.site_name)}</title>`,
       `    <link>${escapeXml(baseUrl)}</link>`,
@@ -1018,6 +1045,27 @@ export function createSeoRoutes(): Hono<{ Bindings: WorkerEnv }> {
       headers: {
         'Content-Type': 'text/markdown; charset=utf-8',
         'Cache-Control': 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400',
+      },
+    });
+  });
+
+  // IndexNow ownership verification file: GET /{INDEXNOW_KEY}.txt
+  app.get('/:keyFile{[A-Za-z0-9\\-]{8,128}\\.txt}', async (c, next) => {
+    const configuredKey = (c.env.INDEXNOW_KEY || '').trim();
+    if (!isValidIndexNowKey(configuredKey)) {
+      await next();
+      return;
+    }
+    const requestedFile = (c.req.param('keyFile') || '').trim();
+    if (requestedFile !== `${configuredKey}.txt`) {
+      await next();
+      return;
+    }
+    return new Response(configuredKey, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'public, max-age=3600, s-maxage=86400',
       },
     });
   });

@@ -41,6 +41,7 @@ import {
 } from './openrouter';
 import { isSafePublicUrl, slugify } from './security';
 import { buildSkillSystemPrompt, selectArchetype, selectSkillForRun } from './skills';
+import { pingIndexNowForPost } from './syndicate';
 import {
   fetchAuthoritativeFeed,
   isValidReferenceImageUrl,
@@ -2635,6 +2636,10 @@ export async function runEditorialAgentDirect(
       usage,
     );
 
+    if (post.status === 'published') {
+      await pingIndexNowForPost(db, env, post, ctx.settings).catch(() => undefined);
+    }
+
     return {
       run: run || (await db.getAgentRunById(runId)) || runRecord,
       post,
@@ -2854,6 +2859,10 @@ export async function improveExistingPost(
     token_usage_json: usage,
     completed_at: new Date().toISOString(),
   });
+
+  if (savedPost.status === 'published') {
+    await pingIndexNowForPost(db, env, savedPost, ctx.settings).catch(() => undefined);
+  }
 
   return {
     post: savedPost,

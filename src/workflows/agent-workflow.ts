@@ -24,6 +24,7 @@ import { createDatabase } from '../lib/db';
 import { lintPostPayload } from '../lib/linter';
 import { compileMarkdown } from '../lib/markdown';
 import { probeWorkingModelPool } from '../lib/openrouter';
+import { pingIndexNowForPost } from '../lib/syndicate';
 import type { FeedItem } from '../lib/tools';
 
 const STAGE_STEP_CONFIG = {
@@ -321,6 +322,10 @@ export class EditorialAgentWorkflow extends WorkflowEntrypoint<WorkerEnv, AgentD
               completed_at: new Date().toISOString(),
             });
 
+            if (saved.status === 'published') {
+              await pingIndexNowForPost(db, this.env, saved, ctx.settings).catch(() => undefined);
+            }
+
             return {
               postId: saved.id,
               slug: saved.slug,
@@ -584,6 +589,10 @@ export class EditorialAgentWorkflow extends WorkflowEntrypoint<WorkerEnv, AgentD
             trace,
             usage,
           );
+
+          if (post.status === 'published') {
+            await pingIndexNowForPost(db, this.env, post, ctx.settings).catch(() => undefined);
+          }
 
           return {
             postId: post.id,

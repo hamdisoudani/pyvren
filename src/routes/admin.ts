@@ -34,6 +34,12 @@ import {
   slugify,
   verifyCsrfOrigin,
 } from '../lib/security';
+import {
+  buildManualExportPack,
+  getSyndicationChannelStatus,
+  pingIndexNowForPost,
+  syndicatePostToChannels,
+} from '../lib/syndicate';
 import { isTurnstileEnabled, verifyTurnstileToken } from '../lib/turnstile';
 import type {
   AgentDispatchPayload,
@@ -44,6 +50,7 @@ import type {
   PostStatus,
   SecurityEventType,
   SiteSettings,
+  SyndicationChannel,
 } from '../types';
 import { renderBlogPostPage } from '../ui/pages';
 
@@ -82,6 +89,22 @@ const LOGIN_SCHEMA = z.object({
   turnstile_token: z.string().trim().max(2048).optional(),
 });
 
+const SYNDICATION_CHANNEL_ENUM = z.enum([
+  'indexnow',
+  'devto',
+  'bluesky',
+  'mastodon',
+  'hashnode',
+]);
+
+const SYNDICATION_MODE_ENUM = z.enum(['teaser', 'full_canonical']);
+
+const SYNDICATE_POST_SCHEMA = z.object({
+  channels: z.array(SYNDICATION_CHANNEL_ENUM).max(5).optional(),
+  mode: SYNDICATION_MODE_ENUM.optional(),
+  force: z.boolean().optional(),
+});
+
 const SETTINGS_PATCH_SCHEMA = z.object({
   publishing_mode: z.enum(['draft_review', 'auto_publish']).optional(),
   min_publish_score: z.number().int().min(50).max(100).optional(),
@@ -115,6 +138,11 @@ const SETTINGS_PATCH_SCHEMA = z.object({
   cta_body: z.string().trim().max(800).optional(),
   cta_url: z.string().trim().min(1).max(300).optional(),
   contact_email: z.string().trim().email().optional(),
+  syndication_enabled: z.boolean().optional(),
+  syndication_delay_hours: z.number().int().min(0).max(168).optional(),
+  syndication_mode: SYNDICATION_MODE_ENUM.optional(),
+  syndication_channels_json: z.array(SYNDICATION_CHANNEL_ENUM).max(5).optional(),
+  devto_publish_as_draft: z.boolean().optional(),
 });
 
 const SKILL_UPSERT_SCHEMA = z.object({
@@ -1295,6 +1323,15 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
       published_at: publishedAt,
     });
 
+    if (created.status === 'published') {
+      const pingPromise = pingIndexNowForPost(db, c.env, created, settings).catch(() => undefined);
+      try {
+        c.executionCtx.waitUntil(pingPromise);
+      } catch {
+        await pingPromise;
+      }
+    }
+
     return c.json(created, 201);
   });
 
@@ -1430,6 +1467,15 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
       return c.json({ error: 'Post not found.' }, 404);
     }
 
+    if (updated.status === 'published') {
+      const pingPromise = pingIndexNowForPost(db, c.env, updated).catch(() => undefined);
+      try {
+        c.executionCtx.waitUntil(pingPromise);
+      } catch {
+        await pingPromise;
+      }
+    }
+
     return c.json(updated);
   });
 
@@ -1474,6 +1520,15 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
 
     if (!updated) {
       return c.json({ error: 'Post not found.' }, 404);
+    }
+
+    if (updated.status === 'published') {
+      const pingPromise = pingIndexNowForPost(db, c.env, updated).catch(() => undefined);
+      try {
+        c.executionCtx.waitUntil(pingPromise);
+      } catch {
+        await pingPromise;
+      }
     }
 
     return c.json(updated);
@@ -1919,6 +1974,108 @@ export function createAdminRoutes(): Hono<AdminRouteEnv> {
       reason: `Unblocked IP ${ip}`,
     });
     return c.json({ ok: true, ip_address: ip });
+  });
+
+  // =========================================================================
+  // Distribution & Syndication Endpoints (IndexNow, DEV.to, Bluesky, Mastodon, Hashnode)
+  // =========================================================================
+
+  app.get('/api/admin/syndication/status', async (c) => {
+    const db = createDatabase(c.env);
+    const [settings, recent] = await Promise.all([
+      db.getSettings(),
+      db.listPostSyndications({ limit: 60 }),
+    ]);
+
+    return c.json({
+      syndication_enabled: settings.syndication_enabled,
+      syndication_delay_hours: settings.syndication_delay_hours,
+      syndication_mode: settings.syndication_mode,
+      syndication_channels_json: settings.syndication_channels_json,
+      devto_publish_as_draft: settings.devto_publish_as_draft,
+      channels: getSyndicationChannelStatus(c.env, settings),
+      recent,
+    });
+  });
+
+  app.get('/api/admin/posts/:id/syndications', async (c) => {
+    const id = parsePositiveInt(c.req.param('id'));
+    if (!id) {
+      return c.json({ error: 'Invalid post ID.' }, 400);
+    }
+
+    const db = createDatabase(c.env);
+    const [settings, post, syndications] = await Promise.all([
+      db.getSettings(),
+      db.getPostById(id),
+      db.listPostSyndications({ post_id: id, limit: 20 }),
+    ]);
+
+    if (!post) {
+      return c.json({ error: 'Post not found.' }, 404);
+    }
+
+    return c.json({
+      post_id: post.id,
+      status: post.status,
+      channels: getSyndicationChannelStatus(c.env, settings),
+      syndications,
+      manual_export: buildManualExportPack(post, settings, c.env),
+    });
+  });
+
+  app.post('/api/admin/posts/:id/syndicate', async (c) => {
+    const id = parsePositiveInt(c.req.param('id'));
+    if (!id) {
+      return c.json({ error: 'Invalid post ID.' }, 400);
+    }
+
+    const rawBody = await parseJsonBody(c.req.raw);
+    if (!rawBody.ok) {
+      return c.json({ error: 'Invalid JSON payload.' }, 400);
+    }
+
+    const parsed = SYNDICATE_POST_SCHEMA.safeParse(rawBody.data);
+    if (!parsed.success) {
+      return c.json({ error: 'Invalid syndication payload.', details: parsed.error.flatten() }, 400);
+    }
+
+    const db = createDatabase(c.env);
+    const [settings, post] = await Promise.all([db.getSettings(), db.getPostById(id)]);
+    if (!post) {
+      return c.json({ error: 'Post not found.' }, 404);
+    }
+    if (post.status !== 'published') {
+      return c.json(
+        { error: 'Publish this post on pyvren.com first before syndicating externally.' },
+        400,
+      );
+    }
+
+    const requestedChannels: SyndicationChannel[] | undefined =
+      parsed.data.channels && parsed.data.channels.length > 0 ? parsed.data.channels : undefined;
+
+    const results = await syndicatePostToChannels(db, c.env, post, {
+      channels: requestedChannels,
+      mode: parsed.data.mode,
+      force: parsed.data.force === true,
+      settings,
+    });
+
+    const syndications = await db.listPostSyndications({ post_id: post.id, limit: 20 });
+    await safeAuditLog(db, c.req.raw, {
+      event_type: 'admin_action',
+      email: c.get('adminEmail') || null,
+      status_code: 200,
+      reason: `Syndicated post #${post.id} (${results.map((r) => `${r.channel}:${r.ok ? (r.skipped ? 'skip' : 'ok') : 'fail'}`).join(', ')})`,
+    });
+
+    return c.json({
+      ok: results.some((r) => r.ok),
+      post_id: post.id,
+      results,
+      syndications,
+    });
   });
 
   return app;
