@@ -981,8 +981,8 @@ export async function runScheduledSyndicationSweep(
   }
 
   const [publishedPosts, recentSyndications] = await Promise.all([
-    db.listPosts({ status: 'published', limit: 20, excludeHeavyHtml: true }),
-    db.listPostSyndications({ limit: 200 }),
+    db.listPosts({ status: 'published', limit: 50, excludeHeavyHtml: true }),
+    db.listPostSyndications({ limit: 250 }),
   ]);
 
   const byPostChannel = new Map<string, PostSyndicationRecord>();
